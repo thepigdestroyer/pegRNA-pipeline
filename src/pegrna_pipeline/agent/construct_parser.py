@@ -287,3 +287,90 @@ def _consume_repeat(
 
 def _ignored() -> Iterable[None]:  # pragma: no cover - typing anchor
     yield None
+
+
+# ---------------------------------------------------------- Resolved construct
+
+
+@dataclass(frozen=True)
+class ResolvedComponent:
+    """A RawComponent after motif lookup / codon optimisation."""
+
+    name: str           # motif name, or a synthetic label for raw payloads
+    dna: str            # uppercase ACGT
+    aa: str             # single-letter amino acid sequence ("" for raw_dna / Kozak)
+    source: str         # "motif" | "raw_aa" | "raw_dna"
+
+
+@dataclass(frozen=True)
+class Construct:
+    components: tuple[ResolvedComponent, ...]
+
+    @property
+    def dna(self) -> str:
+        return "".join(c.dna for c in self.components)
+
+    @property
+    def aa(self) -> str:
+        return "".join(c.aa for c in self.components)
+
+
+def _codon_optimise_simple(aa_sequence: str) -> str:
+    """Codon-optimise a raw aa: payload via :func:`optimise_bulk`.
+
+    Lazy import so the agent layer doesn't pull in hpc internals at import
+    time (and so tests can monkeypatch the expander module cleanly).
+    """
+    from pegrna_pipeline.hpc.codon_expander import optimise_bulk
+
+    return optimise_bulk(aa_sequence)
+
+
+def resolve_construct(
+    components: Iterable[RawComponent],
+    *,
+    library: "object",
+) -> Construct:
+    """Resolve raw components to a Construct.
+
+    The ``library`` argument is a :class:`MotifLibrary` — typed loosely to
+    avoid an import cycle.
+    """
+    resolved: list[ResolvedComponent] = []
+    for raw in components:
+        if raw.kind is RawComponentKind.MOTIF:
+            motif = library.lookup(raw.value)
+            resolved.append(
+                ResolvedComponent(
+                    name=motif.name,
+                    dna=motif.dna.upper(),
+                    aa=motif.aa,
+                    source="motif",
+                )
+            )
+        elif raw.kind is RawComponentKind.RAW_AA:
+            aa = raw.value.upper()
+            dna = _codon_optimise_simple(aa)
+            resolved.append(
+                ResolvedComponent(
+                    name=f"aa:{aa}",
+                    dna=dna,
+                    aa=aa,
+                    source="raw_aa",
+                )
+            )
+        elif raw.kind is RawComponentKind.RAW_DNA:
+            dna = raw.value.upper()
+            if set(dna) - set("ACGT"):
+                raise ValueError(f"raw DNA payload contains non-ACGT: {raw.value!r}")
+            resolved.append(
+                ResolvedComponent(
+                    name=f"dna:{dna}",
+                    dna=dna,
+                    aa="",
+                    source="raw_dna",
+                )
+            )
+        else:  # pragma: no cover - defensive
+            raise ValueError(f"unhandled RawComponentKind {raw.kind!r}")
+    return Construct(tuple(resolved))
