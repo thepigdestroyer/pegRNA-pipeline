@@ -23,7 +23,8 @@ def test_opposite_strand_mapping_is_bidirectional():
 
 def _ng(strand: str, distance: int = 50, score: float = 0.8) -> NgRNADesign:
     return NgRNADesign(
-        spacer="A" * 20,
+        # Realistic spacer: 50% GC, no TTTT, no homopolymer >= 5.
+        spacer="AGTGCTACCTGGTACGGATC",
         distance_to_edit=distance,
         target_strand=strand,
         deepcas9_score=score,
