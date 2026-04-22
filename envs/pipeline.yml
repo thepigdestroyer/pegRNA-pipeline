@@ -1,0 +1,13 @@
+name: pegrna-pipeline
+channels:
+  - bioconda
+  - conda-forge
+dependencies:
+  - python=3.10
+  - pip
+  - numpy
+  - pandas
+  - biopython
+  - pytorch
+  - pip:
+      - pridict>=2.0

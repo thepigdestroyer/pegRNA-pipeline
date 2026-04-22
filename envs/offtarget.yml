@@ -1,0 +1,11 @@
+name: pegrna-offtarget
+channels:
+  - bioconda
+  - conda-forge
+dependencies:
+  - python=3.10
+  - pip
+  - cas-offinder
+  - crispritz
+  - samtools
+  - bwa
