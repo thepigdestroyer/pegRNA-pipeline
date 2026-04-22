@@ -89,6 +89,11 @@ def codon_frequency(aa: str, codon: str) -> float:
 _STOP_CODONS = frozenset({"TAA", "TAG", "TGA"})
 
 
+def _has_cpg(dna: str) -> bool:
+    """Return True if ``dna`` contains a CpG dinucleotide (literal 'CG')."""
+    return "CG" in dna
+
+
 def _has_internal_stop(dna: str) -> bool:
     """Return True if ``dna`` contains any in-frame stop codon.
 
