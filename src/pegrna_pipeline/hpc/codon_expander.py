@@ -13,6 +13,7 @@ Core building blocks used across the pipeline:
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 from functools import lru_cache
 from importlib import resources
 from typing import Dict, List
@@ -58,6 +59,31 @@ def _build_flat_frequency_table() -> Dict[str, float]:
 
 
 HUMAN_CODON_FREQUENCIES: Dict[str, float] = _build_flat_frequency_table()
+
+
+# ---------------------------------------------------------------- CodonVariant
+
+
+@dataclass(frozen=True)
+class CodonVariant:
+    """A candidate DNA variant for a given aa sequence.
+
+    Attributes
+    ----------
+    dna:
+        Uppercase ACGT string encoding the aa sequence.
+    c_count:
+        Number of cytosine residues in the DNA (higher -> preferred).
+    gc_content:
+        GC fraction in [0, 1].
+    rank:
+        Position in a sorted variant list (0 = best).
+    """
+
+    dna: str
+    c_count: int
+    gc_content: float
+    rank: int
 
 
 # --------------------------------------------------------------------- lookups
