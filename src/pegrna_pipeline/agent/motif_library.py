@@ -73,6 +73,32 @@ class MotifLibrary:
         motifs = [Motif.from_mapping(m) for m in data.get("motifs", [])]
         return cls(motifs)
 
+    @classmethod
+    def _user_override_path(cls) -> Path:
+        return Path.home() / ".pegrna" / "motifs.yaml"
+
+    @classmethod
+    def load_user_default(cls) -> "MotifLibrary":
+        """Load ~/.pegrna/motifs.yaml, or return an empty library if missing/empty."""
+        path = cls._user_override_path()
+        if not path.is_file():
+            return cls([])
+        raw = path.read_text().strip()
+        if not raw:
+            return cls([])
+        data = yaml.safe_load(raw) or {}
+        motifs = [Motif.from_mapping(m) for m in data.get("motifs", [])]
+        return cls(motifs)
+
+    @classmethod
+    def load_full(cls) -> "MotifLibrary":
+        """Bundled library plus user overrides (user wins on name collisions)."""
+        bundled = cls.load_bundled()
+        user = cls.load_user_default()
+        # User entries come last so they override bundled entries with the same
+        # lowercased name (see _by_lower construction).
+        return cls([*bundled, *user])
+
     # -------------------------------------------------------------- Queries
 
     def lookup(self, name: str) -> Motif:
