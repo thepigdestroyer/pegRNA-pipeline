@@ -70,5 +70,48 @@ def validate_cmd(construct: str, interactive: bool) -> None:
     click.echo(f"Total dna ({len(construct_obj.dna)}): {construct_obj.dna}")
 
 
+@cli.group("motif")
+def motif_group() -> None:
+    """Inspect the motif library.
+
+    The ``motif add`` subcommand for persistent user additions is deferred
+    to Plan 3; today's workflow for custom motifs is to hand-edit
+    ``~/.pegrna/motifs.yaml``.
+    """
+
+
+@motif_group.command("list")
+@click.option("--category", default=None, help="Only show motifs in this category.")
+def motif_list(category: str | None) -> None:
+    """List motif names grouped by category."""
+    library = MotifLibrary.load_full()
+    rows: dict[str, list] = {}
+    for m in library:
+        if category is not None and m.category != category:
+            continue
+        rows.setdefault(m.category, []).append(m)
+    for cat in sorted(rows):
+        click.echo(f"[{cat}]")
+        for m in sorted(rows[cat], key=lambda x: x.name.lower()):
+            click.echo(f"  {m.name:<14} {m.aa:<32} {m.description}")
+
+
+@motif_group.command("show")
+@click.argument("name")
+def motif_show(name: str) -> None:
+    """Show details of a single motif by name (case-insensitive)."""
+    library = MotifLibrary.load_full()
+    try:
+        m = library.lookup(name)
+    except MotifNotFoundError:
+        click.echo(f"Motif {name!r} not found.", err=True)
+        sys.exit(1)
+    click.echo(f"Name:        {m.name}")
+    click.echo(f"Category:    {m.category}")
+    click.echo(f"Description: {m.description}")
+    click.echo(f"AA  ({len(m.aa):>3} aa):  {m.aa}")
+    click.echo(f"DNA ({len(m.dna):>3} nt): {m.dna}")
+
+
 if __name__ == "__main__":  # pragma: no cover
     cli()
