@@ -273,26 +273,106 @@ def _has_internal_stop(dna: str) -> bool:
     return False
 
 
-def optimise_bulk(aa_sequence: str) -> str:
-    """Preliminary greedy codon optimiser.
+# Penalty constants used by :func:`optimise_bulk`. Exposed as module-level
+# constants so external callers (and tests) can reference or monkey-patch them.
+_CPG_JUNCTION_PENALTY = 10.0
+_RESTRICTION_SITE_PENALTY = 10.0
+_HOMOPOLYMER_PENALTY = 10.0
+_C_COUNT_BONUS = 0.3
+_JUNCTION_WINDOW = 10  # characters to inspect around the junction for sites
 
-    Picks the most-frequent human codon per residue; ties are broken by the
-    cytosine-first ordering of :data:`CODONS_BY_AA`. Task 25 upgrades this to
-    a weighted-score policy that penalises CpG junctions, restriction sites,
-    and homopolymer runs.
+
+def _window_has_site(prev: str, codon: str) -> bool:
+    """Return True if the 10-nt window spanning the junction contains a
+    bundled restriction site.
+    """
+    half = _JUNCTION_WINDOW - len(codon)
+    half = max(half, 0)
+    left = prev[-half:] if half else ""
+    window = left + codon
+    return _has_restriction_site(window)
+
+
+def optimise_bulk(aa_sequence: str) -> str:
+    """Weighted greedy codon optimiser.
+
+    For each residue, each candidate codon is scored:
+
+        score = codon_frequency(aa, codon)
+              + 0.3 * codon.count("C")
+              - 10.0 if prev DNA's final C concatenates with codon's leading G
+                      (CpG at the exact junction)
+              - 10.0 if the 10-nt window around the junction contains any
+                      bundled restriction site
+              - 10.0 if placing this codon creates a homopolymer run of
+                      length >= 5
+
+    The highest-scoring codon is picked; ties are broken by the
+    cytosine-first ordering of :data:`CODONS_BY_AA`. A warning is logged if
+    the best codon still violates one or more filters (i.e. no clean option
+    exists at that position).
 
     An empty string returns ``""``. Unknown amino acids raise
     :class:`ValueError`.
     """
     if not aa_sequence:
         return ""
-    out: List[str] = []
+
+    import logging  # deferred to keep import cost low for simple users
+
+    logger = logging.getLogger(__name__)
+
+    dna_parts: List[str] = []
     for aa in aa_sequence:
         key = aa.upper()
         if key not in CODONS_BY_AA:
             raise ValueError(f"unknown amino acid {aa!r}")
-        codons = CODONS_BY_AA[key]
-        # Pick highest-frequency codon; stable tie-break favours cytosine-first.
-        best = max(codons, key=lambda c: (codon_frequency(key, c), codons.index(c) * -1))
-        out.append(best)
-    return "".join(out)
+        candidates = CODONS_BY_AA[key]
+        prev = "".join(dna_parts)
+
+        best_codon = None
+        best_score = float("-inf")
+        best_index = -1
+        best_violations: List[str] = []
+
+        for idx, codon in enumerate(candidates):
+            score = codon_frequency(key, codon)
+            score += _C_COUNT_BONUS * codon.count("C")
+
+            violations: List[str] = []
+
+            # CpG at junction.
+            if prev and prev[-1:] == "C" and codon[:1] == "G":
+                score -= _CPG_JUNCTION_PENALTY
+                violations.append("cpg_junction")
+
+            # Restriction site within junction window.
+            if _window_has_site(prev, codon):
+                score -= _RESTRICTION_SITE_PENALTY
+                violations.append("restriction_site")
+
+            # Homopolymer run after concatenation.
+            if _has_homopolymer(prev + codon, min_run=5):
+                score -= _HOMOPOLYMER_PENALTY
+                violations.append("homopolymer")
+
+            # Prefer higher score; tie-break favours earlier (cytosine-first) entry.
+            if (score > best_score) or (
+                score == best_score and idx < best_index
+            ):
+                best_score = score
+                best_codon = codon
+                best_index = idx
+                best_violations = violations
+
+        assert best_codon is not None  # at least one candidate always exists
+        if best_violations:
+            logger.warning(
+                "optimise_bulk: best codon %s for %s still violates %s",
+                best_codon,
+                key,
+                best_violations,
+            )
+        dna_parts.append(best_codon)
+
+    return "".join(dna_parts)
