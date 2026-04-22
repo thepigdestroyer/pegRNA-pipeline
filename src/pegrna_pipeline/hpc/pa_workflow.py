@@ -56,3 +56,23 @@ def compute_flap_boundaries(
     downstream = full_aa[-flap_length_aa:]
     bulk = full_aa[flap_length_aa : len(full_aa) - flap_length_aa]
     return upstream, bulk, downstream
+
+
+# ------------------------------------------------------------------ T17
+
+
+def assemble_linear_donor(
+    *,
+    upstream_flap_dna: str,
+    bulk_dna: str,
+    downstream_flap_dna: str,
+) -> str:
+    """Return ``upstream_flap_dna + bulk_dna + downstream_flap_dna``.
+
+    Every component must be non-empty uppercase ACGT — mixed case, U, or
+    ambiguity codes raise :class:`ValueError`.
+    """
+    _check_acgt("upstream_flap_dna", upstream_flap_dna)
+    _check_acgt("bulk_dna", bulk_dna)
+    _check_acgt("downstream_flap_dna", downstream_flap_dna)
+    return upstream_flap_dna + bulk_dna + downstream_flap_dna
