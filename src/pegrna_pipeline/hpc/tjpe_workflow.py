@@ -13,6 +13,7 @@ contract. Tasks here:
 
 from __future__ import annotations
 
+import re
 from typing import List, Optional
 
 from Bio.Seq import Seq
@@ -25,6 +26,16 @@ from pegrna_pipeline.hpc.data_types import (
 
 
 OPPOSITE_STRAND = {"Fw": "Rv", "Rv": "Fw"}
+
+
+#: Standard 76-nt sgRNA scaffold sequence (tracrRNA fusion used in
+#: prime-editing constructs).
+STANDARD_SGRNA_SCAFFOLD = (
+    "GTTTTAGAGCTAGAAATAGCAAGTTAAAATAAGGCTAGTCCGTTATCAACTTGAAAAAGTGGCACCGAGTCGGTGC"
+)
+
+
+_ACGT_ONLY = re.compile(r"^[ACGT]+$")
 
 
 # ------------------------------------------------------------------ T6
@@ -159,3 +170,40 @@ def derive_rc_pbs2(
         )
     window = top_strand_sequence[start:ngrna_nick_position]
     return str(Seq(window).reverse_complement())
+
+
+# ------------------------------------------------------------------ T9
+
+
+def _check_acgt(label: str, value: str) -> None:
+    if not value or not _ACGT_ONLY.match(value):
+        raise ValueError(f"{label} must be non-empty uppercase ACGT; got {value!r}")
+
+
+def assemble_tj_pegrna(
+    *,
+    spacer: str,
+    insert_dna: str,
+    pbs1: str,
+    rc_pbs2: str,
+    scaffold: str = STANDARD_SGRNA_SCAFFOLD,
+) -> str:
+    """Return the full TJ-PE pegRNA DNA string.
+
+    Layout (5' -> 3'):
+
+        spacer + scaffold + insert_dna + pbs1 + rc_pbs2
+
+    All four sequence components (plus the scaffold) must be non-empty
+    uppercase ACGT. Any lowercase letter, ``U``, or ambiguity code raises
+    :class:`ValueError`.
+    """
+    for label, value in (
+        ("spacer", spacer),
+        ("insert_dna", insert_dna),
+        ("pbs1", pbs1),
+        ("rc_pbs2", rc_pbs2),
+        ("scaffold", scaffold),
+    ):
+        _check_acgt(label, value)
+    return spacer + scaffold + insert_dna + pbs1 + rc_pbs2
