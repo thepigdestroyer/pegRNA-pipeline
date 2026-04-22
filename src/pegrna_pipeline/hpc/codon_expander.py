@@ -12,6 +12,7 @@ Core building blocks used across the pipeline:
 
 from __future__ import annotations
 
+import re
 from typing import Dict, List
 
 import python_codon_tables as _pct
@@ -87,6 +88,14 @@ def codon_frequency(aa: str, codon: str) -> float:
 
 
 _STOP_CODONS = frozenset({"TAA", "TAG", "TGA"})
+
+
+def _has_homopolymer(dna: str, min_run: int = 5) -> bool:
+    """Return True if ``dna`` contains a homopolymer run of length >= min_run."""
+    if min_run <= 0:
+        return bool(dna)
+    pattern = re.compile(rf"(.)\1{{{min_run - 1},}}")
+    return pattern.search(dna) is not None
 
 
 def _has_cpg(dna: str) -> bool:
