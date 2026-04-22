@@ -163,6 +163,55 @@ def enumerate_variants(aa_sequence: str, max_variants: int = 100) -> List[CodonV
     ]
 
 
+@dataclass(frozen=True)
+class EnumerationResult:
+    """Return type of :func:`enumerate_with_metadata`.
+
+    ``theoretical_max`` is the number of synonymous DNA combinations that
+    exist before filters are applied (i.e. the pure product of per-aa codon
+    counts). ``was_capped`` is True when at least one valid variant was
+    discarded because the ``max_variants`` cap was reached.
+    """
+
+    variants: list
+    theoretical_max: int
+    was_capped: bool
+
+
+def enumerate_with_metadata(
+    aa_sequence: str, max_variants: int = 100
+) -> EnumerationResult:
+    """Like :func:`enumerate_variants` but also returns counting metadata."""
+    if not aa_sequence:
+        return EnumerationResult(variants=[], theoretical_max=0, was_capped=False)
+
+    theoretical_max = 1
+    for aa in aa_sequence:
+        theoretical_max *= len(CODONS_BY_AA[aa.upper()])
+
+    # We need to know whether more valid (filter-passing) variants existed
+    # than the cap allowed, so pull one extra item past max_variants and
+    # compare.
+    peek = max_variants + 1
+    picked = heapq.nlargest(
+        peek,
+        _surviving_variants(aa_sequence),
+        key=lambda t: (t[1], -abs(t[2] - 0.55)),
+    )
+    was_capped = len(picked) > max_variants
+    picked = picked[:max_variants]
+    picked.sort(key=lambda t: (-t[1], abs(t[2] - 0.55), t[0]))
+    variants = [
+        CodonVariant(dna=dna, c_count=c, gc_content=gc, rank=i)
+        for i, (dna, c, gc) in enumerate(picked)
+    ]
+    return EnumerationResult(
+        variants=variants,
+        theoretical_max=theoretical_max,
+        was_capped=was_capped,
+    )
+
+
 # ---------------------------------------------------------- bulk optimisation
 
 
