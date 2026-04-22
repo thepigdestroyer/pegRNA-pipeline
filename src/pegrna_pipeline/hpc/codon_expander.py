@@ -12,11 +12,13 @@ Core building blocks used across the pipeline:
 
 from __future__ import annotations
 
+import heapq
+import itertools
 import re
 from dataclasses import dataclass
 from functools import lru_cache
 from importlib import resources
-from typing import Dict, List
+from typing import Dict, Iterator, List, Tuple
 
 import python_codon_tables as _pct
 import yaml
@@ -108,6 +110,57 @@ def codon_frequency(aa: str, codon: str) -> float:
         return float(table[key][codon.upper()])
     except KeyError as exc:
         raise KeyError(f"codon {codon!r} not listed for aa {aa!r}") from exc
+
+
+# --------------------------------------------------------- variant enumeration
+
+
+def _surviving_variants(aa_sequence: str) -> Iterator[Tuple[str, int, float]]:
+    """Yield (dna, c_count, gc) for every synonymous DNA combination that
+    passes all quality filters. Intentionally a generator so the caller can
+    stream into heapq for top-K selection.
+    """
+    codon_choices = [CODONS_BY_AA[aa.upper()] for aa in aa_sequence]
+    for combo in itertools.product(*codon_choices):
+        dna = "".join(combo)
+        if _has_internal_stop(dna):
+            continue
+        if _has_cpg(dna):
+            continue
+        if _has_restriction_site(dna):
+            continue
+        if _has_homopolymer(dna):
+            continue
+        yield dna, dna.count("C"), _gc_content(dna)
+
+
+def enumerate_variants(aa_sequence: str, max_variants: int = 100) -> List[CodonVariant]:
+    """Return top ``max_variants`` surviving variants, globally ranked.
+
+    Ranking: (c_count DESC, abs(gc_content - 0.55) ASC). Uses :func:`heapq.nlargest`
+    with a key that mirrors this ordering so the top-K is globally correct
+    even when only a subset of combinations is kept in memory.
+    """
+    if not aa_sequence:
+        return []
+
+    # heapq.nlargest keeps the K biggest items by ``key``.  Our desired order
+    # is (c_count DESC, |gc - 0.55| ASC) so a larger key = (c_count, -|gc-0.55|).
+    top = heapq.nlargest(
+        max_variants,
+        _surviving_variants(aa_sequence),
+        key=lambda t: (t[1], -abs(t[2] - 0.55)),
+    )
+
+    # nlargest produces items in descending key order; but ties may land in
+    # arbitrary order.  Re-sort exactly by the canonical ordering before
+    # assigning ranks so the result is deterministic.
+    top.sort(key=lambda t: (-t[1], abs(t[2] - 0.55), t[0]))
+
+    return [
+        CodonVariant(dna=dna, c_count=c, gc_content=gc, rank=i)
+        for i, (dna, c, gc) in enumerate(top)
+    ]
 
 
 # ---------------------------------------------------------- bulk optimisation
