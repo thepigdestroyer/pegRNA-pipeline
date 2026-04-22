@@ -114,11 +114,7 @@ def tokenize(source: str) -> list[Token]:
             candidate = source[start:j]
 
             # Raw payload prefix?
-            if (
-                candidate in ("aa", "dna")
-                and j < n
-                and source[j] == ":"
-            ):
+            if candidate in ("aa", "dna") and j < n and source[j] == ":":
                 kind = TokenKind.RAW_AA if candidate == "aa" else TokenKind.RAW_DNA
                 # Payload: greedy up to next '-' or end.
                 payload_start = j + 1
@@ -154,9 +150,7 @@ def tokenize(source: str) -> list[Token]:
                 i += 1
             continue
 
-        raise ValueError(
-            f"unexpected character {ch!r} at position {i} in construct {source!r}"
-        )
+        raise ValueError(f"unexpected character {ch!r} at position {i} in construct {source!r}")
 
     return tokens
 
@@ -223,9 +217,7 @@ def _parse_sequence(
         )
 
 
-def _parse_component(
-    tokens: Sequence[Token], i: int
-) -> tuple[list[RawComponent], int]:
+def _parse_component(tokens: Sequence[Token], i: int) -> tuple[list[RawComponent], int]:
     """Parse a single component (plus any repeat suffix). Returns the expanded
     list of RawComponents and the new cursor.
     """
@@ -252,14 +244,10 @@ def _parse_component(
         count, j = _consume_repeat(tokens, i + 1, allow_bare_number=False)
         return [RawComponent(RawComponentKind.MOTIF, tok.value)] * count, j
 
-    raise ValueError(
-        f"unexpected token {tok.kind.name} at position {tok.position}"
-    )
+    raise ValueError(f"unexpected token {tok.kind.name} at position {tok.position}")
 
 
-def _consume_repeat(
-    tokens: Sequence[Token], i: int, *, allow_bare_number: bool
-) -> tuple[int, int]:
+def _consume_repeat(tokens: Sequence[Token], i: int, *, allow_bare_number: bool) -> tuple[int, int]:
     """If the next token(s) form a repeat suffix, consume them and return the
     count plus the new cursor. Otherwise return (1, i) unchanged.
     """
@@ -268,9 +256,7 @@ def _consume_repeat(
 
     if tokens[i].kind is TokenKind.X:
         if i + 1 >= len(tokens) or tokens[i + 1].kind is not TokenKind.NUMBER:
-            raise ValueError(
-                f"'x' at position {tokens[i].position} is not followed by a number"
-            )
+            raise ValueError(f"'x' at position {tokens[i].position} is not followed by a number")
         count = int(tokens[i + 1].value)
         if count <= 0:
             raise ValueError(f"repeat count must be > 0, got {count}")
@@ -296,10 +282,10 @@ def _ignored() -> Iterable[None]:  # pragma: no cover - typing anchor
 class ResolvedComponent:
     """A RawComponent after motif lookup / codon optimisation."""
 
-    name: str           # motif name, or a synthetic label for raw payloads
-    dna: str            # uppercase ACGT
-    aa: str             # single-letter amino acid sequence ("" for raw_dna / Kozak)
-    source: str         # "motif" | "raw_aa" | "raw_dna"
+    name: str  # motif name, or a synthetic label for raw payloads
+    dna: str  # uppercase ACGT
+    aa: str  # single-letter amino acid sequence ("" for raw_dna / Kozak)
+    source: str  # "motif" | "raw_aa" | "raw_dna"
 
 
 @dataclass(frozen=True)

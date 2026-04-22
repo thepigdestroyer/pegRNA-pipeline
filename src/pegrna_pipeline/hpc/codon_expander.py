@@ -23,7 +23,6 @@ from typing import Dict, Iterator, List, Tuple
 import python_codon_tables as _pct
 import yaml
 
-
 # ---------------------------------------------------------------------- tables
 
 
@@ -178,9 +177,7 @@ class EnumerationResult:
     was_capped: bool
 
 
-def enumerate_with_metadata(
-    aa_sequence: str, max_variants: int = 100
-) -> EnumerationResult:
+def enumerate_with_metadata(aa_sequence: str, max_variants: int = 100) -> EnumerationResult:
     """Like :func:`enumerate_variants` but also returns counting metadata."""
     if not aa_sequence:
         return EnumerationResult(variants=[], theoretical_max=0, was_capped=False)
@@ -224,11 +221,7 @@ _STOP_CODONS = frozenset({"TAA", "TAG", "TGA"})
 @lru_cache(maxsize=1)
 def load_restriction_sites() -> List[str]:
     """Return the sorted list of recognition sequences bundled with the package."""
-    raw = (
-        resources.files("pegrna_pipeline.data")
-        .joinpath("restriction_sites.yaml")
-        .read_text()
-    )
+    raw = resources.files("pegrna_pipeline.data").joinpath("restriction_sites.yaml").read_text()
     data = yaml.safe_load(raw) or {}
     sites = sorted({e["recognition"].upper() for e in data.get("enzymes", [])})
     return sites
@@ -357,9 +350,7 @@ def optimise_bulk(aa_sequence: str) -> str:
                 violations.append("homopolymer")
 
             # Prefer higher score; tie-break favours earlier (cytosine-first) entry.
-            if (score > best_score) or (
-                score == best_score and idx < best_index
-            ):
+            if (score > best_score) or (score == best_score and idx < best_index):
                 best_score = score
                 best_codon = codon
                 best_index = idx

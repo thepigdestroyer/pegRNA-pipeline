@@ -46,7 +46,10 @@ def test_repeat_with_x_in_parenthesised_group():
 def test_multi_motif_group_repeat():
     components = _parse("(GGGGS-FLAG)2")
     assert [c.value for c in components] == [
-        "GGGGS", "FLAG", "GGGGS", "FLAG",
+        "GGGGS",
+        "FLAG",
+        "GGGGS",
+        "FLAG",
     ]
 
 

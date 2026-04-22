@@ -19,6 +19,6 @@ def test_env_files_are_valid_yaml_with_name_and_deps():
         assert isinstance(data, dict), f"{name} is not a mapping"
         assert "name" in data, f"{name} missing 'name' field"
         assert "dependencies" in data, f"{name} missing 'dependencies' field"
-        assert isinstance(data["dependencies"], list) and data["dependencies"], (
-            f"{name} has empty dependencies"
-        )
+        assert (
+            isinstance(data["dependencies"], list) and data["dependencies"]
+        ), f"{name} has empty dependencies"

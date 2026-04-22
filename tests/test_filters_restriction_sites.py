@@ -25,8 +25,18 @@ YAML_PATH = (
 
 
 EXPECTED_ENZYMES = (
-    "BamHI", "EcoRI", "HindIII", "XhoI", "NotI", "SalI",
-    "BglII", "NdeI", "KpnI", "SacI", "SpeI", "XbaI",
+    "BamHI",
+    "EcoRI",
+    "HindIII",
+    "XhoI",
+    "NotI",
+    "SalI",
+    "BglII",
+    "NdeI",
+    "KpnI",
+    "SacI",
+    "SpeI",
+    "XbaI",
 )
 
 

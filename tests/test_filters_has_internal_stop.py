@@ -4,8 +4,6 @@ We must check EVERY codon in the frame (including the last one) so that a
 stop at the tail position is detected. Uses range(0, len(dna) - 2, 3).
 """
 
-import pytest
-
 from pegrna_pipeline.hpc.codon_expander import _has_internal_stop
 
 

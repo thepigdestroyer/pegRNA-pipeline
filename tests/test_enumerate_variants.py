@@ -10,10 +10,8 @@ enumerate_variants must:
 """
 
 import itertools
-import math
 from typing import List, Tuple
 
-import pytest
 
 from pegrna_pipeline.hpc.codon_expander import (
     CODONS_BY_AA,
@@ -85,7 +83,7 @@ def test_enumerate_variants_capped_matches_top_k_manual():
     got = [(v.dna, v.c_count, v.gc_content) for v in variants]
     assert len(got) <= 10
     # Compare primary sort key of capped set to top-K-by-key of manual set.
-    assert [v[1] for v in got] == [v[1] for v in top_k_manual[:len(got)]]
+    assert [v[1] for v in got] == [v[1] for v in top_k_manual[: len(got)]]
 
 
 def test_enumerate_variants_assigns_sequential_ranks():
@@ -99,6 +97,7 @@ def test_enumerate_variants_all_translate_back_to_aa():
     # Simple reverse translation table.
     translate = {}
     from python_codon_tables import get_codons_table
+
     for aa, codons in get_codons_table("h_sapiens_9606").items():
         for c in codons:
             translate[c] = aa
@@ -106,7 +105,7 @@ def test_enumerate_variants_all_translate_back_to_aa():
     aa = "MKL"
     variants = enumerate_variants(aa, max_variants=50)
     for v in variants:
-        codons = [v.dna[i:i+3] for i in range(0, len(v.dna), 3)]
+        codons = [v.dna[i : i + 3] for i in range(0, len(v.dna), 3)]
         assert "".join(translate[c] for c in codons) == aa
 
 

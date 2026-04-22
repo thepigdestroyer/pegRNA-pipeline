@@ -33,16 +33,16 @@ def test_ggggsdyk_variants_all_translate_back(translate):
     result = enumerate_with_metadata(aa, max_variants=100)
     assert len(result.variants) > 0, "must have at least one clean variant"
     for v in result.variants:
-        assert _translate_to_aa(v.dna, translate) == aa, (
-            f"variant {v.dna!r} did not translate back to {aa!r}"
-        )
+        assert (
+            _translate_to_aa(v.dna, translate) == aa
+        ), f"variant {v.dna!r} did not translate back to {aa!r}"
 
 
 def test_ggggsdyk_theoretical_max_matches_manual_computation():
     aa = "GGGGSDYK"
     # G has 4 codons, S has 6, D has 2, Y has 2, K has 2.  GGGGS = 4*4*4*4*6,
     # then DYK = 2*2*2.
-    expected = (4 ** 4) * 6 * 2 * 2 * 2
+    expected = (4**4) * 6 * 2 * 2 * 2
     result = enumerate_with_metadata(aa, max_variants=5)
     assert result.theoretical_max == expected
 

@@ -18,8 +18,6 @@ import logging
 import pytest
 
 from pegrna_pipeline.hpc.codon_expander import (
-    _has_cpg,
-    _has_homopolymer,
     _has_restriction_site,
     optimise_bulk,
 )

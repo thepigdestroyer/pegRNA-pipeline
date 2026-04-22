@@ -33,8 +33,10 @@ def test_single_name():
 def test_dashed_chain_of_names():
     toks = tokenize("GGGGS-FLAG-P2A")
     assert _kinds(toks) == [
-        TokenKind.NAME, TokenKind.DASH,
-        TokenKind.NAME, TokenKind.DASH,
+        TokenKind.NAME,
+        TokenKind.DASH,
+        TokenKind.NAME,
+        TokenKind.DASH,
         TokenKind.NAME,
     ]
     assert [t.value for t in toks] == ["GGGGS", "-", "FLAG", "-", "P2A"]
@@ -74,24 +76,23 @@ def test_x_inside_name_between_letters_is_name_char():
 
 def test_parenthesised_group_repeat():
     toks = tokenize("(GGGGS)3")
-    assert _kinds(toks) == [
-        TokenKind.LPAREN, TokenKind.NAME, TokenKind.RPAREN, TokenKind.NUMBER
-    ]
+    assert _kinds(toks) == [TokenKind.LPAREN, TokenKind.NAME, TokenKind.RPAREN, TokenKind.NUMBER]
 
 
 def test_parenthesised_group_with_explicit_x():
     toks = tokenize("(GGGGS)x3")
     assert _kinds(toks) == [
-        TokenKind.LPAREN, TokenKind.NAME, TokenKind.RPAREN,
-        TokenKind.X, TokenKind.NUMBER,
+        TokenKind.LPAREN,
+        TokenKind.NAME,
+        TokenKind.RPAREN,
+        TokenKind.X,
+        TokenKind.NUMBER,
     ]
 
 
 def test_raw_aa_payload_greedy_to_dash():
     toks = tokenize("aa:DYKDDDDK-FLAG")
-    assert _kinds(toks) == [
-        TokenKind.RAW_AA, TokenKind.DASH, TokenKind.NAME
-    ]
+    assert _kinds(toks) == [TokenKind.RAW_AA, TokenKind.DASH, TokenKind.NAME]
     assert toks[0].value == "DYKDDDDK"
 
 
@@ -118,9 +119,18 @@ def test_multiple_features_combine():
     kinds = _kinds(toks)
     # LPAREN NAME RPAREN NUMBER DASH NAME X NUMBER DASH RAW_AA DASH NAME
     assert kinds == [
-        TokenKind.LPAREN, TokenKind.NAME, TokenKind.RPAREN, TokenKind.NUMBER,
-        TokenKind.DASH, TokenKind.NAME, TokenKind.X, TokenKind.NUMBER,
-        TokenKind.DASH, TokenKind.RAW_AA, TokenKind.DASH, TokenKind.NAME,
+        TokenKind.LPAREN,
+        TokenKind.NAME,
+        TokenKind.RPAREN,
+        TokenKind.NUMBER,
+        TokenKind.DASH,
+        TokenKind.NAME,
+        TokenKind.X,
+        TokenKind.NUMBER,
+        TokenKind.DASH,
+        TokenKind.RAW_AA,
+        TokenKind.DASH,
+        TokenKind.NAME,
     ]
 
 

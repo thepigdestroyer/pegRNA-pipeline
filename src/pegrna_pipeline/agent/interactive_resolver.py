@@ -64,9 +64,7 @@ def build_interactive_resolver(
             if raw.isdigit():
                 idx = int(raw)
                 if 1 <= idx <= len(suggestions):
-                    return RawComponent(
-                        RawComponentKind.MOTIF, suggestions[idx - 1]
-                    )
+                    return RawComponent(RawComponentKind.MOTIF, suggestions[idx - 1])
                 # Indices beyond suggestions correspond to aa / dna / abort.
                 extra = idx - len(suggestions)
                 if extra == 1:
@@ -76,9 +74,7 @@ def build_interactive_resolver(
                     payload = prompt("Enter DNA sequence (ACGT): ").strip().upper()
                     return RawComponent(RawComponentKind.RAW_DNA, payload)
                 if extra == 3:
-                    raise AbortedByUser(
-                        f"user aborted while resolving {unknown!r}"
-                    )
+                    raise AbortedByUser(f"user aborted while resolving {unknown!r}")
 
             print(f"Unrecognised choice {raw!r}; please try again.")
 

@@ -28,9 +28,9 @@ def _levenshtein(a: str, b: str) -> int:
         for j, cb in enumerate(b, start=1):
             cost = 0 if ca == cb else 1
             curr[j] = min(
-                curr[j - 1] + 1,        # insertion
-                prev[j] + 1,            # deletion
-                prev[j - 1] + cost,     # substitution
+                curr[j - 1] + 1,  # insertion
+                prev[j] + 1,  # deletion
+                prev[j - 1] + cost,  # substitution
             )
         prev = curr
     return prev[-1]
@@ -104,9 +104,7 @@ class MotifLibrary:
     def load_bundled(cls) -> "MotifLibrary":
         """Load the packaged motif_library.yaml."""
         data = yaml.safe_load(
-            resources.files("pegrna_pipeline.data")
-            .joinpath("motif_library.yaml")
-            .read_text()
+            resources.files("pegrna_pipeline.data").joinpath("motif_library.yaml").read_text()
         )
         motifs = [Motif.from_mapping(m) for m in data.get("motifs", [])]
         return cls(motifs)

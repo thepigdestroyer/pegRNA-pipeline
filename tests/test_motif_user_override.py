@@ -1,7 +1,5 @@
 """Tests for user motif overrides at ~/.pegrna/motifs.yaml."""
 
-from pathlib import Path
-
 import pytest
 import yaml
 

@@ -68,12 +68,22 @@ def test_stop_codon_included(lib):
 def test_user_override_is_merged_via_load_full(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path))
     import yaml as _yaml
+
     (tmp_path / ".pegrna").mkdir()
     (tmp_path / ".pegrna" / "motifs.yaml").write_text(
-        _yaml.safe_dump({"motifs": [{
-            "name": "LabTag", "category": "custom",
-            "dna": "ATGAAG", "aa": "MK", "description": ""
-        }]})
+        _yaml.safe_dump(
+            {
+                "motifs": [
+                    {
+                        "name": "LabTag",
+                        "category": "custom",
+                        "dna": "ATGAAG",
+                        "aa": "MK",
+                        "description": "",
+                    }
+                ]
+            }
+        )
     )
     lib = MotifLibrary.load_full()
     construct = resolve_construct(

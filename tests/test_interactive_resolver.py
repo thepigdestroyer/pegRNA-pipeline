@@ -23,11 +23,13 @@ def library():
 def _scripted_input(responses):
     """Return a prompt callable that replays responses in order."""
     it = iter(responses)
+
     def _prompt(msg: str) -> str:
         try:
             return next(it)
         except StopIteration:  # pragma: no cover - shouldn't happen in these tests
             raise AssertionError(f"interactive resolver asked for more input than scripted: {msg}")
+
     return _prompt
 
 
@@ -74,7 +76,8 @@ def test_resolver_abort_raises(library):
 def test_resolver_retries_on_invalid_input(library):
     # First answer is invalid, second is "abort".
     resolver = build_interactive_resolver(
-        library, prompt=_scripted_input(["not-a-choice", "abort"]),
+        library,
+        prompt=_scripted_input(["not-a-choice", "abort"]),
     )
     with pytest.raises(AbortedByUser):
         resolver("ZZZZZ")

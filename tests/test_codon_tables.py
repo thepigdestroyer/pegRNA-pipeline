@@ -37,9 +37,7 @@ def test_codons_are_cytosine_first_ordered():
         codons = codons_for_aa(aa)
         c_first = [c for c in codons if c.startswith("C")]
         others = [c for c in codons if not c.startswith("C")]
-        assert codons == c_first + others, (
-            f"{aa} codons not cytosine-first: {codons}"
-        )
+        assert codons == c_first + others, f"{aa} codons not cytosine-first: {codons}"
 
 
 def test_codon_frequency_between_zero_and_one():
@@ -55,9 +53,9 @@ def test_codon_frequency_sums_to_one_per_aa():
     # within rounding (typically ±0.02).
     for aa, codons in CODONS_BY_AA.items():
         total = sum(codon_frequency(aa, c) for c in codons)
-        assert total == pytest.approx(1.0, abs=0.05), (
-            f"codon frequencies for {aa} sum to {total}, not close to 1.0"
-        )
+        assert total == pytest.approx(
+            1.0, abs=0.05
+        ), f"codon frequencies for {aa} sum to {total}, not close to 1.0"
 
 
 def test_human_codon_frequencies_is_mapping_of_codons():
