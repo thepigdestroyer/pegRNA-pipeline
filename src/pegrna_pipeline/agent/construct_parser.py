@@ -22,6 +22,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum, auto
+from typing import Iterable, Sequence
 
 
 class TokenKind(Enum):
@@ -158,3 +159,131 @@ def tokenize(source: str) -> list[Token]:
         )
 
     return tokens
+
+
+# ---------------------------------------------------------------- RawComponent
+
+
+class RawComponentKind(Enum):
+    MOTIF = auto()
+    RAW_AA = auto()
+    RAW_DNA = auto()
+
+
+@dataclass(frozen=True)
+class RawComponent:
+    kind: RawComponentKind
+    value: str
+
+
+def parse_components(tokens: Sequence[Token]) -> list[RawComponent]:
+    """Convert a token stream into a flat list of RawComponent entries.
+
+    Expands x<N> and (group)<N> repeats inline. Raises ValueError on any
+    syntactic violation (dangling -, unmatched (, repeat count of zero, etc.).
+    """
+    components, consumed = _parse_sequence(tokens, 0, terminator=None)
+    if consumed != len(tokens):
+        raise ValueError(f"unexpected trailing tokens at position {consumed}")
+    return components
+
+
+def _parse_sequence(
+    tokens: Sequence[Token], start: int, *, terminator: TokenKind | None
+) -> tuple[list[RawComponent], int]:
+    """Parse component (DASH component)* stopping at `terminator` or EOF."""
+    out: list[RawComponent] = []
+    i = start
+
+    # Empty sequences are not valid constructs.
+    if i >= len(tokens) or tokens[i].kind is terminator:
+        raise ValueError("empty construct/group")
+
+    while True:
+        chunk, i = _parse_component(tokens, i)
+        out.extend(chunk)
+
+        if i >= len(tokens):
+            if terminator is not None:
+                raise ValueError("unterminated parenthesised group")
+            return out, i
+
+        if tokens[i].kind is terminator:
+            return out, i
+
+        if tokens[i].kind is TokenKind.DASH:
+            i += 1
+            if i >= len(tokens) or tokens[i].kind is terminator:
+                raise ValueError(f"trailing '-' at position {tokens[i - 1].position}")
+            continue
+
+        raise ValueError(
+            f"expected '-' or end of construct at token position {tokens[i].position}, "
+            f"got {tokens[i].kind.name}"
+        )
+
+
+def _parse_component(
+    tokens: Sequence[Token], i: int
+) -> tuple[list[RawComponent], int]:
+    """Parse a single component (plus any repeat suffix). Returns the expanded
+    list of RawComponents and the new cursor.
+    """
+    tok = tokens[i]
+
+    # Parenthesised group.
+    if tok.kind is TokenKind.LPAREN:
+        inner, j = _parse_sequence(tokens, i + 1, terminator=TokenKind.RPAREN)
+        # Consume RPAREN.
+        j += 1
+        # Optional repeat suffix: either X NUMBER or bare NUMBER.
+        count, j = _consume_repeat(tokens, j, allow_bare_number=True)
+        return inner * count, j
+
+    # Raw aa:/dna: payload.
+    if tok.kind is TokenKind.RAW_AA:
+        return [RawComponent(RawComponentKind.RAW_AA, tok.value)], i + 1
+    if tok.kind is TokenKind.RAW_DNA:
+        return [RawComponent(RawComponentKind.RAW_DNA, tok.value)], i + 1
+
+    # Motif NAME with optional Xn suffix (bare numbers aren't allowed after a
+    # NAME; they must come through explicit 'x').
+    if tok.kind is TokenKind.NAME:
+        count, j = _consume_repeat(tokens, i + 1, allow_bare_number=False)
+        return [RawComponent(RawComponentKind.MOTIF, tok.value)] * count, j
+
+    raise ValueError(
+        f"unexpected token {tok.kind.name} at position {tok.position}"
+    )
+
+
+def _consume_repeat(
+    tokens: Sequence[Token], i: int, *, allow_bare_number: bool
+) -> tuple[int, int]:
+    """If the next token(s) form a repeat suffix, consume them and return the
+    count plus the new cursor. Otherwise return (1, i) unchanged.
+    """
+    if i >= len(tokens):
+        return 1, i
+
+    if tokens[i].kind is TokenKind.X:
+        if i + 1 >= len(tokens) or tokens[i + 1].kind is not TokenKind.NUMBER:
+            raise ValueError(
+                f"'x' at position {tokens[i].position} is not followed by a number"
+            )
+        count = int(tokens[i + 1].value)
+        if count <= 0:
+            raise ValueError(f"repeat count must be > 0, got {count}")
+        return count, i + 2
+
+    if allow_bare_number and tokens[i].kind is TokenKind.NUMBER:
+        count = int(tokens[i].value)
+        if count <= 0:
+            raise ValueError(f"repeat count must be > 0, got {count}")
+        return count, i + 1
+
+    return 1, i
+
+
+def _ignored() -> Iterable[None]:  # pragma: no cover - typing anchor
+    yield None
