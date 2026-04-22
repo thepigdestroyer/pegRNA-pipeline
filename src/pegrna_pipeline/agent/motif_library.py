@@ -14,6 +14,50 @@ class MotifNotFoundError(KeyError):
     """Raised when a motif name is not present in the library."""
 
 
+def _levenshtein(a: str, b: str) -> int:
+    """Classic O(len(a)*len(b)) edit distance with a rolling row."""
+    if a == b:
+        return 0
+    if not a:
+        return len(b)
+    if not b:
+        return len(a)
+    prev = list(range(len(b) + 1))
+    for i, ca in enumerate(a, start=1):
+        curr = [i] + [0] * len(b)
+        for j, cb in enumerate(b, start=1):
+            cost = 0 if ca == cb else 1
+            curr[j] = min(
+                curr[j - 1] + 1,        # insertion
+                prev[j] + 1,            # deletion
+                prev[j - 1] + cost,     # substitution
+            )
+        prev = curr
+    return prev[-1]
+
+
+def fuzzy_suggestions(query: str, library: "MotifLibrary", max_distance: int = 2) -> list[str]:
+    """Return motif names within Levenshtein distance <= max_distance of query.
+
+    Comparison is case-insensitive; returned names preserve library casing and
+    are ordered by (distance, name). Duplicate lowercased names are collapsed
+    so aliases such as ZeocinR / ZEOCINr aren't double-counted.
+    """
+    q = query.lower()
+    scored: list[tuple[int, str]] = []
+    seen_lower: set[str] = set()
+    for motif in library:
+        lower = motif.name.lower()
+        if lower in seen_lower:
+            continue
+        seen_lower.add(lower)
+        d = _levenshtein(q, lower)
+        if d <= max_distance:
+            scored.append((d, motif.name))
+    scored.sort(key=lambda t: (t[0], t[1].lower()))
+    return [name for _, name in scored]
+
+
 @dataclass(frozen=True)
 class Motif:
     """A single library entry."""
