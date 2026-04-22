@@ -112,6 +112,14 @@ def _has_restriction_site(dna: str) -> bool:
     return any(site in upper for site in load_restriction_sites())
 
 
+def _gc_content(dna: str) -> float:
+    """Return the GC fraction of ``dna`` in [0.0, 1.0]. Empty input -> 0.0."""
+    if not dna:
+        return 0.0
+    upper = dna.upper()
+    return (upper.count("G") + upper.count("C")) / len(upper)
+
+
 def _has_homopolymer(dna: str, min_run: int = 5) -> bool:
     """Return True if ``dna`` contains a homopolymer run of length >= min_run."""
     if min_run <= 0:
