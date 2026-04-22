@@ -83,6 +83,24 @@ def codon_frequency(aa: str, codon: str) -> float:
 # ---------------------------------------------------------- bulk optimisation
 
 
+# ---------------------------------------------------------------- filters
+
+
+_STOP_CODONS = frozenset({"TAA", "TAG", "TGA"})
+
+
+def _has_internal_stop(dna: str) -> bool:
+    """Return True if ``dna`` contains any in-frame stop codon.
+
+    Walks indices ``range(0, len(dna) - 2, 3)`` so every full codon is
+    inspected -- including the last one (off-by-one fix).
+    """
+    for i in range(0, len(dna) - 2, 3):
+        if dna[i : i + 3] in _STOP_CODONS:
+            return True
+    return False
+
+
 def optimise_bulk(aa_sequence: str) -> str:
     """Preliminary greedy codon optimiser.
 
