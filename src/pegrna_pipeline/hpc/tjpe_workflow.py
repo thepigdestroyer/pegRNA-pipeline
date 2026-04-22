@@ -14,14 +14,21 @@ contract. Tasks here:
 from __future__ import annotations
 
 import re
-from typing import List, Optional
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import List, Optional, Sequence, Union
 
 from Bio.Seq import Seq
 
 from pegrna_pipeline.hpc.data_types import (
+    GeneRecord,
     NgRNADesign,
     PegRNADesign,
     VariantScore,
+)
+from pegrna_pipeline.hpc.pridict_parser import (
+    parse_ngrna_csv,
+    parse_pegrna_csv,
 )
 
 
@@ -207,3 +214,195 @@ def assemble_tj_pegrna(
     ):
         _check_acgt(label, value)
     return spacer + scaffold + insert_dna + pbs1 + rc_pbs2
+
+
+# ------------------------------------------------------------------ T10
+
+
+@dataclass
+class TJPEResult:
+    """Final output of :func:`run_tjpe_workflow` — v1.1 field names.
+
+    Field names match the corrections supplement exactly. Renames vs v1.0:
+
+    * ``first_nick_position``  -> ``edit_position_in_mrna``
+    * ``second_nick_position`` -> ``ngrna_nick_in_mrna``
+    * ``ngrna_distance``       -> ``ngrna_distance_to_edit``
+    """
+
+    winning_variant: Optional[VariantScore]
+    full_insert_dna: str
+    tjpe_pegRNA_sequence: str
+    spacer: str
+    pbs1: str
+    rc_pbs2: str
+    rc_pbs2_length: int
+    ngrna_spacer: str
+    ngrna_distance_to_edit: int
+    ngrna_deepcas9_score: float
+    pegrna_pe2_hek293t: float
+    edit_position_in_mrna: int
+    ngrna_nick_in_mrna: int
+    all_evaluated_variants: List[VariantScore] = field(default_factory=list)
+
+
+def _load_variants_from_fixtures(fixtures_dir: Path) -> List[VariantScore]:
+    """Discover ``*_pegRNA_Pridict_full.csv`` + ``*_nicking_guides.csv`` pairs
+    in ``fixtures_dir`` and build :class:`VariantScore` objects.
+
+    Variant name = the common prefix (filename up to the ``_pegRNA_...``
+    suffix). The ngRNA file must exist with the same prefix; a missing
+    partner is a :class:`FileNotFoundError`.
+    """
+    fixtures_dir = Path(fixtures_dir)
+    variants: List[VariantScore] = []
+    for peg_path in sorted(fixtures_dir.glob("*_pegRNA_Pridict_full.csv")):
+        prefix = peg_path.name.replace("_pegRNA_Pridict_full.csv", "")
+        ng_path = fixtures_dir / f"{prefix}_nicking_guides.csv"
+        if not ng_path.exists():
+            raise FileNotFoundError(
+                f"no matching nicking guides CSV for {peg_path.name} "
+                f"(expected {ng_path.name})"
+            )
+        pegrnas = parse_pegrna_csv(peg_path)
+        ngrnas = parse_ngrna_csv(ng_path)
+        variants.append(
+            VariantScore(
+                sequence_name=prefix,
+                codon_variant_dna="",  # insert_full_dna is passed separately
+                pegRNA_designs=pegrnas,
+                ngRNA_candidates=ngrnas,
+            )
+        )
+    return variants
+
+
+def run_tjpe_workflow(
+    *,
+    gene: GeneRecord,
+    insert_full_dna: str,
+    variant_fixtures_dir: Optional[Union[str, Path]] = None,
+    variant_scores: Optional[Sequence[VariantScore]] = None,
+    enumeration_window_bp: int = 24,  # noqa: ARG001  # Plan 3 forward-compat
+    ngrna_distance_min: int = 40,
+    ngrna_distance_max: int = 100,
+    pbs2_length: int = 17,
+) -> TJPEResult:
+    """Run the TJ-PE workflow end-to-end for one gene + insertion.
+
+    Exactly one of ``variant_fixtures_dir`` or ``variant_scores`` must be
+    supplied. The former is used by the current test / fixture-driven
+    path; the latter is the programmatic entry point Plan 3 will wire up
+    (variants enumerated in-memory by the codon expander).
+
+    Nick arithmetic follows Plan 2 v1.1 exactly::
+
+        edit_position_in_mrna = gene.stop_codon_start
+        ngrna_nick_in_mrna    = edit_position_in_mrna + ng.distance_to_edit
+        rc_pbs2               = derive_rc_pbs2(
+                                    gene.mrna_sequence,
+                                    ngrna_nick_position=ngrna_nick_in_mrna,
+                                    pbs2_length=pbs2_length,
+                                )
+    """
+    # -------- input source contract --------
+    if (variant_fixtures_dir is None) == (variant_scores is None):
+        raise ValueError(
+            "exactly one of variant_fixtures_dir or variant_scores must be provided"
+        )
+
+    if variant_fixtures_dir is not None:
+        variants = _load_variants_from_fixtures(Path(variant_fixtures_dir))
+    else:
+        variants = list(variant_scores or [])
+
+    # -------- rank & pick best pegRNA --------
+    ranked = rank_variants_by_pe2(variants)
+    winning: Optional[VariantScore] = ranked[0] if ranked else None
+    best_peg: Optional[PegRNADesign] = winning.best_pegRNA if winning else None
+
+    edit_position_in_mrna = gene.stop_codon_start
+
+    if winning is None or best_peg is None:
+        # Degenerate case: caller asked us to design with no variants.  We
+        # return a TJPEResult with zeroed strings so downstream diagnostics
+        # can still inspect all_evaluated_variants.
+        return TJPEResult(
+            winning_variant=winning,
+            full_insert_dna=insert_full_dna,
+            tjpe_pegRNA_sequence="",
+            spacer="",
+            pbs1="",
+            rc_pbs2="",
+            rc_pbs2_length=0,
+            ngrna_spacer="",
+            ngrna_distance_to_edit=0,
+            ngrna_deepcas9_score=0.0,
+            pegrna_pe2_hek293t=0.0,
+            edit_position_in_mrna=edit_position_in_mrna,
+            ngrna_nick_in_mrna=edit_position_in_mrna,
+            all_evaluated_variants=list(variants),
+        )
+
+    # -------- pick best ngRNA (opposite strand) --------
+    best_ng = select_tjpe_ngrna(
+        winning.ngRNA_candidates,
+        min_distance=ngrna_distance_min,
+        max_distance=ngrna_distance_max,
+        pegrna_strand=best_peg.target_strand,
+    )
+
+    if best_ng is None:
+        # No usable ngRNA for this variant — surface via empty ngRNA fields
+        # so callers can decide to fail vs retry.  A full-on exception would
+        # be wrong here because the caller may well want to iterate through
+        # fallback variants.
+        return TJPEResult(
+            winning_variant=winning,
+            full_insert_dna=insert_full_dna,
+            tjpe_pegRNA_sequence="",
+            spacer=best_peg.spacer,
+            pbs1=best_peg.pbs,
+            rc_pbs2="",
+            rc_pbs2_length=0,
+            ngrna_spacer="",
+            ngrna_distance_to_edit=0,
+            ngrna_deepcas9_score=0.0,
+            pegrna_pe2_hek293t=best_peg.pe2_hek293t,
+            edit_position_in_mrna=edit_position_in_mrna,
+            ngrna_nick_in_mrna=edit_position_in_mrna,
+            all_evaluated_variants=list(variants),
+        )
+
+    # -------- derive rc_PBS2 from mRNA around ngRNA nick --------
+    ngrna_nick_in_mrna = edit_position_in_mrna + best_ng.distance_to_edit
+    rc_pbs2 = derive_rc_pbs2(
+        gene.mrna_sequence,
+        ngrna_nick_position=ngrna_nick_in_mrna,
+        pbs2_length=pbs2_length,
+    )
+
+    # -------- assemble final pegRNA --------
+    tjpe_pegrna = assemble_tj_pegrna(
+        spacer=best_peg.spacer,
+        insert_dna=insert_full_dna,
+        pbs1=best_peg.pbs,
+        rc_pbs2=rc_pbs2,
+    )
+
+    return TJPEResult(
+        winning_variant=winning,
+        full_insert_dna=insert_full_dna,
+        tjpe_pegRNA_sequence=tjpe_pegrna,
+        spacer=best_peg.spacer,
+        pbs1=best_peg.pbs,
+        rc_pbs2=rc_pbs2,
+        rc_pbs2_length=len(rc_pbs2),
+        ngrna_spacer=best_ng.spacer,
+        ngrna_distance_to_edit=best_ng.distance_to_edit,
+        ngrna_deepcas9_score=best_ng.deepcas9_score,
+        pegrna_pe2_hek293t=best_peg.pe2_hek293t,
+        edit_position_in_mrna=edit_position_in_mrna,
+        ngrna_nick_in_mrna=ngrna_nick_in_mrna,
+        all_evaluated_variants=list(variants),
+    )
