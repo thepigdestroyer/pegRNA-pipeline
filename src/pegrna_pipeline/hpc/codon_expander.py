@@ -13,9 +13,12 @@ Core building blocks used across the pipeline:
 from __future__ import annotations
 
 import re
+from functools import lru_cache
+from importlib import resources
 from typing import Dict, List
 
 import python_codon_tables as _pct
+import yaml
 
 
 # ---------------------------------------------------------------------- tables
@@ -88,6 +91,25 @@ def codon_frequency(aa: str, codon: str) -> float:
 
 
 _STOP_CODONS = frozenset({"TAA", "TAG", "TGA"})
+
+
+@lru_cache(maxsize=1)
+def load_restriction_sites() -> List[str]:
+    """Return the sorted list of recognition sequences bundled with the package."""
+    raw = (
+        resources.files("pegrna_pipeline.data")
+        .joinpath("restriction_sites.yaml")
+        .read_text()
+    )
+    data = yaml.safe_load(raw) or {}
+    sites = sorted({e["recognition"].upper() for e in data.get("enzymes", [])})
+    return sites
+
+
+def _has_restriction_site(dna: str) -> bool:
+    """Return True if ``dna`` contains any bundled restriction site as a substring."""
+    upper = dna.upper()
+    return any(site in upper for site in load_restriction_sites())
 
 
 def _has_homopolymer(dna: str, min_run: int = 5) -> bool:

@@ -1,0 +1,26 @@
+version: 1.0
+enzymes:
+  - name: BamHI
+    recognition: GGATCC
+  - name: EcoRI
+    recognition: GAATTC
+  - name: HindIII
+    recognition: AAGCTT
+  - name: XhoI
+    recognition: CTCGAG
+  - name: NotI
+    recognition: GCGGCCGC
+  - name: SalI
+    recognition: GTCGAC
+  - name: BglII
+    recognition: AGATCT
+  - name: NdeI
+    recognition: CATATG
+  - name: KpnI
+    recognition: GGTACC
+  - name: SacI
+    recognition: GAGCTC
+  - name: SpeI
+    recognition: ACTAGT
+  - name: XbaI
+    recognition: TCTAGA
