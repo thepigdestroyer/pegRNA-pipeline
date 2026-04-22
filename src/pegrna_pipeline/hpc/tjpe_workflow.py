@@ -15,6 +15,8 @@ from __future__ import annotations
 
 from typing import List, Optional
 
+from Bio.Seq import Seq
+
 from pegrna_pipeline.hpc.data_types import (
     NgRNADesign,
     PegRNADesign,
@@ -111,3 +113,49 @@ def select_tjpe_ngrna(
     if not survivors:
         return None
     return max(survivors, key=lambda c: c.deepcas9_score)
+
+
+# ------------------------------------------------------------------ T8
+
+
+def derive_rc_pbs2(
+    top_strand_sequence: str,
+    *,
+    ngrna_nick_position: int,
+    pbs2_length: int = 17,
+) -> str:
+    """Return the reverse complement of the PBS2 window.
+
+    PBS2 is the primer-binding site used by the **downstream** pegRNA in
+    a TJ-PE construct. It's extracted from the top strand immediately
+    5' of the ngRNA nick, then reverse-complemented so it anneals to the
+    opposite (nicked) strand.
+
+    Parameters
+    ----------
+    top_strand_sequence:
+        mRNA-sense sequence (the same strand as ``GeneRecord.mrna_sequence``).
+    ngrna_nick_position:
+        0-indexed position on ``top_strand_sequence`` where the ngRNA cuts.
+    pbs2_length:
+        Number of nt upstream of the nick to use as PBS2 (default 17).
+
+    Raises
+    ------
+    ValueError
+        If the window ``[nick - pbs2_length, nick)`` falls outside the
+        sequence.
+    """
+    start = ngrna_nick_position - pbs2_length
+    if start < 0:
+        raise ValueError(
+            f"PBS2 window start {start} < 0 "
+            f"(nick={ngrna_nick_position}, pbs2_length={pbs2_length})"
+        )
+    if ngrna_nick_position > len(top_strand_sequence):
+        raise ValueError(
+            f"ngrna_nick_position {ngrna_nick_position} exceeds sequence length "
+            f"{len(top_strand_sequence)}"
+        )
+    window = top_strand_sequence[start:ngrna_nick_position]
+    return str(Seq(window).reverse_complement())
