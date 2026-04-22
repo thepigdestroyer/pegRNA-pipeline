@@ -7,7 +7,8 @@ jobs, the Click CLI) without dragging in Biopython or pandas.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from typing import List, Literal, Optional
 
 
 @dataclass(frozen=True)
@@ -50,3 +51,74 @@ class GeneRecord:
     upstream_flank: str
     downstream_flank: str
     flanking_bp: int
+
+
+@dataclass(frozen=True)
+class PegRNADesign:
+    """A single pegRNA row parsed from a PRIDICT 2.0 ``_pegRNA_Pridict_full.csv``.
+
+    ``target_strand`` is either ``"Fw"`` (forward, same strand as mRNA) or
+    ``"Rv"`` (reverse complement). ``editing_position`` is the 0-indexed
+    position within the input window where the edit lies, matching PRIDICT's
+    output convention (see ``tests/test_pridict_index_convention.py``).
+    """
+
+    sequence_name: str
+    spacer: str
+    pbs: str
+    rt: str
+    pbs_length: int
+    rt_length: int
+    target_strand: Literal["Fw", "Rv"]
+    editing_position: int
+    pe2_hek293t: float
+    pe2_k562: float
+    pegrna_full: str
+
+
+@dataclass(frozen=True)
+class NgRNADesign:
+    """A nicking-guide row parsed from a PRIDICT ``_nicking_guides.csv``.
+
+    ``distance_to_edit`` is signed: positive = downstream of the edit on the
+    mRNA, negative = upstream. Strand convention mirrors ``PegRNADesign``.
+    """
+
+    spacer: str
+    distance_to_edit: int
+    target_strand: Literal["Fw", "Rv"]
+    deepcas9_score: float
+    pe3b: bool
+    pam_disrupt: bool
+
+
+@dataclass
+class VariantScore:
+    """Aggregate container: one codon variant, plus all its PRIDICT hits.
+
+    Not frozen — callers routinely build a :class:`VariantScore` incrementally
+    (add designs as PRIDICT jobs finish). The ``best_pegRNA`` / ``top_score``
+    helpers let sort-by-quality be a one-liner.
+    """
+
+    sequence_name: str
+    codon_variant_dna: str
+    pegRNA_designs: List[PegRNADesign] = field(default_factory=list)
+    ngRNA_candidates: List[NgRNADesign] = field(default_factory=list)
+
+    @property
+    def best_pegRNA(self) -> Optional[PegRNADesign]:
+        """Return the design with the highest ``pe2_hek293t``; None if empty."""
+        if not self.pegRNA_designs:
+            return None
+        return max(self.pegRNA_designs, key=lambda d: d.pe2_hek293t)
+
+    @property
+    def top_score(self) -> float:
+        """Convenience: ``best_pegRNA.pe2_hek293t`` or ``0.0`` if empty.
+
+        Returns a real number (never ``None``) so callers can sort without
+        guarding against missing designs.
+        """
+        best = self.best_pegRNA
+        return float(best.pe2_hek293t) if best is not None else 0.0
