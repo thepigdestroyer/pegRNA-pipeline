@@ -5,7 +5,6 @@ from __future__ import annotations
 from typing import List
 
 from pegrna_pipeline.hpc.offtarget_scorer import (
-    OffTargetReport,
     parse_offtarget_tsv,
     submit_offtarget_job,
 )

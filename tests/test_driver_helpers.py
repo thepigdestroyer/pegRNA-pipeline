@@ -5,13 +5,9 @@ _extract_winning_guides.
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
-import pytest
-
 from pegrna_pipeline.hpc.data_types import (
-    GeneRecord,
     NgRNADesign,
     PegRNADesign,
     VariantScore,
@@ -98,8 +94,6 @@ def test_build_variant_scores_from_batch_matches_outputs(tmp_path):
     # Instead of going through parse_pegrna_csv here, the helper can be
     # monkey-patched in tests. We'll use a stub that returns canned design
     # lists.
-
-    designs_by_prefix = {}
 
     from pegrna_pipeline.hpc import driver as driver_mod
 

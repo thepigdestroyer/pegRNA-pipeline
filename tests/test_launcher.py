@@ -6,8 +6,6 @@ import json
 from pathlib import Path
 from typing import List
 
-import pytest
-
 from pegrna_pipeline.agent.launcher import HPCLauncher, RunResult
 
 

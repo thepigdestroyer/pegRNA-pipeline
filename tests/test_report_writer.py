@@ -80,7 +80,6 @@ def _fake_tjpe_result() -> TJPEResult:
 
 def _fake_pa_result() -> PAResult:
     up = _fake_pegrna(name="u1", pe2=38.0, strand="Fw")
-    dn = _fake_pegrna(name="d1", pe2=40.0, strand="Rv")
     # downstream editing_position differs to give non-zero distance
     dn_obj = PegRNADesign(
         sequence_name="d1",

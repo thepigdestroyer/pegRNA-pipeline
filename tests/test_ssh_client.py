@@ -7,8 +7,6 @@ Imperial PBS cluster.
 
 from __future__ import annotations
 
-from typing import Any
-
 import pytest
 
 from pegrna_pipeline.hpc.ssh_client import (
