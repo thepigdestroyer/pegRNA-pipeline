@@ -1,11 +1,20 @@
-name: pegrna-offtarget
+name: pegrna-ngrna
+# R environment for off-target scoring via Bioconductor crisprScore/crisprDesign.
+# After creation run the R install block below once:
+#
+#   conda activate pegrna-ngrna
+#   Rscript -e "
+#     options(repos = BiocManager::repositories())
+#     BiocManager::install(c(
+#       'crisprScore', 'crisprDesign', 'Biostrings',
+#       'BSgenome.Hsapiens.UCSC.hg38'
+#     ), ask = FALSE)
+#   "
 channels:
-  - bioconda
   - conda-forge
+  - bioconda
 dependencies:
-  - python=3.10
-  - pip
-  - cas-offinder
-  - crispritz
-  - samtools
-  - bwa
+  - r-base>=4.3
+  - r-biocmanager
+  - r-data.table
+  - bioconductor-genomicranges

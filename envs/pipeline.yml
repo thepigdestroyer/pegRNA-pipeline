@@ -1,13 +1,16 @@
 name: pegrna-pipeline
 channels:
-  - bioconda
   - conda-forge
+  - bioconda
 dependencies:
   - python=3.10
   - pip
   - numpy
   - pandas
   - biopython
-  - pytorch
   - pip:
-      - pridict>=2.0
+      - pyyaml>=6.0
+      - python-codon-tables>=0.1.12
+      - click>=8.1
+      # install the pipeline package itself after cloning:
+      # pip install -e /path/to/pegRNA-pipeline
