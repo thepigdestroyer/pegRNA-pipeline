@@ -61,6 +61,4 @@ def test_assembly_rejects_non_acgt_in_any_component():
 
 def test_assembly_uppercase_only():
     with pytest.raises(ValueError):
-        assemble_tj_pegrna(
-            spacer="acgt", insert_dna="ACGT", pbs1="ACGT", rc_pbs2="ACGT"
-        )
+        assemble_tj_pegrna(spacer="acgt", insert_dna="ACGT", pbs1="ACGT", rc_pbs2="ACGT")

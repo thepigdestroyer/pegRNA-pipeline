@@ -31,7 +31,6 @@ from pegrna_pipeline.hpc.pridict_parser import (
     parse_pegrna_csv,
 )
 
-
 OPPOSITE_STRAND = {"Fw": "Rv", "Rv": "Fw"}
 
 
@@ -261,8 +260,7 @@ def _load_variants_from_fixtures(fixtures_dir: Path) -> List[VariantScore]:
         ng_path = fixtures_dir / f"{prefix}_nicking_guides.csv"
         if not ng_path.exists():
             raise FileNotFoundError(
-                f"no matching nicking guides CSV for {peg_path.name} "
-                f"(expected {ng_path.name})"
+                f"no matching nicking guides CSV for {peg_path.name} " f"(expected {ng_path.name})"
             )
         pegrnas = parse_pegrna_csv(peg_path)
         ngrnas = parse_ngrna_csv(ng_path)
@@ -307,9 +305,7 @@ def run_tjpe_workflow(
     """
     # -------- input source contract --------
     if (variant_fixtures_dir is None) == (variant_scores is None):
-        raise ValueError(
-            "exactly one of variant_fixtures_dir or variant_scores must be provided"
-        )
+        raise ValueError("exactly one of variant_fixtures_dir or variant_scores must be provided")
 
     if variant_fixtures_dir is not None:
         variants = _load_variants_from_fixtures(Path(variant_fixtures_dir))

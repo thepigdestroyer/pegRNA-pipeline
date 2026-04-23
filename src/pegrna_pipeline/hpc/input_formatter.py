@@ -16,7 +16,6 @@ import re
 
 from pegrna_pipeline.hpc.data_types import GeneRecord
 
-
 _ACGT_ONLY = re.compile(r"^[ACGT]+$")
 
 
@@ -41,7 +40,5 @@ def format_bracket_insertion(gene: GeneRecord, insertion: str) -> str:
     if not insertion:
         raise ValueError("insertion must be non-empty")
     if not _ACGT_ONLY.match(insertion):
-        raise ValueError(
-            f"insertion must be uppercase ACGT only; got {insertion!r}"
-        )
+        raise ValueError(f"insertion must be uppercase ACGT only; got {insertion!r}")
     return f"{gene.upstream_flank}(+{insertion}){gene.downstream_flank}"

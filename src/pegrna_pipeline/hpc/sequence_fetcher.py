@@ -25,7 +25,6 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from pegrna_pipeline.hpc.data_types import GeneRecord
 
-
 # ------------------------------------------------------------------ errors
 
 
@@ -137,9 +136,7 @@ def _extract_cds_coordinates(record: Dict[str, Any]) -> Tuple[int, int, int, str
     stop_codon_start = cds_end - 3
     stop_codon = sequence[stop_codon_start:cds_end].upper()
     if stop_codon not in {"TAA", "TAG", "TGA"}:
-        raise SequenceFetchError(
-            f"final CDS codon is {stop_codon!r}, expected TAA/TAG/TGA"
-        )
+        raise SequenceFetchError(f"final CDS codon is {stop_codon!r}, expected TAA/TAG/TGA")
     return cds_start, cds_end, stop_codon_start, stop_codon
 
 
@@ -215,9 +212,7 @@ def _main(argv: Optional[Sequence[str]] = None) -> int:
         default="Homo sapiens",
         help="Organism name passed to Entrez (default: Homo sapiens).",
     )
-    parser.add_argument(
-        "--flanking-bp", type=int, default=100, help="Flank length (default: 100)."
-    )
+    parser.add_argument("--flanking-bp", type=int, default=100, help="Flank length (default: 100).")
     parser.add_argument("--api-key", default=None, help="Optional NCBI API key.")
     parser.add_argument("--json", action="store_true", help="Emit the record as JSON on stdout.")
     args = parser.parse_args(argv)

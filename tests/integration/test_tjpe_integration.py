@@ -20,7 +20,6 @@ from pegrna_pipeline.hpc.tjpe_workflow import (
     run_tjpe_workflow,
 )
 
-
 FIXTURES = Path(__file__).parent.parent / "fixtures" / "pridict"
 
 
@@ -77,10 +76,7 @@ def test_rc_pbs2_matches_mrna_window(result: TJPEResult):
 
 def test_nick_arithmetic(result: TJPEResult):
     assert result.edit_position_in_mrna == 1000  # stop_codon_start
-    assert (
-        result.ngrna_nick_in_mrna
-        == result.edit_position_in_mrna + result.ngrna_distance_to_edit
-    )
+    assert result.ngrna_nick_in_mrna == result.edit_position_in_mrna + result.ngrna_distance_to_edit
 
 
 def test_winner_has_best_score(result: TJPEResult):

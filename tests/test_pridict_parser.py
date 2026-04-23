@@ -24,7 +24,6 @@ from pegrna_pipeline.hpc.pridict_parser import (
     parse_pegrna_csv,
 )
 
-
 FIXTURES = Path(__file__).parent / "fixtures" / "pridict"
 PEGRNA_CSV = FIXTURES / "ctcf_tjpe_v1_pegRNA_Pridict_full.csv"
 NGRNA_CSV = FIXTURES / "ctcf_tjpe_v1_nicking_guides.csv"

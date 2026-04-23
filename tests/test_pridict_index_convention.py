@@ -13,7 +13,6 @@ from pathlib import Path
 
 from pegrna_pipeline.hpc.pridict_parser import parse_pegrna_csv
 
-
 FIXTURE = Path(__file__).parent / "fixtures" / "pridict" / "ctcf_tjpe_v1_pegRNA_Pridict_full.csv"
 
 

@@ -22,7 +22,6 @@ import pandas as pd
 
 from pegrna_pipeline.hpc.data_types import NgRNADesign, PegRNADesign
 
-
 _PEGRNA_REQUIRED = [
     "sequence_name",
     "Spacer-Sequence",
@@ -49,9 +48,7 @@ PathLike = Union[str, Path]
 def _require_columns(df: pd.DataFrame, required: List[str], source: PathLike) -> None:
     missing = [c for c in required if c not in df.columns]
     if missing:
-        raise ValueError(
-            f"{source}: missing required column(s): {', '.join(missing)}"
-        )
+        raise ValueError(f"{source}: missing required column(s): {', '.join(missing)}")
 
 
 def _coerce_bool(val: object) -> bool:

@@ -29,9 +29,7 @@ def _peg(score: float, name: str = "peg") -> PegRNADesign:
 def _variant(name: str, top: float, extras: tuple = ()) -> VariantScore:
     designs = [_peg(top, f"{name}_top")]
     designs.extend(_peg(s, f"{name}_extra_{i}") for i, s in enumerate(extras))
-    return VariantScore(
-        sequence_name=name, codon_variant_dna="ACG", pegRNA_designs=designs
-    )
+    return VariantScore(sequence_name=name, codon_variant_dna="ACG", pegRNA_designs=designs)
 
 
 def test_rank_variants_sorts_descending_by_top_score():

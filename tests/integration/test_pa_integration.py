@@ -7,7 +7,6 @@ from pathlib import Path
 from pegrna_pipeline.hpc.data_types import GeneRecord
 from pegrna_pipeline.hpc.pa_workflow import PAResult, run_pa_workflow
 
-
 FIXTURES = Path(__file__).parent.parent / "fixtures" / "pridict"
 UPSTREAM_DIR = FIXTURES / "pa_upstream"
 DOWNSTREAM_DIR = FIXTURES / "pa_downstream"

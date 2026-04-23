@@ -13,7 +13,6 @@ import pytest
 from pegrna_pipeline.hpc.data_types import GeneRecord
 from pegrna_pipeline.hpc.pa_workflow import PAResult, run_pa_workflow
 
-
 FIXTURES = Path(__file__).parent / "fixtures" / "pridict"
 UPSTREAM_DIR = FIXTURES / "pa_upstream"
 DOWNSTREAM_DIR = FIXTURES / "pa_downstream"
@@ -63,7 +62,9 @@ def test_run_pa_happy_path():
 
     # Winning pair survived.
     assert result.winning_pair is not None
-    assert result.winning_pair.upstream.target_strand != result.winning_pair.downstream.target_strand
+    assert (
+        result.winning_pair.upstream.target_strand != result.winning_pair.downstream.target_strand
+    )
 
     # Top pairs returned + counts consistent.
     assert result.pairs_after_compat_filter == len(result.top_pairs)

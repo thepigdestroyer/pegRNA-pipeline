@@ -18,7 +18,6 @@ from typing import List
 
 from pegrna_pipeline.hpc.data_types import PegRNADesign
 
-
 #: Hard floor on the distance between the two pegRNA nicks. Closer than
 #: this and the two edits interfere, so no pair ever survives — even if
 #: the caller relaxes ``min_distance`` below this value.

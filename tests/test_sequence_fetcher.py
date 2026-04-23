@@ -17,7 +17,6 @@ import pytest
 from pegrna_pipeline.hpc import sequence_fetcher as sf
 from pegrna_pipeline.hpc.data_types import GeneRecord
 
-
 # ------------------------------------------------------------------ fixtures
 
 
@@ -120,7 +119,11 @@ def test_insufficient_flanking_raises(monkeypatch):
     monkeypatch.setattr(
         sf,
         "_fetch_genbank_record",
-        lambda *a, **k: {"accession": "NM_X", "sequence": short, "cds_features": [(cds_start, cds_end)]},
+        lambda *a, **k: {
+            "accession": "NM_X",
+            "sequence": short,
+            "cds_features": [(cds_start, cds_end)],
+        },
     )
     monkeypatch.setattr(
         sf,
@@ -150,6 +153,7 @@ def test_exception_classes_inherit_from_sequence_fetch_error():
 
 
 # --------------------------------------------------------------- __main__
+
 
 def test_main_block_emits_json(tmp_path, monkeypatch):
     """Running the module as a script with --json should print a GeneRecord as JSON."""

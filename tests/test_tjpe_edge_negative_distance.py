@@ -10,7 +10,6 @@ A negative distance means the nick is 5' of the edit. The workflow must:
 
 from __future__ import annotations
 
-import pytest
 from Bio.Seq import Seq
 
 from pegrna_pipeline.hpc.data_types import (

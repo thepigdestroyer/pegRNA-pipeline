@@ -19,7 +19,7 @@ Tasks in this module:
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional, Sequence, Tuple, Union
 
@@ -33,10 +33,8 @@ from pegrna_pipeline.hpc.pair_scorer import (
     filter_compatible_pairs,
 )
 from pegrna_pipeline.hpc.pridict_parser import (
-    parse_ngrna_csv,
     parse_pegrna_csv,
 )
-
 
 _ACGT_ONLY = re.compile(r"^[ACGT]+$")
 

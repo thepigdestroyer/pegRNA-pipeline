@@ -17,7 +17,6 @@ from pegrna_pipeline.hpc.tjpe_workflow import (
     run_tjpe_workflow,
 )
 
-
 FIXTURES = Path(__file__).parent / "fixtures" / "pridict"
 
 

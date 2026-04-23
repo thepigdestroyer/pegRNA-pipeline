@@ -20,7 +20,6 @@ from pegrna_pipeline.hpc.tjpe_workflow import (
     run_tjpe_workflow,
 )
 
-
 FIXTURES = Path(__file__).parent.parent / "fixtures" / "pridict"
 PA_UP = FIXTURES / "pa_upstream"
 PA_DOWN = FIXTURES / "pa_downstream"
@@ -78,9 +77,7 @@ def test_tjpe_result_internally_consistent(tjpe_result: TJPEResult):
     # Re-derive rc_pbs2 independently.
     mrna = _gene().mrna_sequence
     nick = tjpe_result.ngrna_nick_in_mrna
-    expected = str(
-        Seq(mrna[nick - tjpe_result.rc_pbs2_length : nick]).reverse_complement()
-    )
+    expected = str(Seq(mrna[nick - tjpe_result.rc_pbs2_length : nick]).reverse_complement())
     assert tjpe_result.rc_pbs2 == expected
 
 
@@ -115,9 +112,7 @@ def test_both_workflows_independent(tjpe_result: TJPEResult, pa_result: PAResult
     assert tjpe_result.edit_position_in_mrna == _gene().stop_codon_start
 
 
-def test_both_workflows_see_same_insert_payload(
-    tjpe_result: TJPEResult, pa_result: PAResult
-):
+def test_both_workflows_see_same_insert_payload(tjpe_result: TJPEResult, pa_result: PAResult):
     """TJ-PE's insert and PA's linear_donor should both carry the same 84 bp payload."""
     assert tjpe_result.full_insert_dna == TJPE_INSERT
     assert pa_result.linear_donor_dna == UPSTREAM_FLAP + BULK + DOWNSTREAM_FLAP
