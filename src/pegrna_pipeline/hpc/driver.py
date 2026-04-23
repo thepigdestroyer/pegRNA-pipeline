@@ -325,9 +325,7 @@ def run_driver(run_dir: Union[str, Path]) -> Union[TJPEResult, PAResult]:
     with _local_compute_ssh(ssh_cfg) as ssh:
         if cfg.mode == "tjpe":
             dna_variants = _enumerate_first_aa(cfg.construct_aa, 8)
-            variants = _pridict_variants_for_window(
-                cfg.gene, dna_variants, name_prefix="tjpe_var"
-            )
+            variants = _pridict_variants_for_window(cfg.gene, dna_variants, name_prefix="tjpe_var")
             batch = submit_pridict_batches(
                 ssh=ssh,
                 variants=variants,
@@ -348,9 +346,7 @@ def run_driver(run_dir: Union[str, Path]) -> Union[TJPEResult, PAResult]:
                 compute_flap_boundaries,
             )
 
-            up_aa, bulk_aa, down_aa = compute_flap_boundaries(
-                cfg.construct_aa, flap_length_aa=10
-            )
+            up_aa, bulk_aa, down_aa = compute_flap_boundaries(cfg.construct_aa, flap_length_aa=10)
             bulk_dna = optimise_bulk(bulk_aa)
 
             up_variants_dna = _enumerate_first_aa(cfg.construct_aa, 10)
@@ -378,9 +374,7 @@ def run_driver(run_dir: Union[str, Path]) -> Union[TJPEResult, PAResult]:
                 conda_env=cfg.conda_env,
             )
             up_scores = _build_variant_scores_from_batch(up_batch, upstream_variants)
-            down_scores = _build_variant_scores_from_batch(
-                down_batch, downstream_variants
-            )
+            down_scores = _build_variant_scores_from_batch(down_batch, downstream_variants)
 
             # Assemble donor from the winning flaps + optimised bulk
             # (we still pass both here so the workflow can validate).

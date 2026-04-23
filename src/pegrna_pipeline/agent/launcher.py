@@ -142,9 +142,7 @@ class HPCLauncher:
             # Check if the job is still in the queue; if not, something went wrong.
             qstat_out, _q_err, _q_rc = ssh.exec(f"qstat {driver_id}")
             if elapsed >= max_seconds:
-                raise TimeoutError(
-                    f"driver {driver_id} not done after {max_hours}h"
-                )
+                raise TimeoutError(f"driver {driver_id} not done after {max_hours}h")
             sleep_fn(interval)
             elapsed += interval
 
@@ -216,9 +214,7 @@ class HPCLauncher:
             driver_id = self._qsub_driver(ssh, remote_run_dir)
 
             # 7. Poll for DRIVER_DONE.
-            success = self._poll_driver(
-                ssh, driver_id, remote_run_dir, interval=60
-            )
+            success = self._poll_driver(ssh, driver_id, remote_run_dir, interval=60)
 
         # 8. Download reports.
         self.download_reports(

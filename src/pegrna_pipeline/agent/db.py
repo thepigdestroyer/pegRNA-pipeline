@@ -94,9 +94,7 @@ class RunsDB:
 
     def list_recent(self, limit: int = 20) -> list[Run]:
         with Session(self.engine) as session:
-            runs = list(
-                session.query(Run).order_by(Run.created_at.desc()).limit(limit)
-            )
+            runs = list(session.query(Run).order_by(Run.created_at.desc()).limit(limit))
             for r in runs:
                 session.expunge(r)
             return runs

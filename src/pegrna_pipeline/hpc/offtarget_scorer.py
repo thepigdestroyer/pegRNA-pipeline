@@ -13,7 +13,6 @@ import tempfile
 from dataclasses import dataclass
 from typing import List, Sequence, Tuple
 
-
 OFFTARGET_SCORING_DONE = "OFFTARGET_SCORING_DONE"
 
 
@@ -105,9 +104,7 @@ def _build_offtarget_pbs_body(
 
 def _write_guides_csv_and_upload(ssh, guides, remote_path: str) -> None:
     """Write an in-memory guides CSV and upload it."""
-    with tempfile.NamedTemporaryFile(
-        mode="w", newline="", suffix=".csv", delete=False
-    ) as tmp:
+    with tempfile.NamedTemporaryFile(mode="w", newline="", suffix=".csv", delete=False) as tmp:
         writer = csv.writer(tmp)
         writer.writerow(["guide_id", "spacer"])
         for g in guides:

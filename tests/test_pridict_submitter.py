@@ -38,10 +38,7 @@ class FakeSSH:
 
 
 def _variants(n):
-    return [
-        {"sequence_name": f"v_{i}", "editseq": f"ACGT[AAA/{'C' * i}]TTTT"}
-        for i in range(n)
-    ]
+    return [{"sequence_name": f"v_{i}", "editseq": f"ACGT[AAA/{'C' * i}]TTTT"} for i in range(n)]
 
 
 def test_single_chunk_happy_path():

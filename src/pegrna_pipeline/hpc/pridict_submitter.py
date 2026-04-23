@@ -12,7 +12,6 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import List, Sequence
 
-
 PRIDICT2_BATCH_DONE = "PRIDICT2_BATCH_DONE"
 
 
@@ -29,22 +28,24 @@ def build_pridict_pbs_body(
     The caller wraps this in a :func:`render_pbs_script` call.
     """
     return (
-        "set -euo pipefail\n"
-        "module load miniforge/3\n"
-        "source activate {env}\n"
-        "cd {install}\n"
-        "python pridict2_pegRNA_design.py batch "
-        "--input-fname {input} --output-dir {output} --nicking --cores {cores}\n"
-        "echo {marker}\n"
-    ).format(
-        env=conda_env,
-        install=pridict_install_path,
-        input=input_csv_path,
-        output=output_dir,
-        cores=cores,
-        marker=PRIDICT2_BATCH_DONE,
-    ).replace(
-        "source activate", "conda activate"
+        (
+            "set -euo pipefail\n"
+            "module load miniforge/3\n"
+            "source activate {env}\n"
+            "cd {install}\n"
+            "python pridict2_pegRNA_design.py batch "
+            "--input-fname {input} --output-dir {output} --nicking --cores {cores}\n"
+            "echo {marker}\n"
+        )
+        .format(
+            env=conda_env,
+            install=pridict_install_path,
+            input=input_csv_path,
+            output=output_dir,
+            cores=cores,
+            marker=PRIDICT2_BATCH_DONE,
+        )
+        .replace("source activate", "conda activate")
     )
 
 
@@ -71,9 +72,7 @@ def _write_chunk_csv_and_upload(ssh, variants, remote_csv_path: str) -> None:
     import csv
     import tempfile
 
-    with tempfile.NamedTemporaryFile(
-        mode="w", newline="", suffix=".csv", delete=False
-    ) as tmp:
+    with tempfile.NamedTemporaryFile(mode="w", newline="", suffix=".csv", delete=False) as tmp:
         writer = csv.writer(tmp)
         writer.writerow(["sequence_name", "editseq"])
         for v in variants:

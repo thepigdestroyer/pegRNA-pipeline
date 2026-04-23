@@ -8,7 +8,6 @@ from typing import List
 
 from pegrna_pipeline.agent.launcher import HPCLauncher, RunResult
 
-
 CONFIG = {
     "hostname": "login.hpc",
     "username": "mj",

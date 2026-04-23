@@ -163,13 +163,21 @@ def test_build_variant_scores_from_batch_matches_outputs(tmp_path):
 # ------------------------------------------------------ _extract_winning_guides
 def test_extract_winning_guides_from_tjpe_result():
     vs = VariantScore(
-        sequence_name="v", codon_variant_dna="A",
+        sequence_name="v",
+        codon_variant_dna="A",
         pegRNA_designs=[
             PegRNADesign(
-                sequence_name="v", spacer="GATCGATCGATCGATCGATC",
-                pbs="A", rt="T", pbs_length=1, rt_length=1,
-                target_strand="Fw", editing_position=0,
-                pe2_hek293t=0.5, pe2_k562=0.4, pegrna_full="ACGT",
+                sequence_name="v",
+                spacer="GATCGATCGATCGATCGATC",
+                pbs="A",
+                rt="T",
+                pbs_length=1,
+                rt_length=1,
+                target_strand="Fw",
+                editing_position=0,
+                pe2_hek293t=0.5,
+                pe2_k562=0.4,
+                pegrna_full="ACGT",
             )
         ],
     )
@@ -198,16 +206,30 @@ def test_extract_winning_guides_from_pa_result():
     from pegrna_pipeline.hpc.pair_scorer import PegRNAPair
 
     up = PegRNADesign(
-        sequence_name="u", spacer="AAAAAAAAAAAAAAAAAAAA",
-        pbs="A", rt="T", pbs_length=1, rt_length=1,
-        target_strand="Fw", editing_position=0,
-        pe2_hek293t=0.5, pe2_k562=0.4, pegrna_full="ACGT",
+        sequence_name="u",
+        spacer="AAAAAAAAAAAAAAAAAAAA",
+        pbs="A",
+        rt="T",
+        pbs_length=1,
+        rt_length=1,
+        target_strand="Fw",
+        editing_position=0,
+        pe2_hek293t=0.5,
+        pe2_k562=0.4,
+        pegrna_full="ACGT",
     )
     down = PegRNADesign(
-        sequence_name="d", spacer="TTTTTTTTTTTTTTTTTTTT",
-        pbs="A", rt="T", pbs_length=1, rt_length=1,
-        target_strand="Rv", editing_position=0,
-        pe2_hek293t=0.6, pe2_k562=0.5, pegrna_full="TGCA",
+        sequence_name="d",
+        spacer="TTTTTTTTTTTTTTTTTTTT",
+        pbs="A",
+        rt="T",
+        pbs_length=1,
+        rt_length=1,
+        target_strand="Rv",
+        editing_position=0,
+        pe2_hek293t=0.6,
+        pe2_k562=0.5,
+        pegrna_full="TGCA",
     )
     pair = PegRNAPair(upstream=up, downstream=down, joint_score=1.0, nick_distance=40)
     result = PAResult(

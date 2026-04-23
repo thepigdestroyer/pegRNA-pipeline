@@ -9,7 +9,6 @@ from pegrna_pipeline.hpc.offtarget_scorer import (
     submit_offtarget_job,
 )
 
-
 CANNED_TSV = (
     "guide_id\tspacer\tdeepspcas9\tdeephf\tcfd_specificity\t"
     "mm0_count\tmm1_count\tmm2_count\tmm3_count\n"

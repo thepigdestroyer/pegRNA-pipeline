@@ -135,6 +135,7 @@ def _fake_offtarget():
 
 # ------------------------------------------------------------- annotator
 
+
 def test_annotate_tjpe_yields_expected_components():
     annotations = annotate_tjpe_result(_fake_tjpe_result(), _fake_gene())
     names = [a.name for a in annotations]
@@ -162,6 +163,7 @@ def test_annotate_pa_includes_donor():
 
 
 # ----------------------------------------------------- report writers
+
 
 def test_write_reports_tjpe_produces_expected_files(tmp_path: Path):
     paths = write_reports(

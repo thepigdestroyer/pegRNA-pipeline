@@ -48,6 +48,7 @@ def _wrap(text: str, width: int = 72, indent: str = "") -> str:
 
 # --------------------------------------------------------------------- TJ-PE
 
+
 def write_tjpe_txt_report(
     result: TJPEResult,
     gene: GeneRecord,
@@ -59,15 +60,11 @@ def write_tjpe_txt_report(
     lines: List[str] = [_BAR, "pegRNA DESIGN REPORT -- TJ-PE mode", _BAR]
     lines.append(f"Generated:      {datetime.utcnow().isoformat(timespec='seconds')}Z")
     lines.append(f"Gene:           {gene.gene_name} ({gene.refseq_accession})")
-    lines.append(
-        f"Stop codon:     {gene.stop_codon} at mRNA position {gene.stop_codon_start}"
-    )
+    lines.append(f"Stop codon:     {gene.stop_codon} at mRNA position {gene.stop_codon_start}")
     lines.append(f"Construct:      {construct_str}")
     lines.append(f"Insert length:  {len(result.full_insert_dna)} bp")
     lines.append(f"PE2 HEK293T:    {result.pegrna_pe2_hek293t:.2f}%")
-    lines.append(
-        f"ngRNA distance: {result.ngrna_distance_to_edit:+d} bp from edit"
-    )
+    lines.append(f"ngRNA distance: {result.ngrna_distance_to_edit:+d} bp from edit")
     lines.append("")
     lines.append(_BAR)
     lines.append("WINNING TJ-pegRNA + ngRNA")
@@ -77,8 +74,7 @@ def write_tjpe_txt_report(
     lines.append(_wrap(result.tjpe_pegRNA_sequence))
     lines.append("")
     lines.append(
-        f"FULL ngRNA (spacer only, append standard scaffold): "
-        f"5'-{result.ngrna_spacer}-3'"
+        f"FULL ngRNA (spacer only, append standard scaffold): " f"5'-{result.ngrna_spacer}-3'"
     )
     lines.append("")
     lines.append(_DASH)
@@ -86,10 +82,7 @@ def write_tjpe_txt_report(
     lines.append(_DASH)
     for ann in annotations:
         lines.append("")
-        lines.append(
-            f"{ann.name.upper()} ({ann.length_bp} nt) "
-            f"[source: {ann.source.value}]:"
-        )
+        lines.append(f"{ann.name.upper()} ({ann.length_bp} nt) " f"[source: {ann.source.value}]:")
         if ann.sequence:
             lines.append(_wrap(f"5'-{ann.sequence}-3'"))
         lines.append(_wrap(ann.functional_role, indent="  "))
@@ -113,6 +106,7 @@ def write_tjpe_txt_report(
 
 # ------------------------------------------------------------------------ PA
 
+
 def write_pa_txt_report(
     result: PAResult,
     gene: GeneRecord,
@@ -126,9 +120,7 @@ def write_pa_txt_report(
     lines: List[str] = [_BAR, "pegRNA DESIGN REPORT -- Prime Assembly mode", _BAR]
     lines.append(f"Generated:      {datetime.utcnow().isoformat(timespec='seconds')}Z")
     lines.append(f"Gene:           {gene.gene_name} ({gene.refseq_accession})")
-    lines.append(
-        f"Stop codon:     {gene.stop_codon} at mRNA position {gene.stop_codon_start}"
-    )
+    lines.append(f"Stop codon:     {gene.stop_codon} at mRNA position {gene.stop_codon_start}")
     lines.append(f"Construct:      {construct_str}")
     lines.append(
         f"Joint score:    {result.winning_pair.joint_score:.2f} "
@@ -141,19 +133,13 @@ def write_pa_txt_report(
     lines.append("WINNING pegRNA PAIR + DONOR")
     lines.append(_BAR)
     lines.append("")
-    lines.append(
-        f"UPSTREAM pegRNA ({len(result.upstream_pegRNA_sequence)} nt):"
-    )
+    lines.append(f"UPSTREAM pegRNA ({len(result.upstream_pegRNA_sequence)} nt):")
     lines.append(_wrap(result.upstream_pegRNA_sequence or "<not assembled>"))
     lines.append("")
-    lines.append(
-        f"DOWNSTREAM pegRNA ({len(result.downstream_pegRNA_sequence)} nt):"
-    )
+    lines.append(f"DOWNSTREAM pegRNA ({len(result.downstream_pegRNA_sequence)} nt):")
     lines.append(_wrap(result.downstream_pegRNA_sequence or "<not assembled>"))
     lines.append("")
-    lines.append(
-        f"LINEAR DONOR DNA ({len(result.linear_donor_dna)} nt) [order as gBlock]:"
-    )
+    lines.append(f"LINEAR DONOR DNA ({len(result.linear_donor_dna)} nt) [order as gBlock]:")
     lines.append(_wrap(result.linear_donor_dna))
     lines.append("")
     lines.append(_DASH)
@@ -161,10 +147,7 @@ def write_pa_txt_report(
     lines.append(_DASH)
     for ann in annotations:
         lines.append("")
-        lines.append(
-            f"{ann.name.upper()} ({ann.length_bp} nt) "
-            f"[source: {ann.source.value}]:"
-        )
+        lines.append(f"{ann.name.upper()} ({ann.length_bp} nt) " f"[source: {ann.source.value}]:")
         if ann.sequence:
             lines.append(_wrap(f"5'-{ann.sequence}-3'"))
         lines.append(_wrap(ann.functional_role, indent="  "))
@@ -202,8 +185,7 @@ def _append_offtarget_block(lines: List[str], reports: List[OffTargetReport]) ->
         lines.append(f"  DeepHF:        {r.deephf:.3f}")
         lines.append(f"  CFD spec:      {r.cfd_specificity:.3f}")
         lines.append(
-            f"  0/1/2/3 mismatch hits: "
-            f"{r.mm0_count}/{r.mm1_count}/{r.mm2_count}/{r.mm3_count}"
+            f"  0/1/2/3 mismatch hits: " f"{r.mm0_count}/{r.mm1_count}/{r.mm2_count}/{r.mm3_count}"
         )
 
 
@@ -239,12 +221,8 @@ def write_tjpe_csv(result: TJPEResult, output_path: Path) -> None:
         writer.writerow(
             {
                 "rank": 1,
-                "variant_sequence_name": getattr(
-                    result.winning_variant, "sequence_name", ""
-                ),
-                "first_8aa_dna": getattr(
-                    result.winning_variant, "codon_variant_dna", ""
-                ),
+                "variant_sequence_name": getattr(result.winning_variant, "sequence_name", ""),
+                "first_8aa_dna": getattr(result.winning_variant, "codon_variant_dna", ""),
                 "full_insert_dna": result.full_insert_dna,
                 "pegrna_spacer": result.spacer,
                 "pegrna_pbs1": result.pbs1,
@@ -313,9 +291,7 @@ def write_pa_csv(result: PAResult, output_path: Path) -> None:
                     "downstream_target_strand": dn.target_strand,
                     "downstream_editing_position": dn.editing_position,
                     "upstream_flap_dna": result.upstream_flap_dna if rank == 1 else "",
-                    "downstream_flap_dna": (
-                        result.downstream_flap_dna if rank == 1 else ""
-                    ),
+                    "downstream_flap_dna": (result.downstream_flap_dna if rank == 1 else ""),
                     "linear_donor_dna": result.linear_donor_dna if rank == 1 else "",
                     "donor_length_bp": len(result.linear_donor_dna) if rank == 1 else "",
                     "full_integrated_product": (
@@ -387,9 +363,7 @@ def write_all_variants_csv_gz(variants: List[Any], output_path: Path) -> None:
                     "codon_variant_dna": dna,
                     "cytosine_count": dna.count("C"),
                     "gc_content": f"{gc:.4f}",
-                    "top_pe2_hek293t": (
-                        f"{best.pe2_hek293t:.4f}" if best else ""
-                    ),
+                    "top_pe2_hek293t": (f"{best.pe2_hek293t:.4f}" if best else ""),
                     "top_spacer": best.spacer if best else "",
                     "top_pbs": best.pbs if best else "",
                     "top_rtt": best.rt if best else "",
@@ -399,6 +373,7 @@ def write_all_variants_csv_gz(variants: List[Any], output_path: Path) -> None:
 
 
 # ----------------------------------------------------------------- dispatch
+
 
 def write_reports(
     *,

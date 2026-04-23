@@ -46,18 +46,23 @@ def test_status_specific_missing_run_errors(monkeypatch, tmp_path: Path):
 
 def test_setup_writes_config(monkeypatch, tmp_path: Path):
     monkeypatch.setenv("HOME", str(tmp_path))
-    answers = "\n".join([
-        "",                            # hostname (default)
-        "mj1824",                      # username
-        "/rds/user/pegRNA-pipeline",   # repo_dir
-        "",                            # remote_runs_base default
-        "mrinal.joshi@ukdri.ac.uk",    # entrez_email
-        "/rds/user/PRIDICT2",          # pridict_install_path
-        "/rds/user/pegRNA-pipeline/scripts/score_guides.R",
-        "",                            # conda_env default
-        "local",                       # compute_mode
-        "",                            # cell_line default
-    ]) + "\n"
+    answers = (
+        "\n".join(
+            [
+                "",  # hostname (default)
+                "mj1824",  # username
+                "/rds/user/pegRNA-pipeline",  # repo_dir
+                "",  # remote_runs_base default
+                "mrinal.joshi@ukdri.ac.uk",  # entrez_email
+                "/rds/user/PRIDICT2",  # pridict_install_path
+                "/rds/user/pegRNA-pipeline/scripts/score_guides.R",
+                "",  # conda_env default
+                "local",  # compute_mode
+                "",  # cell_line default
+            ]
+        )
+        + "\n"
+    )
     result = CliRunner().invoke(cli, ["setup"], input=answers)
     assert result.exit_code == 0, result.output
     cfg_path = tmp_path / ".pegrna" / "config.yaml"

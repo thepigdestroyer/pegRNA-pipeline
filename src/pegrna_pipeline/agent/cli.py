@@ -208,9 +208,7 @@ def status_cmd(run_id: str | None) -> None:
         click.echo(f"{run.run_id}  {run.status}  remote={run.remote_run_dir}")
     else:
         for run in db.list_recent(20):
-            click.echo(
-                f"{run.run_id:<40} {run.status:<10} {run.gene}/{run.mode}  {run.created_at}"
-            )
+            click.echo(f"{run.run_id:<40} {run.status:<10} {run.gene}/{run.mode}  {run.created_at}")
 
 
 @cli.command("cancel")
@@ -274,9 +272,7 @@ def list_cmd() -> None:
     from pegrna_pipeline.agent.db import RunsDB
 
     for run in RunsDB.local_default().list_all():
-        click.echo(
-            f"{run.run_id:<40} {run.status:<10} {run.gene}/{run.mode}  {run.created_at}"
-        )
+        click.echo(f"{run.run_id:<40} {run.status:<10} {run.gene}/{run.mode}  {run.created_at}")
 
 
 @cli.command("fetch")

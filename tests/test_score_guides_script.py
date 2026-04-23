@@ -9,7 +9,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-
 SCRIPT_PATH = Path(__file__).parent.parent / "scripts" / "score_guides.R"
 
 
