@@ -310,10 +310,10 @@ def setup_cmd() -> None:
     if config_path.exists() and not click.confirm(f"{config_path} exists. Overwrite?"):
         return
     cfg = {
-        "hostname": click.prompt("HPC hostname", default="login.cx3.hpc.ic.ac.uk"),
+        "hostname": click.prompt("HPC hostname", default="login.cx3.hpc.imperial.ac.uk"),
         "username": click.prompt("HPC username"),
         "repo_dir": click.prompt("Remote pegRNA-pipeline install path"),
-        "remote_runs_base": click.prompt("Remote runs directory", default="/work/runs"),
+        "remote_runs_base": click.prompt("Remote runs directory", default="~/pegrna-runs"),
         "entrez_email": click.prompt("NCBI Entrez email"),
         "pridict_install_path": click.prompt("PRIDICT2 install path on HPC"),
         "rscript_path": click.prompt("score_guides.R path on HPC"),

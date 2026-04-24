@@ -68,5 +68,5 @@ def test_setup_writes_config(monkeypatch, tmp_path: Path):
     cfg_path = tmp_path / ".pegrna" / "config.yaml"
     assert cfg_path.exists()
     cfg = yaml.safe_load(cfg_path.read_text())
-    assert cfg["hostname"] == "login.cx3.hpc.ic.ac.uk"
+    assert cfg["hostname"] == "login.cx3.hpc.imperial.ac.uk"
     assert cfg["username"] == "mj1824"
