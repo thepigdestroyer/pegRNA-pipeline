@@ -134,12 +134,34 @@ class HPCLauncher:
 
         Per v1.1 corrections: greps ``<remote_run_dir>/driver.log`` — never
         a wildcard — to avoid colliding with other runs.
+
+        Long-running PBS jobs routinely outlive a single paramiko session
+        (Imperial CX3 closes idle channels after a few minutes). When
+        ``ssh.exec`` raises, we reconnect once and retry; if that also
+        fails we let the exception propagate.
         """
+        from pegrna_pipeline.hpc.ssh_client import SSHError
+
         driver_log = f"{remote_run_dir}/driver.log"
         max_seconds = max_hours * 3600
         elapsed = 0
+
+        def _safe_exec(cmd: str):
+            try:
+                return ssh.exec(cmd)
+            except (SSHError, Exception) as exc:
+                # Try a single reconnect — paramiko 'SSH session not active'
+                # and similar are typical after long sleeps.
+                if hasattr(ssh, "reconnect"):
+                    try:
+                        ssh.reconnect()
+                        return ssh.exec(cmd)
+                    except Exception:
+                        raise exc
+                raise
+
         while True:
-            out, _err, _rc = ssh.exec(f"grep -c DRIVER_DONE {driver_log} || true")
+            out, _err, _rc = _safe_exec(f"grep -c DRIVER_DONE {driver_log} || true")
             try:
                 hits = int(out.strip().splitlines()[0]) if out.strip() else 0
             except ValueError:
@@ -147,7 +169,7 @@ class HPCLauncher:
             if hits > 0:
                 return True
             # Check if the job is still in the queue; if not, something went wrong.
-            qstat_out, _q_err, _q_rc = ssh.exec(f"/opt/pbs/bin/qstat {driver_id}")
+            _safe_exec(f"/opt/pbs/bin/qstat {driver_id}")
             if elapsed >= max_seconds:
                 raise TimeoutError(f"driver {driver_id} not done after {max_hours}h")
             sleep_fn(interval)
