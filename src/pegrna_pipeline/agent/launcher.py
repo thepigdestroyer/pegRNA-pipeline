@@ -81,7 +81,14 @@ class HPCLauncher:
         """Run ``sequence_fetcher --json`` on the login node, parse the record."""
         repo_dir = self.config.get("repo_dir", "~/pegRNA-pipeline")
         email = self.config.get("entrez_email", "user@example.com")
+        # Bootstrap conda — ssh exec runs in a non-login shell on Imperial
+        # CX3, so neither the miniforge module nor ~/miniforge3 is on PATH
+        # by default. See setup_hpc.sh / driver_pbs_wrapper.sh for the same
+        # pattern.
         cmd = (
+            "module load miniforge/3 >/dev/null 2>&1 || true; "
+            'source "$HOME/miniforge3/etc/profile.d/conda.sh" && '
+            "conda activate pegrna-pipeline && "
             f"cd {repo_dir} && "
             f"python -m pegrna_pipeline.hpc.sequence_fetcher "
             f"{gene} --email {email} --json"
