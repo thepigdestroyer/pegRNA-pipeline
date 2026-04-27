@@ -11,7 +11,7 @@
 # ----
 #   Rscript score_guides.R \
 #     --guides /work/run/guides.csv \
-#     --nuclease SpCas9_H840A \
+#     --nuclease SpCas9 \
 #     --scores DeepSpCas9,DeepHF,CFD \
 #     --genome GRCh38 \
 #     --max-mismatches 3 \
@@ -24,6 +24,18 @@
 # On successful completion the script prints the literal marker line
 # ``OFFTARGET_SCORING_DONE`` on stdout. The driver greps for that marker
 # before trusting the TSV.
+#
+# Notes
+# -----
+# * DeepSpCas9 and DeepHF require uniform-length 20-nt protospacers. We
+#   call them once per guide (rather than batched) so that mixed-length
+#   inputs (e.g. PE7 ngRNAs occasionally come back at 19 nt from
+#   PRIDICT 2.0's nicking output) don't crash the whole batch.
+# * CrisprNuclease defaults to ``SpCas9`` because that's a predefined
+#   ``CrisprNuclease`` object in the crisprBase package; passing the bare
+#   string "SpCas9_H840A" leaves the GuideSet constructor unable to
+#   resolve a nuclease and propagates as 'seqnames cannot contain NAs'
+#   later. Spacer/PAM recognition is identical for the H840A nickase.
 
 suppressPackageStartupMessages({
   library(optparse)
@@ -32,8 +44,8 @@ suppressPackageStartupMessages({
 option_list <- list(
   make_option(c("--guides"), type = "character",
               help = "Input CSV of guides with columns guide_id,spacer"),
-  make_option(c("--nuclease"), type = "character", default = "SpCas9_H840A",
-              help = "Nuclease name [default %default]"),
+  make_option(c("--nuclease"), type = "character", default = "SpCas9",
+              help = "Nuclease name (must be a crisprBase predefined object) [default %default]"),
   make_option(c("--scores"), type = "character",
               default = "DeepSpCas9,DeepHF,CFD",
               help = "Comma-separated list of scores [default %default]"),
@@ -51,6 +63,7 @@ stopifnot(!is.null(opt$guides))
 stopifnot(!is.null(opt$output))
 
 suppressPackageStartupMessages({
+  library(crisprBase)
   library(crisprScore)
   library(crisprDesign)
   library(BSgenome.Hsapiens.UCSC.hg38)
@@ -62,38 +75,64 @@ stopifnot(all(c("guide_id", "spacer") %in% colnames(guides_df)))
 scores_to_run <- strsplit(opt$scores, ",", fixed = TRUE)[[1]]
 scores_to_run <- trimws(scores_to_run)
 
+# Resolve nuclease string to a CrisprNuclease object exported by crisprBase
+nuclease_obj <- tryCatch(
+  get(opt$nuclease, envir = asNamespace("crisprBase")),
+  error = function(e) {
+    message("could not resolve nuclease '", opt$nuclease,
+            "'; falling back to SpCas9")
+    crisprBase::SpCas9
+  }
+)
+
 # ------------------------------------------------------------- on-target
-deepspcas9 <- rep(NA_real_, nrow(guides_df))
-deephf <- rep(NA_real_, nrow(guides_df))
-cfd_specificity <- rep(NA_real_, nrow(guides_df))
+n <- nrow(guides_df)
+deepspcas9 <- rep(NA_real_, n)
+deephf <- rep(NA_real_, n)
+cfd_specificity <- rep(NA_real_, n)
 
-if ("DeepSpCas9" %in% scores_to_run) {
-  tryCatch({
-    res <- getDeepSpCas9Scores(guides_df$spacer)
-    deepspcas9 <- as.numeric(res$score)
-  }, error = function(e) message("DeepSpCas9 failed: ", conditionMessage(e)))
-}
-
-if ("DeepHF" %in% scores_to_run) {
-  tryCatch({
-    res <- getDeepHFScores(guides_df$spacer)
-    deephf <- as.numeric(res$score)
-  }, error = function(e) message("DeepHF failed: ", conditionMessage(e)))
+# Score one spacer at a time so that 19-nt nicking guides (PRIDICT 2.0
+# occasionally emits these for PE7 ngRNAs) don't kill the whole batch.
+for (i in seq_len(n)) {
+  spacer_i <- guides_df$spacer[i]
+  if (nchar(spacer_i) != 20) {
+    message("skipping on-target scoring for ", guides_df$guide_id[i],
+            " (length ", nchar(spacer_i), " != 20 nt)")
+    next
+  }
+  if ("DeepSpCas9" %in% scores_to_run) {
+    tryCatch({
+      deepspcas9[i] <- as.numeric(getDeepSpCas9Scores(spacer_i)$score[1])
+    }, error = function(e) message("DeepSpCas9 failed for ",
+                                   guides_df$guide_id[i], ": ",
+                                   conditionMessage(e)))
+  }
+  if ("DeepHF" %in% scores_to_run) {
+    tryCatch({
+      deephf[i] <- as.numeric(getDeepHFScores(spacer_i)$score[1])
+    }, error = function(e) message("DeepHF failed for ",
+                                   guides_df$guide_id[i], ": ",
+                                   conditionMessage(e)))
+  }
 }
 
 # ------------------------------------------------------------- off-target
-mm0_count <- rep(NA_integer_, nrow(guides_df))
-mm1_count <- rep(NA_integer_, nrow(guides_df))
-mm2_count <- rep(NA_integer_, nrow(guides_df))
-mm3_count <- rep(NA_integer_, nrow(guides_df))
+mm0_count <- rep(NA_integer_, n)
+mm1_count <- rep(NA_integer_, n)
+mm2_count <- rep(NA_integer_, n)
+mm3_count <- rep(NA_integer_, n)
 
 bsgenome <- BSgenome.Hsapiens.UCSC.hg38
-for (i in seq_len(nrow(guides_df))) {
+for (i in seq_len(n)) {
+  spacer_i <- guides_df$spacer[i]
+  if (nchar(spacer_i) != 20) {
+    next  # skip non-canonical lengths; mm counts stay NA
+  }
   tryCatch({
     gs <- GuideSet(
       ids = guides_df$guide_id[i],
-      protospacers = guides_df$spacer[i],
-      CrisprNuclease = opt$nuclease,
+      protospacers = spacer_i,
+      CrisprNuclease = nuclease_obj,
       bsgenome = bsgenome
     )
     gs <- addSpacerAlignments(
@@ -102,16 +141,17 @@ for (i in seq_len(nrow(guides_df))) {
       n_mismatches = opt$`max-mismatches`
     )
     aln <- alignments(gs)
-    for (mm in 0:opt$`max-mismatches`) {
-      col <- paste0("mm", mm, "_count")
-      cnt <- sum(aln$n_mismatches == mm, na.rm = TRUE)
-      assign(col, c(get(col)[seq_len(i - 1)], cnt, get(col)[-seq_len(i)]))
-    }
+    mm0_count[i] <- sum(aln$n_mismatches == 0, na.rm = TRUE)
+    mm1_count[i] <- sum(aln$n_mismatches == 1, na.rm = TRUE)
+    mm2_count[i] <- sum(aln$n_mismatches == 2, na.rm = TRUE)
+    mm3_count[i] <- sum(aln$n_mismatches == 3, na.rm = TRUE)
     if ("CFD" %in% scores_to_run) {
       tryCatch({
         gs <- addOffTargetScores(gs, methods = "cfd")
         cfd_specificity[i] <- as.numeric(onTargetScore(gs, "cfd_specificity"))
-      }, error = function(e) message("CFD failed for ", guides_df$guide_id[i]))
+      }, error = function(e) message("CFD failed for ",
+                                     guides_df$guide_id[i], ": ",
+                                     conditionMessage(e)))
     }
   }, error = function(e) {
     message("off-target alignment failed for ",

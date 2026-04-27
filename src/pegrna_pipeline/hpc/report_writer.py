@@ -33,6 +33,12 @@ _CAVEATS = """\
 - TJ-pegRNA architecture is [spacer][scaffold][insert][PBS1][RC-PBS2]
   (RC-PBS2 at the 3' end per Zheng 2023 Fig 1a). Cross-check a published
   TJ-pegRNA from the Zheng 2023 supplement before first synthesis.
+- PRIDICT 2.0's nicking-guide selector occasionally emits 19-nt ngRNA
+  spacers (one nt short of the canonical 20-nt SpCas9 protospacer). They
+  still bind and nick, but DeepSpCas9 / DeepHF on-target models won't
+  score them and CFD-based off-target scoring is skipped — those rows
+  show as NA in the off-target CSV. The pegRNA + ngRNA pair itself is
+  still synthesisable and orderable.
 - Validate cloning + transfection in a control system before scaling up.
 """
 
@@ -65,7 +71,9 @@ def write_tjpe_txt_report(
     lines.append(f"Stop codon:     {gene.stop_codon} at mRNA position {gene.stop_codon_start}")
     lines.append(f"Construct:      {construct_str}")
     lines.append(f"Insert length:  {len(result.full_insert_dna)} bp")
-    lines.append(f"PE2 HEK293T:    {result.pegrna_pe2_hek293t:.2f}%")
+    lines.append(
+        f"PE2 {result.pegrna_pe2_cell_line.upper()}:    " f"{result.pegrna_pe2_score:.2f}%"
+    )
     lines.append(f"ngRNA distance: {result.ngrna_distance_to_edit:+d} bp from edit")
     lines.append("")
     lines.append(_BAR)
@@ -123,7 +131,9 @@ def write_pe7_txt_report(
     lines.append(f"Stop codon:     {gene.stop_codon} at mRNA position {gene.stop_codon_start}")
     lines.append(f"Construct:      {construct_str}")
     lines.append(f"Insert length:  {len(result.full_insert_dna)} bp")
-    lines.append(f"PE2 HEK293T:    {result.pegrna_pe2_hek293t:.2f}%")
+    lines.append(
+        f"PE2 {result.pegrna_pe2_cell_line.upper()}:    " f"{result.pegrna_pe2_score:.2f}%"
+    )
     lines.append(f"ngRNA distance: {result.ngrna_distance_to_edit:+d} bp from edit")
     lines.append("")
     lines.append(_BAR)
@@ -173,10 +183,17 @@ def write_pa_txt_report(
     construct_str: str,
     offtarget_reports: List[OffTargetReport],
     output_path: Path,
+    score_cell_line: str = "k562",
 ) -> None:
-    annotations = annotate_pa_result(result, gene)
+    from pegrna_pipeline.hpc.data_types import _score_attr
+
+    annotations = annotate_pa_result(result, gene, score_cell_line=score_cell_line)
     up = result.winning_pair.upstream
     dn = result.winning_pair.downstream
+    score_attr = _score_attr(score_cell_line)
+    cl_label = score_cell_line.upper()
+    up_score = float(getattr(up, score_attr))
+    dn_score = float(getattr(dn, score_attr))
     lines: List[str] = [_BAR, "pegRNA DESIGN REPORT -- Prime Assembly mode", _BAR]
     lines.append(f"Generated:      {datetime.utcnow().isoformat(timespec='seconds')}Z")
     lines.append(f"Gene:           {gene.gene_name} ({gene.refseq_accession})")
@@ -184,7 +201,8 @@ def write_pa_txt_report(
     lines.append(f"Construct:      {construct_str}")
     lines.append(
         f"Joint score:    {result.winning_pair.joint_score:.2f} "
-        f"(geometric mean of up={up.pe2_hek293t:.2f}%, down={dn.pe2_hek293t:.2f}%)"
+        f"(geometric mean of up={up_score:.2f}%, down={dn_score:.2f}% "
+        f"PE2 {cl_label})"
     )
     lines.append(f"Nick distance:  {result.winning_pair.nick_distance} bp")
     lines.append(f"Donor length:   {len(result.linear_donor_dna)} bp")
@@ -264,7 +282,8 @@ TJPE_CSV_COLUMNS = [
     "ngrna_spacer",
     "ngrna_distance_to_edit",
     "ngrna_deepcas9_score",
-    "pegrna_pe2_hek293t",
+    "pegrna_pe2_score",
+    "pegrna_pe2_cell_line",
     "edit_position_in_mrna",
     "ngrna_nick_in_mrna",
     "cytosine_count",
@@ -292,7 +311,8 @@ def write_tjpe_csv(result: TJPEResult, output_path: Path) -> None:
                 "ngrna_spacer": result.ngrna_spacer,
                 "ngrna_distance_to_edit": result.ngrna_distance_to_edit,
                 "ngrna_deepcas9_score": f"{result.ngrna_deepcas9_score:.4f}",
-                "pegrna_pe2_hek293t": f"{result.pegrna_pe2_hek293t:.4f}",
+                "pegrna_pe2_score": f"{result.pegrna_pe2_score:.4f}",
+                "pegrna_pe2_cell_line": result.pegrna_pe2_cell_line,
                 "edit_position_in_mrna": result.edit_position_in_mrna,
                 "ngrna_nick_in_mrna": result.ngrna_nick_in_mrna,
                 "cytosine_count": dna.count("C"),
@@ -314,7 +334,8 @@ PE7_CSV_COLUMNS = [
     "ngrna_distance_to_edit",
     "ngrna_strand",
     "ngrna_deepcas9_score",
-    "pegrna_pe2_hek293t",
+    "pegrna_pe2_score",
+    "pegrna_pe2_cell_line",
     "edit_position_in_mrna",
     "ngrna_nick_in_mrna",
     "cytosine_count",
@@ -342,7 +363,8 @@ def write_pe7_csv(result: PE7Result, output_path: Path) -> None:
                 "ngrna_distance_to_edit": result.ngrna_distance_to_edit,
                 "ngrna_strand": result.ngrna_strand,
                 "ngrna_deepcas9_score": f"{result.ngrna_deepcas9_score:.4f}",
-                "pegrna_pe2_hek293t": f"{result.pegrna_pe2_hek293t:.4f}",
+                "pegrna_pe2_score": f"{result.pegrna_pe2_score:.4f}",
+                "pegrna_pe2_cell_line": result.pegrna_pe2_cell_line,
                 "edit_position_in_mrna": result.edit_position_in_mrna,
                 "ngrna_nick_in_mrna": result.ngrna_nick_in_mrna,
                 "cytosine_count": dna.count("C"),
@@ -358,24 +380,28 @@ PA_CSV_COLUMNS = [
     "upstream_spacer",
     "upstream_pbs",
     "upstream_rtt",
-    "upstream_pe2_hek293t",
+    "upstream_pe2_score",
     "upstream_target_strand",
     "upstream_editing_position",
     "downstream_spacer",
     "downstream_pbs",
     "downstream_rtt",
-    "downstream_pe2_hek293t",
+    "downstream_pe2_score",
     "downstream_target_strand",
     "downstream_editing_position",
     "upstream_flap_dna",
     "downstream_flap_dna",
     "linear_donor_dna",
+    "pe2_cell_line",
     "donor_length_bp",
     "full_integrated_product",
 ]
 
 
-def write_pa_csv(result: PAResult, output_path: Path) -> None:
+def write_pa_csv(result: PAResult, output_path: Path, score_cell_line: str = "k562") -> None:
+    from pegrna_pipeline.hpc.data_types import _score_attr
+
+    score_attr = _score_attr(score_cell_line)
     with output_path.open("w", newline="") as fh:
         writer = csv.DictWriter(fh, fieldnames=PA_CSV_COLUMNS)
         writer.writeheader()
@@ -391,18 +417,19 @@ def write_pa_csv(result: PAResult, output_path: Path) -> None:
                     "upstream_spacer": up.spacer,
                     "upstream_pbs": up.pbs,
                     "upstream_rtt": up.rt,
-                    "upstream_pe2_hek293t": f"{up.pe2_hek293t:.4f}",
+                    "upstream_pe2_score": f"{float(getattr(up, score_attr)):.4f}",
                     "upstream_target_strand": up.target_strand,
                     "upstream_editing_position": up.editing_position,
                     "downstream_spacer": dn.spacer,
                     "downstream_pbs": dn.pbs,
                     "downstream_rtt": dn.rt,
-                    "downstream_pe2_hek293t": f"{dn.pe2_hek293t:.4f}",
+                    "downstream_pe2_score": f"{float(getattr(dn, score_attr)):.4f}",
                     "downstream_target_strand": dn.target_strand,
                     "downstream_editing_position": dn.editing_position,
                     "upstream_flap_dna": result.upstream_flap_dna if rank == 1 else "",
                     "downstream_flap_dna": (result.downstream_flap_dna if rank == 1 else ""),
                     "linear_donor_dna": result.linear_donor_dna if rank == 1 else "",
+                    "pe2_cell_line": score_cell_line if rank == 1 else "",
                     "donor_length_bp": len(result.linear_donor_dna) if rank == 1 else "",
                     "full_integrated_product": (
                         result.full_integrated_product if rank == 1 else ""
@@ -450,7 +477,8 @@ ALL_VARIANTS_CSV_COLUMNS = [
     "codon_variant_dna",
     "cytosine_count",
     "gc_content",
-    "top_pe2_hek293t",
+    "top_pe2_score",
+    "top_pe2_cell_line",
     "top_spacer",
     "top_pbs",
     "top_rtt",
@@ -458,7 +486,12 @@ ALL_VARIANTS_CSV_COLUMNS = [
 ]
 
 
-def write_all_variants_csv_gz(variants: List[Any], output_path: Path) -> None:
+def write_all_variants_csv_gz(
+    variants: List[Any], output_path: Path, score_cell_line: str = "k562"
+) -> None:
+    from pegrna_pipeline.hpc.data_types import _score_attr
+
+    score_attr = _score_attr(score_cell_line)
     with gzip.open(output_path, "wt", newline="") as fh:
         writer = csv.DictWriter(fh, fieldnames=ALL_VARIANTS_CSV_COLUMNS)
         writer.writeheader()
@@ -466,6 +499,7 @@ def write_all_variants_csv_gz(variants: List[Any], output_path: Path) -> None:
             best = getattr(v, "best_pegRNA", None)
             dna = getattr(v, "codon_variant_dna", "") or ""
             gc = (dna.count("G") + dna.count("C")) / max(len(dna), 1)
+            top_score = f"{float(getattr(best, score_attr)):.4f}" if best else ""
             writer.writerow(
                 {
                     "variant_rank": rank,
@@ -473,7 +507,8 @@ def write_all_variants_csv_gz(variants: List[Any], output_path: Path) -> None:
                     "codon_variant_dna": dna,
                     "cytosine_count": dna.count("C"),
                     "gc_content": f"{gc:.4f}",
-                    "top_pe2_hek293t": (f"{best.pe2_hek293t:.4f}" if best else ""),
+                    "top_pe2_score": top_score,
+                    "top_pe2_cell_line": score_cell_line if best else "",
                     "top_spacer": best.spacer if best else "",
                     "top_pbs": best.pbs if best else "",
                     "top_rtt": best.rt if best else "",
@@ -494,7 +529,15 @@ def write_reports(
     all_evaluated_variants: List[Any],
     reports_dir: Path,
     base_name: str,
+    score_cell_line: str = "k562",
 ) -> Dict[str, Path]:
+    """Write text + CSV reports for any result type.
+
+    ``score_cell_line`` controls which PRIDICT PE2 column is shown in the
+    text reports and per-variant CSV. PA results carry the choice through
+    its annotator and CSV writer; TJ-PE / PE7 results store it on the
+    Result type itself, so the choice is internally consistent.
+    """
     reports_dir.mkdir(parents=True, exist_ok=True)
     paths: Dict[str, Path] = {}
     if isinstance(result, TJPEResult):
@@ -505,8 +548,15 @@ def write_reports(
     elif isinstance(result, PAResult):
         txt = reports_dir / f"{base_name}.txt"
         csv_p = reports_dir / f"{base_name}.csv"
-        write_pa_txt_report(result, gene, construct_str, offtarget_reports, txt)
-        write_pa_csv(result, csv_p)
+        write_pa_txt_report(
+            result,
+            gene,
+            construct_str,
+            offtarget_reports,
+            txt,
+            score_cell_line=score_cell_line,
+        )
+        write_pa_csv(result, csv_p, score_cell_line=score_cell_line)
     elif isinstance(result, PE7Result):
         txt = reports_dir / f"{base_name}.txt"
         csv_p = reports_dir / f"{base_name}.csv"
@@ -517,6 +567,6 @@ def write_reports(
     ot_path = reports_dir / f"{base_name}_offtarget.csv"
     write_offtarget_csv(offtarget_reports, ot_path)
     av_path = reports_dir / f"{base_name}_all_variants.csv.gz"
-    write_all_variants_csv_gz(all_evaluated_variants, av_path)
+    write_all_variants_csv_gz(all_evaluated_variants, av_path, score_cell_line=score_cell_line)
     paths.update(txt=txt, csv=csv_p, offtarget=ot_path, all_variants=av_path)
     return paths

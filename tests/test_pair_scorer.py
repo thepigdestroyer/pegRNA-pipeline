@@ -120,9 +120,24 @@ def test_custom_min_max_distance():
 
 
 def test_joint_score_is_geometric_mean():
+    # Default ranking is K562; the _peg builder sets pe2_k562 = score * 0.9.
     up = _peg("u", "Fw", 50, 0.64)
     dn = _peg("d", "Rv", 100, 0.25)
     pairs = filter_compatible_pairs(upstream=[up], downstream=[dn], stop_codon_position=500)
+    assert len(pairs) == 1
+    expected = math.sqrt((0.64 * 0.9) * (0.25 * 0.9))
+    assert pairs[0].joint_score == pytest.approx(expected)
+
+
+def test_joint_score_uses_hek293t_when_requested():
+    up = _peg("u", "Fw", 50, 0.64)
+    dn = _peg("d", "Rv", 100, 0.25)
+    pairs = filter_compatible_pairs(
+        upstream=[up],
+        downstream=[dn],
+        stop_codon_position=500,
+        score_cell_line="hek293t",
+    )
     assert len(pairs) == 1
     expected = math.sqrt(0.64 * 0.25)
     assert pairs[0].joint_score == pytest.approx(expected)

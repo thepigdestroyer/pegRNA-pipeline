@@ -91,7 +91,9 @@ def test_programmatic_variant_scores_produces_valid_result():
     assert isinstance(result, TJPEResult)
     # v2 scores higher, so it wins.
     assert result.winning_variant is v2
-    assert result.pegrna_pe2_hek293t == pytest.approx(0.8)
+    # Default ranking is K562; pe2_k562 = score * 0.8 → 0.8 * 0.8 = 0.64
+    assert result.pegrna_pe2_score == pytest.approx(0.64)
+    assert result.pegrna_pe2_cell_line == "k562"
     assert STANDARD_SGRNA_SCAFFOLD in result.tjpe_pegRNA_sequence
     # Evaluated list preserves both variants.
     assert len(result.all_evaluated_variants) == 2

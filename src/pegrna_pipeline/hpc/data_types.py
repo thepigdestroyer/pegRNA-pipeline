@@ -92,6 +92,24 @@ class NgRNADesign:
     pam_disrupt: bool
 
 
+#: Default cell line whose PRIDICT 2.0 PE2 score is used to rank pegRNAs.
+#: KOLF2 iPSC are closer to K562 than HEK293T in chromatin / PE3 efficiency
+#: data, so we default to ``"k562"``. Override per-run via the
+#: ``score_cell_line`` field on :class:`VariantScore` or the matching
+#: ``score_cell_line`` argument on each workflow's ``run_*_workflow`` entry.
+DEFAULT_SCORE_CELL_LINE = "k562"
+
+
+def _score_attr(cell_line: str) -> str:
+    """Translate a cell-line tag to the matching :class:`PegRNADesign` field."""
+    cl = cell_line.lower()
+    if cl == "k562":
+        return "pe2_k562"
+    if cl == "hek293t":
+        return "pe2_hek293t"
+    raise ValueError(f"score_cell_line must be 'k562' or 'hek293t'; got {cell_line!r}")
+
+
 @dataclass
 class VariantScore:
     """Aggregate container: one codon variant, plus all its PRIDICT hits.
@@ -99,26 +117,33 @@ class VariantScore:
     Not frozen — callers routinely build a :class:`VariantScore` incrementally
     (add designs as PRIDICT jobs finish). The ``best_pegRNA`` / ``top_score``
     helpers let sort-by-quality be a one-liner.
+
+    ``score_cell_line`` controls which PRIDICT PE2 column is used for ranking:
+    ``"k562"`` (default, recommended for KOLF2 / iPSC work) or ``"hek293t"``.
     """
 
     sequence_name: str
     codon_variant_dna: str
     pegRNA_designs: List[PegRNADesign] = field(default_factory=list)
     ngRNA_candidates: List[NgRNADesign] = field(default_factory=list)
+    score_cell_line: str = DEFAULT_SCORE_CELL_LINE
 
     @property
     def best_pegRNA(self) -> Optional[PegRNADesign]:
-        """Return the design with the highest ``pe2_hek293t``; None if empty."""
+        """Return the highest-scoring design (per ``score_cell_line``); None if empty."""
         if not self.pegRNA_designs:
             return None
-        return max(self.pegRNA_designs, key=lambda d: d.pe2_hek293t)
+        attr = _score_attr(self.score_cell_line)
+        return max(self.pegRNA_designs, key=lambda d: getattr(d, attr))
 
     @property
     def top_score(self) -> float:
-        """Convenience: ``best_pegRNA.pe2_hek293t`` or ``0.0`` if empty.
+        """Convenience: best PE2 score per ``score_cell_line``, or 0.0 if empty.
 
         Returns a real number (never ``None``) so callers can sort without
         guarding against missing designs.
         """
         best = self.best_pegRNA
-        return float(best.pe2_hek293t) if best is not None else 0.0
+        if best is None:
+            return 0.0
+        return float(getattr(best, _score_attr(self.score_cell_line)))

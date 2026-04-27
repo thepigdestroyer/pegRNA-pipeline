@@ -82,7 +82,7 @@ def test_nick_arithmetic(result: TJPEResult):
 def test_winner_has_best_score(result: TJPEResult):
     evaluated = result.all_evaluated_variants
     top_scores = [v.top_score for v in evaluated]
-    assert result.pegrna_pe2_hek293t == max(top_scores)
+    assert result.pegrna_pe2_score == max(top_scores)
 
 
 def test_ngrna_strand_is_opposite_of_pegrna(result: TJPEResult):

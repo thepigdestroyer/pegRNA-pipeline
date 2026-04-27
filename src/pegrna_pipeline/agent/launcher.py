@@ -207,6 +207,7 @@ class HPCLauncher:
                 "conda_env": self.config.get("conda_env", "pridict2"),
                 "compute_mode": self.config.get("compute_mode", "local"),
                 "back_ssh": self.config.get("back_ssh", {}),
+                "score_cell_line": self.config.get("score_cell_line", "k562"),
             }
             self._upload_json(ssh, f"{remote_run_dir}/inputs.json", inputs)
 

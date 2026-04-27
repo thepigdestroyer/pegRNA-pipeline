@@ -51,7 +51,7 @@ def test_variant_without_pegrna_designs_returns_degenerate_result():
     assert result.pbs1 == ""
     assert result.rc_pbs2 == ""
     assert result.rc_pbs2_length == 0
-    assert result.pegrna_pe2_hek293t == 0.0
+    assert result.pegrna_pe2_score == 0.0
 
 
 def test_empty_variant_list_returns_none_winner():

@@ -78,7 +78,9 @@ def test_no_surviving_ngrna_returns_empty_assembly():
         variant_scores=[variant],
     )
     assert result.winning_variant is variant
-    assert result.pegrna_pe2_hek293t == pytest.approx(0.7)
+    # Default ranking is K562; pe2_k562=0.5 in this fixture.
+    assert result.pegrna_pe2_score == pytest.approx(0.5)
+    assert result.pegrna_pe2_cell_line == "k562"
     # pegRNA fields populated from the winning design…
     assert result.spacer == "GAATTCGTGTTCCTAAGCGT"
     assert result.pbs1 == "CGCTTAGGAACAC"

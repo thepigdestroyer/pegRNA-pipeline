@@ -54,6 +54,8 @@ def _peg(
     strand: str = "Fw",
     pegrna_full: str = "PEGFULL",
 ) -> PegRNADesign:
+    # K562 is the default ranking column, so we make ``score`` the K562
+    # value directly — assertions then read straight off ``score``.
     return PegRNADesign(
         sequence_name=name,
         spacer=spacer,
@@ -63,8 +65,8 @@ def _peg(
         rt_length=32,
         target_strand=strand,  # type: ignore[arg-type]
         editing_position=50,
-        pe2_hek293t=score,
-        pe2_k562=score - 0.1,
+        pe2_hek293t=score + 0.1,  # arbitrary; not used under K562 ranking
+        pe2_k562=score,
         pegrna_full=pegrna_full,
     )
 
@@ -118,7 +120,7 @@ def test_run_pe7_picks_top_pegrna_and_ngrna():
     )
     assert isinstance(result, PE7Result)
     assert result.full_insert_dna == insert
-    assert result.pegrna_pe2_hek293t == pytest.approx(0.80)
+    assert result.pegrna_pe2_score == pytest.approx(0.80)
     assert result.spacer == "ACGTACGTACGTACGTACGT"
     assert result.ngrna_deepcas9_score == pytest.approx(0.95)
     # ngRNA must be opposite strand of pegRNA
@@ -192,7 +194,7 @@ def test_run_pe7_with_no_variants_returns_empty_fields():
     )
     assert result.spacer == ""
     assert result.ngrna_spacer == ""
-    assert result.pegrna_pe2_hek293t == 0.0
+    assert result.pegrna_pe2_score == 0.0
     assert result.edit_position_in_mrna == 1000
 
 
@@ -207,6 +209,6 @@ def test_run_pe7_with_no_usable_ngrna_returns_pegrna_only():
         variant_scores=[_variant(pegs=pegs, ngs=ngs)],
     )
     assert result.spacer == pegs[0].spacer
-    assert result.pegrna_pe2_hek293t == pytest.approx(0.5)
+    assert result.pegrna_pe2_score == pytest.approx(0.5)
     assert result.ngrna_spacer == ""
     assert result.ngrna_deepcas9_score == 0.0

@@ -55,7 +55,9 @@ def annotate_tjpe_result(result: TJPEResult, gene: GeneRecord) -> List[Component
                 f"single-strand nick on the target strand."
             ),
             source=ComponentSource.PRIDICT2,
-            design_notes=f"PE2 HEK293T = {result.pegrna_pe2_hek293t:.2f}%",
+            design_notes=(
+                f"PE2 {result.pegrna_pe2_cell_line.upper()} = " f"{result.pegrna_pe2_score:.2f}%"
+            ),
         )
     )
     annotations.append(
@@ -160,7 +162,9 @@ def annotate_pe7_result(result: PE7Result, gene: GeneRecord) -> List[ComponentAn
                 f"{result.pegrna_strand} strand. Creates the pegRNA-side nick."
             ),
             source=ComponentSource.PRIDICT2,
-            design_notes=f"PE2 HEK293T = {result.pegrna_pe2_hek293t:.2f}%",
+            design_notes=(
+                f"PE2 {result.pegrna_pe2_cell_line.upper()} = " f"{result.pegrna_pe2_score:.2f}%"
+            ),
         ),
         ComponentAnnotation(
             name="sgRNA_scaffold",
@@ -217,10 +221,24 @@ def annotate_pe7_result(result: PE7Result, gene: GeneRecord) -> List[ComponentAn
     ]
 
 
-def annotate_pa_result(result: PAResult, gene: GeneRecord) -> List[ComponentAnnotation]:
-    """Build per-component annotations for a Prime Assembly design."""
+def annotate_pa_result(
+    result: PAResult,
+    gene: GeneRecord,
+    score_cell_line: str = "k562",
+) -> List[ComponentAnnotation]:
+    """Build per-component annotations for a Prime Assembly design.
+
+    ``score_cell_line`` controls which PRIDICT PE2 column the per-pegRNA
+    notes display ("k562" or "hek293t").
+    """
+    from pegrna_pipeline.hpc.data_types import _score_attr
+
+    score_attr = _score_attr(score_cell_line)
     up = result.winning_pair.upstream
     dn = result.winning_pair.downstream
+    cl_label = score_cell_line.upper()
+    up_score = float(getattr(up, score_attr))
+    dn_score = float(getattr(dn, score_attr))
     return [
         ComponentAnnotation(
             name="upstream_pegRNA_spacer",
@@ -232,7 +250,7 @@ def annotate_pa_result(result: PAResult, gene: GeneRecord) -> List[ComponentAnno
                 f"position {up.editing_position}. Installs the upstream flap."
             ),
             source=ComponentSource.PRIDICT2,
-            design_notes=f"PE2 HEK293T = {up.pe2_hek293t:.2f}%",
+            design_notes=f"PE2 {cl_label} = {up_score:.2f}%",
         ),
         ComponentAnnotation(
             name="upstream_sgRNA_scaffold",
@@ -279,7 +297,7 @@ def annotate_pa_result(result: PAResult, gene: GeneRecord) -> List[ComponentAnno
                 f"position {dn.editing_position}. Installs the downstream flap."
             ),
             source=ComponentSource.PRIDICT2,
-            design_notes=f"PE2 HEK293T = {dn.pe2_hek293t:.2f}%",
+            design_notes=f"PE2 {cl_label} = {dn_score:.2f}%",
         ),
         ComponentAnnotation(
             name="downstream_sgRNA_scaffold",

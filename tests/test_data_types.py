@@ -93,12 +93,27 @@ def test_variant_score_is_not_frozen():
 # ------------------------------------------------------------- best_pegRNA
 
 
-def test_best_pegrna_picks_max_by_pe2_hek293t():
+def test_best_pegrna_picks_max_by_default_score_cell_line():
     vs = VariantScore(
         sequence_name="v1",
         codon_variant_dna="ACG",
         pegRNA_designs=[_peg("a", 0.2), _peg("b", 0.7), _peg("c", 0.5)],
         ngRNA_candidates=[],
+    )
+    # Default score_cell_line is "k562"; the _peg builder maps pe2_k562 = 0.8 * score,
+    # so peg "b" still wins under K562 ranking.
+    assert vs.score_cell_line == "k562"
+    assert vs.best_pegRNA is not None
+    assert vs.best_pegRNA.sequence_name == "b"
+
+
+def test_best_pegrna_can_override_score_cell_line():
+    vs = VariantScore(
+        sequence_name="v1",
+        codon_variant_dna="ACG",
+        pegRNA_designs=[_peg("a", 0.2), _peg("b", 0.7), _peg("c", 0.5)],
+        ngRNA_candidates=[],
+        score_cell_line="hek293t",
     )
     assert vs.best_pegRNA is not None
     assert vs.best_pegRNA.sequence_name == "b"
@@ -121,7 +136,8 @@ def test_top_score_reflects_best_design():
         pegRNA_designs=[_peg("a", 0.2), _peg("b", 0.9)],
         ngRNA_candidates=[],
     )
-    assert vs.top_score == pytest.approx(0.9)
+    # Default is k562; _peg sets pe2_k562 = 0.8 * score → 0.9 * 0.8 = 0.72
+    assert vs.top_score == pytest.approx(0.72)
 
 
 def test_top_score_zero_when_no_designs():

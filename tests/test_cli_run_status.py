@@ -126,6 +126,7 @@ def test_setup_writes_config(monkeypatch, tmp_path: Path):
                 "",  # conda_env default
                 "local",  # compute_mode
                 "",  # cell_line default
+                "",  # score_cell_line default (k562)
             ]
         )
         + "\n"

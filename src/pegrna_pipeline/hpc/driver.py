@@ -35,6 +35,7 @@ from typing import Any, Dict, List, Optional, Sequence, Union
 import yaml
 
 from pegrna_pipeline.hpc.data_types import (
+    DEFAULT_SCORE_CELL_LINE,
     GeneRecord,
     NgRNADesign,
     PegRNADesign,
@@ -211,6 +212,7 @@ def write_reports(
     offtarget_reports: Sequence[Any],
     construct_str: str = "",
     all_evaluated_variants: Optional[Sequence[Any]] = None,
+    score_cell_line: str = DEFAULT_SCORE_CELL_LINE,
 ) -> Path:
     """Delegate to :func:`pegrna_pipeline.hpc.report_writer.write_reports`.
 
@@ -227,6 +229,7 @@ def write_reports(
         all_evaluated_variants=list(all_evaluated_variants or []),
         reports_dir=reports_dir,
         base_name=gene.gene_name,
+        score_cell_line=score_cell_line,
     )
     return paths["txt"]
 
@@ -265,6 +268,7 @@ class DriverConfig:
     rscript_path: str
     compute_mode: str
     back_ssh: Dict[str, Any]
+    score_cell_line: str  # "k562" | "hek293t" — which PRIDICT PE2 column ranks pegRNAs
 
 
 def _load_inputs(run_dir: Path) -> DriverConfig:
@@ -295,6 +299,7 @@ def _load_inputs(run_dir: Path) -> DriverConfig:
         rscript_path=inputs["rscript_path"],
         compute_mode=inputs.get("compute_mode", "local"),
         back_ssh=inputs.get("back_ssh", {}),
+        score_cell_line=inputs.get("score_cell_line", DEFAULT_SCORE_CELL_LINE),
     )
 
 
@@ -350,6 +355,7 @@ def run_driver(run_dir: Union[str, Path]) -> Union[TJPEResult, PAResult, PE7Resu
                 gene=cfg.gene,
                 insert_full_dna=cfg.construct_dna,
                 variant_scores=variant_scores,
+                score_cell_line=cfg.score_cell_line,
             )
         elif cfg.mode == "tjpe":
             dna_variants = _enumerate_first_aa(cfg.construct_aa, 8)
@@ -366,6 +372,7 @@ def run_driver(run_dir: Union[str, Path]) -> Union[TJPEResult, PAResult, PE7Resu
                 gene=cfg.gene,
                 insert_full_dna=cfg.construct_dna,
                 variant_scores=variant_scores,
+                score_cell_line=cfg.score_cell_line,
             )
         elif cfg.mode == "pa":
             from pegrna_pipeline.hpc.codon_expander import optimise_bulk
@@ -421,6 +428,7 @@ def run_driver(run_dir: Union[str, Path]) -> Union[TJPEResult, PAResult, PE7Resu
                 downstream_flap_dna=downstream_flap_dna,
                 bulk_dna=bulk_dna,
                 donor_dna=linear_donor,
+                score_cell_line=cfg.score_cell_line,
             )
         else:
             raise ValueError(f"unknown mode {cfg.mode!r}")
@@ -461,6 +469,7 @@ def run_driver(run_dir: Union[str, Path]) -> Union[TJPEResult, PAResult, PE7Resu
             offtarget_reports=offtarget_reports,
             construct_str=cfg.construct_dna,
             all_evaluated_variants=all_variants,
+            score_cell_line=cfg.score_cell_line,
         )
 
     # Signal success for the PBS wrapper

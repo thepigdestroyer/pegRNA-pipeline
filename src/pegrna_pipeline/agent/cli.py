@@ -366,6 +366,11 @@ def setup_cmd() -> None:
             type=click.Choice(["local", "back_ssh"]),
         ),
         "cell_line": click.prompt("Default cell line", default="KOLF2_iPSC"),
+        "score_cell_line": click.prompt(
+            "PRIDICT2 PE2 score cell line (k562 recommended for KOLF2/iPSC)",
+            default="k562",
+            type=click.Choice(["k562", "hek293t"]),
+        ),
     }
     config_path.write_text(yaml.safe_dump(cfg, sort_keys=False))
     click.echo(f"Wrote {config_path}")

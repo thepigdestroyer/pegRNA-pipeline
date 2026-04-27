@@ -25,6 +25,7 @@ from dataclasses import dataclass, field
 from typing import List, Optional, Sequence
 
 from pegrna_pipeline.hpc.data_types import (
+    DEFAULT_SCORE_CELL_LINE,
     GeneRecord,
     NgRNADesign,
     PegRNADesign,
@@ -55,7 +56,8 @@ class PE7Result:
     pbs: str
     rt: str
     pegrna_strand: str  # "Fw" | "Rv"
-    pegrna_pe2_hek293t: float
+    pegrna_pe2_score: float  # PE2 score actually used for ranking
+    pegrna_pe2_cell_line: str  # "k562" | "hek293t" — cell line that score came from
     ngrna_spacer: str
     ngrna_distance_to_edit: int
     ngrna_strand: str  # always opposite of pegrna_strand
@@ -70,11 +72,15 @@ def _empty_result(
     gene: GeneRecord,
     insert_full_dna: str,
     variants: Sequence[VariantScore],
+    score_cell_line: str,
     winning: Optional[VariantScore] = None,
     best_peg: Optional[PegRNADesign] = None,
 ) -> PE7Result:
     """Return a PE7Result with empty ngRNA fields for the degenerate paths."""
+    from pegrna_pipeline.hpc.data_types import _score_attr
+
     edit_position = gene.stop_codon_start
+    pe2_value = float(getattr(best_peg, _score_attr(score_cell_line))) if best_peg else 0.0
     return PE7Result(
         winning_variant=winning,
         full_insert_dna=insert_full_dna,
@@ -83,7 +89,8 @@ def _empty_result(
         pbs=best_peg.pbs if best_peg else "",
         rt=best_peg.rt if best_peg else "",
         pegrna_strand=best_peg.target_strand if best_peg else "",
-        pegrna_pe2_hek293t=best_peg.pe2_hek293t if best_peg else 0.0,
+        pegrna_pe2_score=pe2_value,
+        pegrna_pe2_cell_line=score_cell_line,
         ngrna_spacer="",
         ngrna_distance_to_edit=0,
         ngrna_strand="",
@@ -101,6 +108,7 @@ def run_pe7_workflow(
     variant_scores: Sequence[VariantScore],
     ngrna_distance_min: int = 40,
     ngrna_distance_max: int = 100,
+    score_cell_line: str = DEFAULT_SCORE_CELL_LINE,
 ) -> PE7Result:
     """Run the PE7 / PE3-strategy workflow for one gene + insertion.
 
@@ -139,7 +147,9 @@ def run_pe7_workflow(
             f"(got {len(insert_full_dna)} bp); use TJ-PE or PA for larger edits"
         )
 
-    variants = list(variant_scores)
+    # Propagate score_cell_line to every variant so best_pegRNA / top_score
+    # use the requested column.
+    variants = [_with_score_cell_line(v, score_cell_line) for v in variant_scores]
     ranked = rank_variants_by_pe2(variants)
     winning: Optional[VariantScore] = ranked[0] if ranked else None
     best_peg: Optional[PegRNADesign] = winning.best_pegRNA if winning else None
@@ -149,6 +159,7 @@ def run_pe7_workflow(
             gene=gene,
             insert_full_dna=insert_full_dna,
             variants=variants,
+            score_cell_line=score_cell_line,
             winning=winning,
             best_peg=None,
         )
@@ -165,12 +176,16 @@ def run_pe7_workflow(
             gene=gene,
             insert_full_dna=insert_full_dna,
             variants=variants,
+            score_cell_line=score_cell_line,
             winning=winning,
             best_peg=best_peg,
         )
 
     edit_position_in_mrna = gene.stop_codon_start
     ngrna_nick_in_mrna = edit_position_in_mrna + best_ng.distance_to_edit
+    from pegrna_pipeline.hpc.data_types import _score_attr
+
+    pe2_value = float(getattr(best_peg, _score_attr(score_cell_line)))
 
     return PE7Result(
         winning_variant=winning,
@@ -180,7 +195,8 @@ def run_pe7_workflow(
         pbs=best_peg.pbs,
         rt=best_peg.rt,
         pegrna_strand=best_peg.target_strand,
-        pegrna_pe2_hek293t=best_peg.pe2_hek293t,
+        pegrna_pe2_score=pe2_value,
+        pegrna_pe2_cell_line=score_cell_line,
         ngrna_spacer=best_ng.spacer,
         ngrna_distance_to_edit=best_ng.distance_to_edit,
         ngrna_strand=best_ng.target_strand,
@@ -188,4 +204,19 @@ def run_pe7_workflow(
         edit_position_in_mrna=edit_position_in_mrna,
         ngrna_nick_in_mrna=ngrna_nick_in_mrna,
         all_evaluated_variants=variants,
+    )
+
+
+def _with_score_cell_line(variant: VariantScore, score_cell_line: str) -> VariantScore:
+    """Return a copy of ``variant`` with ``score_cell_line`` set.
+
+    Builds a fresh VariantScore so callers' originals stay untouched (the
+    field is mutable on the dataclass since ``frozen=False``).
+    """
+    return VariantScore(
+        sequence_name=variant.sequence_name,
+        codon_variant_dna=variant.codon_variant_dna,
+        pegRNA_designs=variant.pegRNA_designs,
+        ngRNA_candidates=variant.ngRNA_candidates,
+        score_cell_line=score_cell_line,
     )
