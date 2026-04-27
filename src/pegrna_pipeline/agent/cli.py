@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import getpass
 import os
+import shlex
 import sys
 from pathlib import Path
 from typing import Callable
@@ -46,10 +47,13 @@ def _resolve_hpc_password_provider(non_interactive: bool) -> Callable[[], str]:
     if cred_path.exists():
         for line in cred_path.read_text().splitlines():
             if line.startswith("HPC_PASS="):
-                value = line.split("=", 1)[1].strip()
-                # Strip a single layer of bash-style quoting (`printf %q` form)
-                if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
-                    value = value[1:-1]
+                rhs = line.split("=", 1)[1]
+                # The credentials file is typically written by bash via
+                # `printf 'HPC_PASS=%q\n' "$HPC_PASS"`, which shell-quotes
+                # specials (e.g. ``a*b`` becomes ``a\*b``). shlex.split
+                # round-trips those forms cleanly.
+                tokens = shlex.split(rhs)
+                value = tokens[0] if tokens else ""
                 return lambda: value
 
     if non_interactive:
