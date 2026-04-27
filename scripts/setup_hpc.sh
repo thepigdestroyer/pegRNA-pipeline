@@ -23,9 +23,16 @@ echo "EPHEMERAL:  $EPHEMERAL"
 echo ""
 
 # ── 0. conda init ──────────────────────────────────────────────────────────────
+# Imperial CX3 ships only a `miniforge-setup` bootstrapper; the per-user
+# install lives in $HOME/miniforge3 and must be run once before `conda` is
+# available on PATH.
 module load miniforge/3
+if [[ ! -x "$HOME/miniforge3/bin/conda" ]]; then
+    echo "      installing miniforge into \$HOME/miniforge3 (one-time, ~3 min)..."
+    miniforge-setup
+fi
 # shellcheck disable=SC1091
-source "$(conda info --base)/etc/profile.d/conda.sh"
+source "$HOME/miniforge3/etc/profile.d/conda.sh"
 
 # ── 1. Clone / update pipeline repo ───────────────────────────────────────────
 echo "[1/6] pegRNA-pipeline source..."
