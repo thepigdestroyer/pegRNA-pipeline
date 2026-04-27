@@ -80,26 +80,24 @@ else
 fi
 echo "      done"
 
-# ── 5. pegrna-ngrna env (R + crisprScore via Bioconductor) ────────────────────
-echo "[5/6] pegrna-ngrna conda env + Bioconductor (~30 min)..."
+# ── 5. pegrna-ngrna env (R + crisprScore via bioconda binaries) ───────────────
+# Bioconductor packages come from conda (bioconda channel), not source-
+# compiled via BiocManager — see envs/offtarget.yml for why.
+echo "[5/6] pegrna-ngrna conda env (~10-15 min)..."
 if conda env list | grep -qE "^pegrna-ngrna "; then
-    echo "      already exists — checking Bioconductor packages"
+    # Verify the critical packages are present; if not, recreate the env.
+    if conda run -n pegrna-ngrna Rscript -e 'q(status = !all(c("crisprScore","crisprDesign","Biostrings","BSgenome.Hsapiens.UCSC.hg38") %in% rownames(installed.packages())))' >/dev/null 2>&1; then
+        echo "      already exists — all required packages present"
+    else
+        echo "      already exists but incomplete — removing and recreating"
+        conda env remove -n pegrna-ngrna -y
+        conda env create -f "$REPO_DIR/envs/offtarget.yml"
+    fi
 else
     conda env create -f "$REPO_DIR/envs/offtarget.yml"
 fi
-conda activate pegrna-ngrna
-Rscript - <<'REOF'
-suppressMessages(library(BiocManager))
-pkgs <- c("crisprScore", "crisprDesign", "Biostrings", "BSgenome.Hsapiens.UCSC.hg38")
-needed <- pkgs[!pkgs %in% rownames(installed.packages())]
-if (length(needed) > 0) {
-    message("Installing: ", paste(needed, collapse = ", "))
-    BiocManager::install(needed, ask = FALSE, update = FALSE)
-} else {
-    message("All Bioconductor packages already present")
-}
-REOF
-conda deactivate
+# Final verification
+conda run -n pegrna-ngrna Rscript -e 'stopifnot(all(c("crisprScore","crisprDesign","Biostrings","BSgenome.Hsapiens.UCSC.hg38") %in% rownames(installed.packages()))); message("crisprScore stack OK")'
 echo "      done"
 
 # ── 6. Ephemeral runs directory ────────────────────────────────────────────────
