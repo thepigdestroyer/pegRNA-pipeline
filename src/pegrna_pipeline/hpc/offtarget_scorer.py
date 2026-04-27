@@ -127,7 +127,7 @@ def submit_offtarget_job(
     scores: Tuple[str, ...] = ("DeepSpCas9", "DeepHF", "CFD"),
     genome: str = "GRCh38",
     max_mismatches: int = 3,
-    walltime_hours: int = 1,
+    walltime_hours: int = 4,
 ) -> List[OffTargetReport]:
     """Submit the off-target scorer, wait for it, and return parsed reports."""
     from pegrna_pipeline.hpc.pbs import (
