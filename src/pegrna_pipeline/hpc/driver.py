@@ -42,6 +42,7 @@ from pegrna_pipeline.hpc.data_types import (
 )
 from pegrna_pipeline.hpc.input_formatter import format_bracket_insertion
 from pegrna_pipeline.hpc.pa_workflow import PAResult, run_pa_workflow
+from pegrna_pipeline.hpc.pe7_workflow import PE7Result, run_pe7_workflow
 from pegrna_pipeline.hpc.pridict_parser import parse_ngrna_csv, parse_pegrna_csv
 from pegrna_pipeline.hpc.pridict_submitter import (
     BatchResult,
@@ -172,11 +173,11 @@ def _build_variant_scores_from_batch(
 
 # --------------------------------------------------------------- winners -> guides
 def _extract_winning_guides(
-    result: Union[TJPEResult, PAResult],
+    result: Union[TJPEResult, PAResult, PE7Result],
 ) -> List[Dict[str, str]]:
     """Return a list of ``{"guide_id", "spacer"}`` dicts for off-target scoring."""
     out: List[Dict[str, str]] = []
-    if isinstance(result, TJPEResult):
+    if isinstance(result, (TJPEResult, PE7Result)):
         if result.spacer:
             out.append({"guide_id": "pegrna_spacer", "spacer": result.spacer})
         if result.ngrna_spacer:
@@ -206,7 +207,7 @@ def write_reports(
     *,
     run_dir: Path,
     gene: GeneRecord,
-    result: Union[TJPEResult, PAResult],
+    result: Union[TJPEResult, PAResult, PE7Result],
     offtarget_reports: Sequence[Any],
 ) -> Path:
     """Plan 4 will implement this properly — for now drop a text placeholder.
@@ -251,7 +252,7 @@ class DriverConfig:
     """Parsed ``inputs.json`` + ``construct.yaml`` shape."""
 
     gene: GeneRecord
-    mode: str  # "tjpe" | "pa"
+    mode: str  # "tjpe" | "pa" | "pe7"
     construct_aa: str
     construct_dna: str
     cell_line: str
@@ -311,19 +312,42 @@ def _pridict_variants_for_window(
     return out
 
 
-def run_driver(run_dir: Union[str, Path]) -> Union[TJPEResult, PAResult]:
+def run_driver(run_dir: Union[str, Path]) -> Union[TJPEResult, PAResult, PE7Result]:
     """Run the full compute-node pipeline for ``run_dir``.
 
     Writes a report into ``run_dir/reports/<gene>.txt`` (Plan 4 will
-    expand this). Returns the :class:`TJPEResult` or :class:`PAResult`
-    so callers (the integration test) can assert on the shape.
+    expand this). Returns the :class:`TJPEResult`, :class:`PAResult`, or
+    :class:`PE7Result` so callers (the integration tests) can assert on
+    the shape.
     """
     run_path = Path(run_dir)
     cfg = _load_inputs(run_path)
     ssh_cfg = {"compute_mode": cfg.compute_mode, **cfg.back_ssh}
 
     with _local_compute_ssh(ssh_cfg) as ssh:
-        if cfg.mode == "tjpe":
+        if cfg.mode == "pe7":
+            # PE7: single submission of the user's exact insert DNA — no
+            # codon enumeration. The workflow itself enforces the ≤40 bp
+            # PRIDICT range.
+            variants = _pridict_variants_for_window(
+                cfg.gene,
+                [cfg.construct_dna],
+                name_prefix="pe7_var",
+            )
+            batch = submit_pridict_batches(
+                ssh=ssh,
+                variants=variants,
+                remote_run_dir=str(run_path),
+                pridict_install_path=cfg.pridict_install_path,
+                conda_env=cfg.conda_env,
+            )
+            variant_scores = _build_variant_scores_from_batch(batch, variants)
+            result: Union[TJPEResult, PAResult, PE7Result] = run_pe7_workflow(
+                gene=cfg.gene,
+                insert_full_dna=cfg.construct_dna,
+                variant_scores=variant_scores,
+            )
+        elif cfg.mode == "tjpe":
             dna_variants = _enumerate_first_aa(cfg.construct_aa, 8)
             variants = _pridict_variants_for_window(cfg.gene, dna_variants, name_prefix="tjpe_var")
             batch = submit_pridict_batches(
@@ -334,7 +358,7 @@ def run_driver(run_dir: Union[str, Path]) -> Union[TJPEResult, PAResult]:
                 conda_env=cfg.conda_env,
             )
             variant_scores = _build_variant_scores_from_batch(batch, variants)
-            result: Union[TJPEResult, PAResult] = run_tjpe_workflow(
+            result = run_tjpe_workflow(
                 gene=cfg.gene,
                 insert_full_dna=cfg.construct_dna,
                 variant_scores=variant_scores,

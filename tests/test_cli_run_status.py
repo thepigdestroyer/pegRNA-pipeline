@@ -25,6 +25,31 @@ def test_run_errors_when_config_missing(monkeypatch, tmp_path: Path):
     assert "pegrna setup" in result.output
 
 
+def test_run_accepts_pe7_mode(monkeypatch, tmp_path: Path):
+    """``--mode pe7`` is a recognised choice (rejected here only because
+    config is missing, not the mode itself)."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    result = CliRunner().invoke(
+        cli,
+        ["run", "--gene", "CTCF", "--construct", "FLAG", "--mode", "pe7", "--non-interactive"],
+    )
+    # exit code 2 == "pegrna setup" required (config missing); we just
+    # need to confirm Click didn't reject the mode value.
+    assert result.exit_code == 2
+    assert "pegrna setup" in result.output
+    assert "Invalid value for '--mode'" not in result.output
+
+
+def test_run_rejects_unknown_mode(monkeypatch, tmp_path: Path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    result = CliRunner().invoke(
+        cli,
+        ["run", "--gene", "CTCF", "--construct", "FLAG", "--mode", "pe6", "--non-interactive"],
+    )
+    assert result.exit_code != 0
+    assert "Invalid value" in result.output or "invalid choice" in result.output.lower()
+
+
 def test_status_empty_when_no_runs(monkeypatch, tmp_path: Path):
     monkeypatch.setenv("HOME", str(tmp_path))
     result = CliRunner().invoke(cli, ["status"])

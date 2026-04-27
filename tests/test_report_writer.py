@@ -7,16 +7,19 @@ from pathlib import Path
 from pegrna_pipeline.hpc.annotator import (
     ComponentSource,
     annotate_pa_result,
+    annotate_pe7_result,
     annotate_tjpe_result,
 )
 from pegrna_pipeline.hpc.data_types import GeneRecord, PegRNADesign, VariantScore
 from pegrna_pipeline.hpc.offtarget_scorer import OffTargetReport
 from pegrna_pipeline.hpc.pa_workflow import PAResult
 from pegrna_pipeline.hpc.pair_scorer import PegRNAPair
+from pegrna_pipeline.hpc.pe7_workflow import PE7Result
 from pegrna_pipeline.hpc.report_writer import (
     ALL_VARIANTS_CSV_COLUMNS,
     OFFTARGET_CSV_COLUMNS,
     PA_CSV_COLUMNS,
+    PE7_CSV_COLUMNS,
     TJPE_CSV_COLUMNS,
     write_reports,
 )
@@ -117,6 +120,31 @@ def _fake_pa_result() -> PAResult:
     )
 
 
+def _fake_pe7_result() -> PE7Result:
+    variant = VariantScore(
+        sequence_name="pe7_var_0",
+        codon_variant_dna="GACTACAAGGACGACGATGAC",
+    )
+    variant.pegRNA_designs = [_fake_pegrna(name="pe7_top", pe2=55.0, strand="Fw")]
+    return PE7Result(
+        winning_variant=variant,
+        full_insert_dna="GACTACAAGGACGACGATGAC",  # 21 bp FLAG-tag DNA
+        pegRNA_full="PE7_PEG_FULL",
+        spacer="GCAGCAGCATGCATGCAGCT",
+        pbs="TCACCAGCAGCAGC",
+        rt="GACAAGGACGACGAT",
+        pegrna_strand="Fw",
+        pegrna_pe2_hek293t=55.0,
+        ngrna_spacer="GCTAGCATGCAGCATGCATC",
+        ngrna_distance_to_edit=-50,
+        ngrna_strand="Rv",
+        ngrna_deepcas9_score=0.91,
+        edit_position_in_mrna=200,
+        ngrna_nick_in_mrna=150,
+        all_evaluated_variants=[variant],
+    )
+
+
 def _fake_offtarget():
     return [
         OffTargetReport(
@@ -152,6 +180,21 @@ def test_annotate_tjpe_yields_expected_components():
     assert spacer.source == ComponentSource.PRIDICT2
     rc = next(a for a in annotations if a.name == "RC-PBS2")
     assert rc.source == ComponentSource.GENOMIC_CONTEXT
+
+
+def test_annotate_pe7_yields_expected_components():
+    annotations = annotate_pe7_result(_fake_pe7_result(), _fake_gene())
+    names = [a.name for a in annotations]
+    assert names == [
+        "spacer",
+        "sgRNA_scaffold",
+        "RT_template",
+        "PBS",
+        "ngRNA_spacer",
+        "ngRNA_scaffold",
+    ]
+    rt = next(a for a in annotations if a.name == "RT_template")
+    assert rt.source == ComponentSource.PRIDICT2
 
 
 def test_annotate_pa_includes_donor():
@@ -201,9 +244,33 @@ def test_write_reports_pa_produces_expected_files(tmp_path: Path):
     assert "COMPONENT BREAKDOWN" in txt
 
 
+def test_write_reports_pe7_produces_expected_files(tmp_path: Path):
+    paths = write_reports(
+        result=_fake_pe7_result(),
+        gene=_fake_gene(),
+        construct_str="FLAG",
+        offtarget_reports=_fake_offtarget(),
+        all_evaluated_variants=[_fake_pe7_result().winning_variant],
+        reports_dir=tmp_path,
+        base_name="pe7_smoke",
+    )
+    assert paths["txt"].exists()
+    txt = paths["txt"].read_text()
+    assert "PE7" in txt
+    assert "COMPONENT BREAKDOWN" in txt
+    assert "CAVEATS" in txt
+    assert paths["csv"].exists()
+    csv_text = paths["csv"].read_text()
+    assert "pegrna_spacer" in csv_text
+    assert "GCAGCAGCATGCATGCAGCT" in csv_text
+    assert paths["offtarget"].exists()
+    assert paths["all_variants"].suffix == ".gz"
+
+
 def test_column_schemas_exposed():
     # Sanity: column constants are non-empty so downstream tooling can rely on them
     assert TJPE_CSV_COLUMNS[0] == "rank"
     assert PA_CSV_COLUMNS[0] == "rank"
+    assert PE7_CSV_COLUMNS[0] == "rank"
     assert OFFTARGET_CSV_COLUMNS[0] == "guide_id"
     assert ALL_VARIANTS_CSV_COLUMNS[0] == "variant_rank"

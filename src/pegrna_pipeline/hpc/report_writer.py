@@ -1,4 +1,4 @@
-"""Text + CSV report writers for TJ-PE and PA results."""
+"""Text + CSV report writers for TJ-PE, PA, and PE7 results."""
 
 from __future__ import annotations
 
@@ -11,11 +11,13 @@ from typing import Any, Dict, List
 
 from pegrna_pipeline.hpc.annotator import (
     annotate_pa_result,
+    annotate_pe7_result,
     annotate_tjpe_result,
 )
 from pegrna_pipeline.hpc.data_types import GeneRecord
 from pegrna_pipeline.hpc.offtarget_scorer import OffTargetReport
 from pegrna_pipeline.hpc.pa_workflow import PAResult
+from pegrna_pipeline.hpc.pe7_workflow import PE7Result
 from pegrna_pipeline.hpc.tjpe_workflow import TJPEResult
 
 _BAR = "=" * 72
@@ -72,6 +74,64 @@ def write_tjpe_txt_report(
     lines.append("")
     lines.append(f"FULL TJ-pegRNA OLIGO ({len(result.tjpe_pegRNA_sequence)} nt):")
     lines.append(_wrap(result.tjpe_pegRNA_sequence))
+    lines.append("")
+    lines.append(
+        f"FULL ngRNA (spacer only, append standard scaffold): " f"5'-{result.ngrna_spacer}-3'"
+    )
+    lines.append("")
+    lines.append(_DASH)
+    lines.append("COMPONENT BREAKDOWN")
+    lines.append(_DASH)
+    for ann in annotations:
+        lines.append("")
+        lines.append(f"{ann.name.upper()} ({ann.length_bp} nt) " f"[source: {ann.source.value}]:")
+        if ann.sequence:
+            lines.append(_wrap(f"5'-{ann.sequence}-3'"))
+        lines.append(_wrap(ann.functional_role, indent="  "))
+        if ann.design_notes:
+            lines.append(_wrap(f"Notes: {ann.design_notes}", indent="  "))
+    lines.append("")
+    lines.append(_DASH)
+    lines.append("OFF-TARGET ANALYSIS")
+    lines.append(_DASH)
+    _append_offtarget_block(lines, offtarget_reports)
+    lines.append("")
+    lines.append(_DASH)
+    lines.append("CAVEATS")
+    lines.append(_DASH)
+    lines.append(_CAVEATS)
+    lines.append(_BAR)
+    lines.append("END OF REPORT")
+    lines.append(_BAR)
+    output_path.write_text("\n".join(lines) + "\n")
+
+
+# ----------------------------------------------------------------------- PE7
+
+
+def write_pe7_txt_report(
+    result: PE7Result,
+    gene: GeneRecord,
+    construct_str: str,
+    offtarget_reports: List[OffTargetReport],
+    output_path: Path,
+) -> None:
+    annotations = annotate_pe7_result(result, gene)
+    lines: List[str] = [_BAR, "pegRNA DESIGN REPORT -- PE7 (PE3-strategy) mode", _BAR]
+    lines.append(f"Generated:      {datetime.utcnow().isoformat(timespec='seconds')}Z")
+    lines.append(f"Gene:           {gene.gene_name} ({gene.refseq_accession})")
+    lines.append(f"Stop codon:     {gene.stop_codon} at mRNA position {gene.stop_codon_start}")
+    lines.append(f"Construct:      {construct_str}")
+    lines.append(f"Insert length:  {len(result.full_insert_dna)} bp")
+    lines.append(f"PE2 HEK293T:    {result.pegrna_pe2_hek293t:.2f}%")
+    lines.append(f"ngRNA distance: {result.ngrna_distance_to_edit:+d} bp from edit")
+    lines.append("")
+    lines.append(_BAR)
+    lines.append("WINNING pegRNA + ngRNA")
+    lines.append(_BAR)
+    lines.append("")
+    lines.append(f"FULL pegRNA OLIGO ({len(result.pegRNA_full)} nt):")
+    lines.append(_wrap(result.pegRNA_full or "<not assembled>"))
     lines.append("")
     lines.append(
         f"FULL ngRNA (spacer only, append standard scaffold): " f"5'-{result.ngrna_spacer}-3'"
@@ -241,6 +301,56 @@ def write_tjpe_csv(result: TJPEResult, output_path: Path) -> None:
         )
 
 
+PE7_CSV_COLUMNS = [
+    "rank",
+    "variant_sequence_name",
+    "full_insert_dna",
+    "pegrna_spacer",
+    "pegrna_pbs",
+    "pegrna_rt",
+    "pegrna_strand",
+    "pegRNA_full",
+    "ngrna_spacer",
+    "ngrna_distance_to_edit",
+    "ngrna_strand",
+    "ngrna_deepcas9_score",
+    "pegrna_pe2_hek293t",
+    "edit_position_in_mrna",
+    "ngrna_nick_in_mrna",
+    "cytosine_count",
+    "gc_content",
+]
+
+
+def write_pe7_csv(result: PE7Result, output_path: Path) -> None:
+    with output_path.open("w", newline="") as fh:
+        writer = csv.DictWriter(fh, fieldnames=PE7_CSV_COLUMNS)
+        writer.writeheader()
+        dna = result.full_insert_dna
+        gc = (dna.count("G") + dna.count("C")) / max(len(dna), 1)
+        writer.writerow(
+            {
+                "rank": 1,
+                "variant_sequence_name": getattr(result.winning_variant, "sequence_name", ""),
+                "full_insert_dna": result.full_insert_dna,
+                "pegrna_spacer": result.spacer,
+                "pegrna_pbs": result.pbs,
+                "pegrna_rt": result.rt,
+                "pegrna_strand": result.pegrna_strand,
+                "pegRNA_full": result.pegRNA_full,
+                "ngrna_spacer": result.ngrna_spacer,
+                "ngrna_distance_to_edit": result.ngrna_distance_to_edit,
+                "ngrna_strand": result.ngrna_strand,
+                "ngrna_deepcas9_score": f"{result.ngrna_deepcas9_score:.4f}",
+                "pegrna_pe2_hek293t": f"{result.pegrna_pe2_hek293t:.4f}",
+                "edit_position_in_mrna": result.edit_position_in_mrna,
+                "ngrna_nick_in_mrna": result.ngrna_nick_in_mrna,
+                "cytosine_count": dna.count("C"),
+                "gc_content": f"{gc:.4f}",
+            }
+        )
+
+
 PA_CSV_COLUMNS = [
     "rank",
     "joint_score",
@@ -397,6 +507,11 @@ def write_reports(
         csv_p = reports_dir / f"{base_name}.csv"
         write_pa_txt_report(result, gene, construct_str, offtarget_reports, txt)
         write_pa_csv(result, csv_p)
+    elif isinstance(result, PE7Result):
+        txt = reports_dir / f"{base_name}.txt"
+        csv_p = reports_dir / f"{base_name}.csv"
+        write_pe7_txt_report(result, gene, construct_str, offtarget_reports, txt)
+        write_pe7_csv(result, csv_p)
     else:
         raise TypeError(f"unknown result type {type(result).__name__}")
     ot_path = reports_dir / f"{base_name}_offtarget.csv"

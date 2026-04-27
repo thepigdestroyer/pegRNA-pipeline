@@ -115,7 +115,7 @@ def motif_show(name: str) -> None:
 @cli.command("run")
 @click.option("--gene", required=True)
 @click.option("--construct", required=True)
-@click.option("--mode", type=click.Choice(["tjpe", "pa"]), required=True)
+@click.option("--mode", type=click.Choice(["tjpe", "pa", "pe7"]), required=True)
 @click.option("--cell-line", default="KOLF2_iPSC")
 @click.option("--output-dir", default="results", type=click.Path())
 @click.option("--cleanup", is_flag=True)
