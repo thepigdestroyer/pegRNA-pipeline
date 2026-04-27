@@ -113,7 +113,7 @@ class HPCLauncher:
         """qsub the wrapper with -v RUN_DIR=... and return the scheduler id."""
         repo_dir = self.config.get("repo_dir", "~/pegRNA-pipeline")
         wrapper = f"{repo_dir}/scripts/driver_pbs_wrapper.sh"
-        out, err, rc = ssh.exec(f"qsub -v RUN_DIR={remote_run_dir} {wrapper}")
+        out, err, rc = ssh.exec(f"/opt/pbs/bin/qsub -v RUN_DIR={remote_run_dir} {wrapper}")
         if rc != 0:
             raise RuntimeError(f"qsub failed: rc={rc} err={err!r}")
         sid = out.strip().split()[0] if out.strip() else ""
@@ -147,7 +147,7 @@ class HPCLauncher:
             if hits > 0:
                 return True
             # Check if the job is still in the queue; if not, something went wrong.
-            qstat_out, _q_err, _q_rc = ssh.exec(f"qstat {driver_id}")
+            qstat_out, _q_err, _q_rc = ssh.exec(f"/opt/pbs/bin/qstat {driver_id}")
             if elapsed >= max_seconds:
                 raise TimeoutError(f"driver {driver_id} not done after {max_hours}h")
             sleep_fn(interval)

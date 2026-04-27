@@ -127,7 +127,7 @@ def qsub(ssh, job: PBSJob) -> str:
     scheduler id (PBS Pro prints ``1234567.hostname\\n``). The id is
     stored on ``job.scheduler_id`` and also returned.
     """
-    out, err, rc = ssh.exec(f"qsub {job.remote_script_path}")
+    out, err, rc = ssh.exec(f"/opt/pbs/bin/qsub {job.remote_script_path}")
     if rc != 0:
         raise RuntimeError(f"qsub failed: rc={rc} stderr={err!r}")
     sid = out.strip().split()[0] if out.strip() else ""
@@ -139,13 +139,13 @@ def qsub(ssh, job: PBSJob) -> str:
 
 def qstat_one(ssh, job: PBSJob) -> str:
     """Return the current state of ``job`` ('' if it has aged out)."""
-    out, _err, _rc = ssh.exec(f"qstat {job.scheduler_id}")
+    out, _err, _rc = ssh.exec(f"/opt/pbs/bin/qstat {job.scheduler_id}")
     return parse_qstat_state(out, job.scheduler_id.split(".")[0])
 
 
 def qdel(ssh, job: PBSJob) -> None:
     """Best-effort ``qdel <scheduler_id>`` — does not raise on non-zero rc."""
-    ssh.exec(f"qdel {job.scheduler_id}")
+    ssh.exec(f"/opt/pbs/bin/qdel {job.scheduler_id}")
 
 
 # ---------------------------------------------------------------- poll

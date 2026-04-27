@@ -270,7 +270,7 @@ def cancel_cmd(run_id: str) -> None:
     run = db.get(run_id)
     launcher = HPCLauncher(config=config)
     with launcher._build_ssh() as ssh:
-        ssh.exec(f"qdel {run.driver_job_id}")
+        ssh.exec(f"/opt/pbs/bin/qdel {run.driver_job_id}")
     db.mark_cancelled(run_id)
     click.echo(f"Cancelled {run_id} (driver job {run.driver_job_id}).")
 

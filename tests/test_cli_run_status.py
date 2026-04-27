@@ -56,9 +56,7 @@ def test_password_provider_falls_back_to_credentials_file(monkeypatch, tmp_path:
     cred = tmp_path / ".cx3-credentials"
     cred.write_text("HPC_USER=mj1824\nHPC_PASS='secret with spaces'\n")
     cred.chmod(0o600)
-    assert (
-        _resolve_hpc_password_provider(non_interactive=True)() == "secret with spaces"
-    )
+    assert _resolve_hpc_password_provider(non_interactive=True)() == "secret with spaces"
 
 
 def test_password_provider_handles_printf_q_escaping(monkeypatch, tmp_path: Path):
@@ -71,9 +69,7 @@ def test_password_provider_handles_printf_q_escaping(monkeypatch, tmp_path: Path
     # Mimic what `printf 'HPC_PASS=%q\n' 'NousGnosis*2207'` writes.
     cred.write_text("HPC_USER=mj1824\nHPC_PASS=NousGnosis\\*2207\n")
     cred.chmod(0o600)
-    assert (
-        _resolve_hpc_password_provider(non_interactive=True)() == "NousGnosis*2207"
-    )
+    assert _resolve_hpc_password_provider(non_interactive=True)() == "NousGnosis*2207"
 
 
 def test_password_provider_returns_empty_in_noninteractive_when_nothing_available(

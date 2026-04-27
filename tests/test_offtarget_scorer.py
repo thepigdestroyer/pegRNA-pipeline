@@ -70,9 +70,9 @@ class FakeSSH:
 
     def exec(self, cmd: str):
         self.commands.append(cmd)
-        if cmd.startswith("qsub "):
+        if cmd.startswith("/opt/pbs/bin/qsub "):
             return (next(self._qsub_ids) + "\n", "", 0)
-        if cmd.startswith("qstat"):
+        if cmd.startswith("/opt/pbs/bin/qstat"):
             return ("", "", 0)
         if cmd.startswith("grep "):
             return ("1\n", "", 0)  # marker present
@@ -95,7 +95,7 @@ def test_submit_offtarget_job_returns_reports(tmp_path, monkeypatch):
     assert len(reports) == 2
     assert reports[0].guide_id == "g1"
     # qsub was called exactly once
-    assert sum(1 for c in ssh.commands if c.startswith("qsub ")) == 1
+    assert sum(1 for c in ssh.commands if c.startswith("/opt/pbs/bin/qsub ")) == 1
     # guides CSV was uploaded
     csv_uploads = [u for u in ssh.uploads if u[1].endswith(".csv")]
     assert len(csv_uploads) == 1

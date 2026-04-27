@@ -28,9 +28,9 @@ class FakeSSH:
 
     def exec(self, cmd: str):
         self.commands.append(cmd)
-        if cmd.startswith("qsub "):
+        if cmd.startswith("/opt/pbs/bin/qsub "):
             return (next(self._qsub_ids) + "\n", "", 0)
-        if cmd.startswith("qstat"):
+        if cmd.startswith("/opt/pbs/bin/qstat"):
             return ("", "", 0)  # jobs already gone -> finished
         if cmd.startswith("grep "):
             return (f"{self._marker_hits}\n", "", 0)
@@ -57,7 +57,7 @@ def test_single_chunk_happy_path():
     assert len(result.failed) == 0
     assert result.output_dirs == ["/work/run/out_0"]
     # Verify qsub was called once
-    assert sum(1 for c in ssh.commands if c.startswith("qsub ")) == 1
+    assert sum(1 for c in ssh.commands if c.startswith("/opt/pbs/bin/qsub ")) == 1
     # Verify the upload went to a chunk CSV
     assert any(pair[1] == "/work/run/chunk_0.csv" for pair in ssh.uploads)
 
@@ -75,7 +75,7 @@ def test_multiple_chunks():
     )
     # 10 items / 3 per chunk -> 4 chunks (3,3,3,1)
     assert len(result.output_dirs) == 4
-    assert sum(1 for c in ssh.commands if c.startswith("qsub ")) == 4
+    assert sum(1 for c in ssh.commands if c.startswith("/opt/pbs/bin/qsub ")) == 4
 
 
 def test_missing_marker_reports_failure():
