@@ -8,7 +8,7 @@
 # don't currently extract here, and PRIDICT 2.0's PE2 efficiency
 # prediction already provides an on-target ranking we trust.
 #
-# Off-target counts use Biostrings::vcountPattern against
+# Off-target counts use Biostrings::countPattern against
 # BSgenome.Hsapiens.UCSC.hg38 directly — no precomputed BWA / bowtie
 # index required. Slow (~1 min per chromosome at mm<=3 for a 20-mer)
 # but reliable and self-contained.
@@ -85,7 +85,7 @@ count_genome_hits <- function(pattern, bsg, chrs, max_mm) {
     seq <- bsg[[chr]]
     for (mm in 0:max_mm) {
       hits_fw <- countPattern(pattern, seq, max.mismatch = mm, fixed = FALSE)
-      hits_rv <- vcountPattern(rc, seq, max.mismatch = mm, fixed = FALSE)
+      hits_rv <- countPattern(rc, seq, max.mismatch = mm, fixed = FALSE)
       out[mm + 1] <- out[mm + 1] + hits_fw + hits_rv
     }
   }
