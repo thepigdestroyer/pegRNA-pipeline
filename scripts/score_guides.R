@@ -27,15 +27,18 @@
 #
 # Notes
 # -----
-# * DeepSpCas9 and DeepHF require uniform-length 20-nt protospacers. We
-#   call them once per guide (rather than batched) so that mixed-length
-#   inputs (e.g. PE7 ngRNAs occasionally come back at 19 nt from
-#   PRIDICT 2.0's nicking output) don't crash the whole batch.
-# * CrisprNuclease defaults to ``SpCas9`` because that's a predefined
-#   ``CrisprNuclease`` object in the crisprBase package; passing the bare
-#   string "SpCas9_H840A" leaves the GuideSet constructor unable to
-#   resolve a nuclease and propagates as 'seqnames cannot contain NAs'
-#   later. Spacer/PAM recognition is identical for the H840A nickase.
+# * For each guide we call ``crisprDesign::findSpacers()`` to locate the
+#   spacer in BSgenome.Hsapiens.UCSC.hg38 — this is the only way the
+#   downstream addOnTargetScores / addSpacerAlignments helpers get the
+#   PAM and flanking nucleotides they need.
+# * On-target scoring (DeepSpCas9, DeepHF) requires a 20-nt protospacer
+#   plus genomic flanks/PAM. We skip it for non-20-nt spacers (PRIDICT
+#   2.0 occasionally emits 19-nt nicking guides) — those rows show NA.
+# * For each guide we keep the SINGLE highest-confidence genomic hit as
+#   the on-target; the rest count toward mm{0..N} buckets.
+# * "CrisprNuclease = SpCas9" because that's the canonical predefined
+#   object in crisprBase. SpCas9_H840A is the same protein for spacer/PAM
+#   recognition.
 
 suppressPackageStartupMessages({
   library(optparse)
@@ -50,7 +53,7 @@ option_list <- list(
               default = "DeepSpCas9,DeepHF,CFD",
               help = "Comma-separated list of scores [default %default]"),
   make_option(c("--genome"), type = "character", default = "GRCh38",
-              help = "Genome build for off-target search [default %default]"),
+              help = "Genome build (informational; we always use BSgenome.Hsapiens.UCSC.hg38) [default %default]"),
   make_option(c("--max-mismatches"), type = "integer", default = 3,
               help = "Max mismatches to enumerate (mm0..mmN) [default %default]"),
   make_option(c("--output"), type = "character",
@@ -85,90 +88,121 @@ nuclease_obj <- tryCatch(
   }
 )
 
-# ------------------------------------------------------------- on-target
-n <- nrow(guides_df)
-deepspcas9 <- rep(NA_real_, n)
-deephf <- rep(NA_real_, n)
-cfd_specificity <- rep(NA_real_, n)
+bsgenome <- BSgenome.Hsapiens.UCSC.hg38
 
-# Score one spacer at a time so that 19-nt nicking guides (PRIDICT 2.0
-# occasionally emits these for PE7 ngRNAs) don't kill the whole batch.
+n <- nrow(guides_df)
+deepspcas9       <- rep(NA_real_, n)
+deephf           <- rep(NA_real_, n)
+cfd_specificity  <- rep(NA_real_, n)
+mm0_count        <- rep(NA_integer_, n)
+mm1_count        <- rep(NA_integer_, n)
+mm2_count        <- rep(NA_integer_, n)
+mm3_count        <- rep(NA_integer_, n)
+
 for (i in seq_len(n)) {
-  spacer_i <- guides_df$spacer[i]
-  if (nchar(spacer_i) != 20) {
-    message("skipping on-target scoring for ", guides_df$guide_id[i],
-            " (length ", nchar(spacer_i), " != 20 nt)")
+  gid     <- guides_df$guide_id[i]
+  spacer  <- guides_df$spacer[i]
+  spacer_len <- nchar(spacer)
+
+  # findSpacers needs a query DNA window — use the spacer itself; it'll
+  # search the genome both strands. Returns a GuideSet of every match.
+  gs <- tryCatch({
+    findSpacers(
+      queries          = Biostrings::DNAStringSet(spacer),
+      bsgenome         = bsgenome,
+      crisprNuclease   = nuclease_obj,
+      strict_overlap   = FALSE
+    )
+  }, error = function(e) {
+    message("findSpacers failed for ", gid, ": ", conditionMessage(e))
+    NULL
+  })
+
+  if (is.null(gs) || length(gs) == 0) {
+    message("no genomic hit for ", gid, " (spacer ", spacer, ")")
     next
   }
-  if ("DeepSpCas9" %in% scores_to_run) {
-    tryCatch({
-      deepspcas9[i] <- as.numeric(getDeepSpCas9Scores(spacer_i)$score[1])
-    }, error = function(e) message("DeepSpCas9 failed for ",
-                                   guides_df$guide_id[i], ": ",
-                                   conditionMessage(e)))
-  }
-  if ("DeepHF" %in% scores_to_run) {
-    tryCatch({
-      deephf[i] <- as.numeric(getDeepHFScores(spacer_i)$score[1])
-    }, error = function(e) message("DeepHF failed for ",
-                                   guides_df$guide_id[i], ": ",
-                                   conditionMessage(e)))
-  }
-}
 
-# ------------------------------------------------------------- off-target
-mm0_count <- rep(NA_integer_, n)
-mm1_count <- rep(NA_integer_, n)
-mm2_count <- rep(NA_integer_, n)
-mm3_count <- rep(NA_integer_, n)
-
-bsgenome <- BSgenome.Hsapiens.UCSC.hg38
-for (i in seq_len(n)) {
-  spacer_i <- guides_df$spacer[i]
-  if (nchar(spacer_i) != 20) {
-    next  # skip non-canonical lengths; mm counts stay NA
+  # Sometimes findSpacers returns a flanked window not the spacer;
+  # restrict to GuideSet rows whose protospacer matches our query exactly.
+  spacer_match <- spacers(gs) == spacer
+  if (any(spacer_match)) {
+    gs <- gs[spacer_match]
   }
+
+  # Pick the first hit as on-target (PRIDICT-designed spacers are
+  # typically unique within the target locus).
+  on_target <- gs[1]
+
+  # ---------------- mismatch counts via genome-wide alignment
   tryCatch({
-    gs <- GuideSet(
-      ids = guides_df$guide_id[i],
-      protospacers = spacer_i,
-      CrisprNuclease = nuclease_obj,
-      bsgenome = bsgenome
+    aln <- addSpacerAlignments(
+      on_target,
+      aligner          = "biostrings",
+      txObject         = NULL,
+      bsgenome         = bsgenome,
+      n_mismatches     = opt$`max-mismatches`,
+      all_alignments   = TRUE
     )
-    gs <- addSpacerAlignments(
-      gs,
-      bsgenome = bsgenome,
-      n_mismatches = opt$`max-mismatches`
-    )
-    aln <- alignments(gs)
-    mm0_count[i] <- sum(aln$n_mismatches == 0, na.rm = TRUE)
-    mm1_count[i] <- sum(aln$n_mismatches == 1, na.rm = TRUE)
-    mm2_count[i] <- sum(aln$n_mismatches == 2, na.rm = TRUE)
-    mm3_count[i] <- sum(aln$n_mismatches == 3, na.rm = TRUE)
+    # alignments(aln) returns a GRanges-style object with $n_mismatches
+    align_tab <- alignments(aln)
+    if (!is.null(align_tab) && length(align_tab) > 0) {
+      nm <- align_tab$n_mismatches
+      mm0_count[i] <- sum(nm == 0, na.rm = TRUE)
+      mm1_count[i] <- sum(nm == 1, na.rm = TRUE)
+      mm2_count[i] <- sum(nm == 2, na.rm = TRUE)
+      mm3_count[i] <- sum(nm == 3, na.rm = TRUE)
+    } else {
+      mm0_count[i] <- mm1_count[i] <- mm2_count[i] <- mm3_count[i] <- 0L
+    }
+    on_target <- aln  # carry the alignments forward for CFD
+  }, error = function(e) {
+    message("alignment failed for ", gid, ": ", conditionMessage(e))
+  })
+
+  # ---------------- on-target scoring (needs 20-nt spacer)
+  if (spacer_len == 20) {
+    if ("DeepSpCas9" %in% scores_to_run) {
+      tryCatch({
+        scored <- addOnTargetScores(on_target, methods = "deepspcas9")
+        deepspcas9[i] <- as.numeric(scored$score_deepspcas9[1])
+      }, error = function(e) {
+        message("DeepSpCas9 failed for ", gid, ": ", conditionMessage(e))
+      })
+    }
+    if ("DeepHF" %in% scores_to_run) {
+      tryCatch({
+        scored <- addOnTargetScores(on_target, methods = "deephf")
+        deephf[i] <- as.numeric(scored$score_deephf[1])
+      }, error = function(e) {
+        message("DeepHF failed for ", gid, ": ", conditionMessage(e))
+      })
+    }
     if ("CFD" %in% scores_to_run) {
       tryCatch({
-        gs <- addOffTargetScores(gs, methods = "cfd")
-        cfd_specificity[i] <- as.numeric(onTargetScore(gs, "cfd_specificity"))
-      }, error = function(e) message("CFD failed for ",
-                                     guides_df$guide_id[i], ": ",
-                                     conditionMessage(e)))
+        scored <- addOffTargetScores(on_target, methods = "cfd")
+        # CFD specificity is on the on-target row's score column
+        cfd_specificity[i] <- as.numeric(scored$score_cfd[1])
+      }, error = function(e) {
+        message("CFD failed for ", gid, ": ", conditionMessage(e))
+      })
     }
-  }, error = function(e) {
-    message("off-target alignment failed for ",
-            guides_df$guide_id[i], ": ", conditionMessage(e))
-  })
+  } else {
+    message("skipping on-target scoring for ", gid,
+            " (length ", spacer_len, " != 20 nt)")
+  }
 }
 
 out_df <- data.frame(
-  guide_id = guides_df$guide_id,
-  spacer = guides_df$spacer,
-  deepspcas9 = deepspcas9,
-  deephf = deephf,
+  guide_id        = guides_df$guide_id,
+  spacer          = guides_df$spacer,
+  deepspcas9      = deepspcas9,
+  deephf          = deephf,
   cfd_specificity = cfd_specificity,
-  mm0_count = mm0_count,
-  mm1_count = mm1_count,
-  mm2_count = mm2_count,
-  mm3_count = mm3_count,
+  mm0_count       = mm0_count,
+  mm1_count       = mm1_count,
+  mm2_count       = mm2_count,
+  mm3_count       = mm3_count,
   stringsAsFactors = FALSE
 )
 
