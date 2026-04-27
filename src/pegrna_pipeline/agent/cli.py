@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+import getpass
+import os
 import sys
+from pathlib import Path
+from typing import Callable
 
 import click
 
@@ -20,6 +24,37 @@ from pegrna_pipeline.agent.motif_library import (
     MotifLibrary,
     MotifNotFoundError,
 )
+
+
+def _resolve_hpc_password_provider(non_interactive: bool) -> Callable[[], str]:
+    """Build a password-provider callable for the HPC SSH client.
+
+    Priority order:
+
+    1. ``CX3_PASSWORD`` environment variable.
+    2. ``HPC_PASS=...`` line in ``~/.cx3-credentials`` (chmod 600 file
+       written by the ``hpc-connect`` skill / ``connect.sh`` setup).
+    3. Interactive ``getpass.getpass`` prompt — disabled when
+       ``--non-interactive`` is set, in which case launcher will get an
+       empty password and SSH will fail loudly with a clear auth error.
+    """
+    pw = os.environ.get("CX3_PASSWORD")
+    if pw:
+        return lambda: pw
+
+    cred_path = Path("~/.cx3-credentials").expanduser()
+    if cred_path.exists():
+        for line in cred_path.read_text().splitlines():
+            if line.startswith("HPC_PASS="):
+                value = line.split("=", 1)[1].strip()
+                # Strip a single layer of bash-style quoting (`printf %q` form)
+                if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
+                    value = value[1:-1]
+                return lambda: value
+
+    if non_interactive:
+        return lambda: ""
+    return lambda: getpass.getpass("HPC password: ")
 
 
 @click.group()
@@ -167,7 +202,10 @@ def run_cmd(
         sys.exit(1)
     click.echo(f"Construct resolved locally; submitting {mode} run for {gene} ...")
 
-    launcher = HPCLauncher(config=config)
+    launcher = HPCLauncher(
+        config=config,
+        password_provider=_resolve_hpc_password_provider(non_interactive),
+    )
     db = RunsDB.local_default()
     result = launcher.launch_run(
         gene=gene,

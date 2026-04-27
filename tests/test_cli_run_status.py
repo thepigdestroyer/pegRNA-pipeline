@@ -40,6 +40,37 @@ def test_run_accepts_pe7_mode(monkeypatch, tmp_path: Path):
     assert "Invalid value for '--mode'" not in result.output
 
 
+def test_password_provider_prefers_env(monkeypatch, tmp_path: Path):
+    from pegrna_pipeline.agent.cli import _resolve_hpc_password_provider
+
+    monkeypatch.setenv("CX3_PASSWORD", "from-env")
+    monkeypatch.setenv("HOME", str(tmp_path))
+    assert _resolve_hpc_password_provider(non_interactive=True)() == "from-env"
+
+
+def test_password_provider_falls_back_to_credentials_file(monkeypatch, tmp_path: Path):
+    from pegrna_pipeline.agent.cli import _resolve_hpc_password_provider
+
+    monkeypatch.delenv("CX3_PASSWORD", raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    cred = tmp_path / ".cx3-credentials"
+    cred.write_text("HPC_USER=mj1824\nHPC_PASS='secret with spaces'\n")
+    cred.chmod(0o600)
+    assert (
+        _resolve_hpc_password_provider(non_interactive=True)() == "secret with spaces"
+    )
+
+
+def test_password_provider_returns_empty_in_noninteractive_when_nothing_available(
+    monkeypatch, tmp_path: Path
+):
+    from pegrna_pipeline.agent.cli import _resolve_hpc_password_provider
+
+    monkeypatch.delenv("CX3_PASSWORD", raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    assert _resolve_hpc_password_provider(non_interactive=True)() == ""
+
+
 def test_run_rejects_unknown_mode(monkeypatch, tmp_path: Path):
     monkeypatch.setenv("HOME", str(tmp_path))
     result = CliRunner().invoke(
