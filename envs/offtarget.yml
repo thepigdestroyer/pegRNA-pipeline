@@ -16,6 +16,7 @@ dependencies:
   - r-base>=4.3
   - r-biocmanager
   - r-data.table
+  - r-optparse
   - r-png
   - r-xml
   - r-xml2

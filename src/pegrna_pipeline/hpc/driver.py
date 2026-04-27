@@ -202,29 +202,33 @@ def _extract_winning_guides(
     raise TypeError(f"unsupported result type {type(result).__name__}")
 
 
-# --------------------------------------------------------------- write_reports stub
+# --------------------------------------------------------------- write_reports
 def write_reports(
     *,
     run_dir: Path,
     gene: GeneRecord,
     result: Union[TJPEResult, PAResult, PE7Result],
     offtarget_reports: Sequence[Any],
+    construct_str: str = "",
+    all_evaluated_variants: Optional[Sequence[Any]] = None,
 ) -> Path:
-    """Plan 4 will implement this properly — for now drop a text placeholder.
+    """Delegate to :func:`pegrna_pipeline.hpc.report_writer.write_reports`.
 
-    Returns the path of the primary report file.
+    Returns the path of the primary text report file.
     """
+    from pegrna_pipeline.hpc.report_writer import write_reports as _full_write_reports
+
     reports_dir = run_dir / "reports"
-    reports_dir.mkdir(parents=True, exist_ok=True)
-    base_name = gene.gene_name
-    report_path = reports_dir / f"{base_name}.txt"
-    report_path.write_text(
-        f"pegRNA-pipeline report placeholder (Plan 4 will expand this)\n"
-        f"Gene: {gene.gene_name} ({gene.refseq_accession})\n"
-        f"Result type: {type(result).__name__}\n"
-        f"Off-target reports: {len(offtarget_reports)}\n"
+    paths = _full_write_reports(
+        result=result,
+        gene=gene,
+        construct_str=construct_str,
+        offtarget_reports=list(offtarget_reports),
+        all_evaluated_variants=list(all_evaluated_variants or []),
+        reports_dir=reports_dir,
+        base_name=gene.gene_name,
     )
-    return report_path
+    return paths["txt"]
 
 
 # --------------------------------------------------------------- enumerate helpers
@@ -442,11 +446,21 @@ def run_driver(run_dir: Union[str, Path]) -> Union[TJPEResult, PAResult, PE7Resu
             except Exception as exc:  # pragma: no cover - integration-only
                 print(f"offtarget scoring failed: {exc}", file=sys.stderr)
 
+        # Pull all_evaluated_variants from whichever result type we have
+        # so the gzipped per-variant CSV is populated.
+        all_variants: Sequence[Any] = ()
+        if isinstance(result, (TJPEResult, PE7Result)):
+            all_variants = result.all_evaluated_variants
+        # PAResult doesn't expose a single all-variants list (it has
+        # per-flap rankings); leave empty for now.
+
         write_reports(
             run_dir=run_path,
             gene=cfg.gene,
             result=result,
             offtarget_reports=offtarget_reports,
+            construct_str=cfg.construct_dna,
+            all_evaluated_variants=all_variants,
         )
 
     # Signal success for the PBS wrapper
