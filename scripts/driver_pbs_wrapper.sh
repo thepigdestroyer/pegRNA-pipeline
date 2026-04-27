@@ -20,6 +20,14 @@ if [[ -z "${RUN_DIR:-}" ]]; then
     exit 2
 fi
 
+# Redirect ALL output to $RUN_DIR/driver.log so the laptop launcher's
+# poll loop has a stable, run-local file to grep for DRIVER_DONE.
+# Without this, PBS Pro writes to ~/<scriptname>.o<jobid> and
+# {run_dir}/driver.log never exists, hanging the laptop poll forever.
+exec > "$RUN_DIR/driver.log" 2>&1
+echo "Driver job started at $(date -Iseconds) on $(hostname)"
+echo "RUN_DIR=$RUN_DIR"
+
 module load miniforge/3 || true
 # Imperial CX3's miniforge module only ships a bootstrap; the real conda
 # install lives in ~/miniforge3 (created by setup_hpc.sh).
