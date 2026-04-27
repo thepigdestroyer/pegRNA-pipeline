@@ -28,24 +28,17 @@ def build_pridict_pbs_body(
     The caller wraps this in a :func:`render_pbs_script` call.
     """
     return (
-        (
-            "set -euo pipefail\n"
-            "module load miniforge/3\n"
-            "source activate {env}\n"
-            "cd {install}\n"
-            "python pridict2_pegRNA_design.py batch "
-            "--input-fname {input} --output-dir {output} --nicking --cores {cores}\n"
-            "echo {marker}\n"
-        )
-        .format(
-            env=conda_env,
-            install=pridict_install_path,
-            input=input_csv_path,
-            output=output_dir,
-            cores=cores,
-            marker=PRIDICT2_BATCH_DONE,
-        )
-        .replace("source activate", "conda activate")
+        "set -euo pipefail\n"
+        "module load miniforge/3\n"
+        # Imperial CX3 ships only a miniforge bootstrap; conda lives in
+        # ~/miniforge3 (created by setup_hpc.sh).
+        'source "$HOME/miniforge3/etc/profile.d/conda.sh"\n'
+        f"conda activate {conda_env}\n"
+        f"cd {pridict_install_path}\n"
+        f"python pridict2_pegRNA_design.py batch "
+        f"--input-fname {input_csv_path} --output-dir {output_dir} "
+        f"--nicking --cores {cores}\n"
+        f"echo {PRIDICT2_BATCH_DONE}\n"
     )
 
 

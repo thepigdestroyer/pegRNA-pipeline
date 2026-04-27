@@ -90,6 +90,9 @@ def _build_offtarget_pbs_body(
     return (
         "set -euo pipefail\n"
         "module load miniforge/3\n"
+        # Imperial CX3 ships only a miniforge bootstrap; conda lives in
+        # ~/miniforge3 (created by setup_hpc.sh).
+        'source "$HOME/miniforge3/etc/profile.d/conda.sh"\n'
         f"conda activate {conda_env}\n"
         f"Rscript {rscript_path} "
         f"--guides {guides_csv} "

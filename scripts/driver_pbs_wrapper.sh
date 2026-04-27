@@ -21,8 +21,11 @@ if [[ -z "${RUN_DIR:-}" ]]; then
 fi
 
 module load miniforge/3 || true
+# Imperial CX3's miniforge module only ships a bootstrap; the real conda
+# install lives in ~/miniforge3 (created by setup_hpc.sh).
 # shellcheck disable=SC1091
-source activate pegrna-pipeline 2>/dev/null || conda activate pegrna-pipeline
+source "$HOME/miniforge3/etc/profile.d/conda.sh"
+conda activate pegrna-pipeline
 
 REPO_DIR="${PEGRNA_REPO_DIR:-$HOME/pegRNA-pipeline}"
 cd "$REPO_DIR"
