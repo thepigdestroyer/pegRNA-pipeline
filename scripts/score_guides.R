@@ -84,8 +84,8 @@ count_genome_hits <- function(pattern, bsg, chrs, max_mm) {
   for (chr in chrs) {
     seq <- bsg[[chr]]
     for (mm in 0:max_mm) {
-      hits_fw <- countPattern(pattern, seq, max.mismatch = mm, fixed = FALSE)
-      hits_rv <- countPattern(rc, seq, max.mismatch = mm, fixed = FALSE)
+      hits_fw <- countPattern(pattern, seq, max.mismatch = mm, fixed = TRUE)
+      hits_rv <- countPattern(rc, seq, max.mismatch = mm, fixed = TRUE)
       out[mm + 1] <- out[mm + 1] + hits_fw + hits_rv
     }
   }
