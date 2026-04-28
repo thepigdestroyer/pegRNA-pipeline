@@ -181,7 +181,7 @@ def poll_until_done(
     elapsed = 0
     while True:
         ids = " ".join(j.scheduler_id for j in job_list if j.scheduler_id)
-        out, _err, _rc = ssh.exec(f"qstat {ids}")
+        out, _err, _rc = ssh.exec(f"/opt/pbs/bin/qstat {ids}")
         pending = 0
         for job in job_list:
             prefix = job.scheduler_id.split(".")[0]
@@ -229,7 +229,7 @@ def retry_with_doubled_resources(
 
 def _default_active_count_fn(ssh) -> int:
     """Return the number of this user's pending+running jobs."""
-    out, _err, _rc = ssh.exec("qstat -u $USER")
+    out, _err, _rc = ssh.exec("/opt/pbs/bin/qstat -u $USER")
     # Very simple count: any non-header line that contains an R or Q state.
     count = 0
     for line in out.splitlines():
