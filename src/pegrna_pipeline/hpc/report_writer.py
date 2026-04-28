@@ -135,17 +135,41 @@ def write_pe7_txt_report(
     lines.append(f"Stop codon:     {gene.stop_codon} at mRNA position {gene.stop_codon_start}")
     lines.append(f"Construct:      {construct_str}")
     lines.append(f"Insert length:  {len(result.full_insert_dna)} bp")
-    lines.append(
-        f"PE2 {result.pegrna_pe2_cell_line.upper()}:    " f"{result.pegrna_pe2_score:.2f}%"
-    )
+    cl = result.pegrna_pe2_cell_line.upper() or "K562"
+    lines.append(f"PE2 {cl}:    {result.pegrna_pe2_score:.2f}%")
     lines.append(f"ngRNA distance: {result.ngrna_distance_to_edit:+d} bp from edit")
     lines.append(
         f"Joint PE3:      {result.joint_pe3_score:.3f} "
         f"(PE2 × DeepCas9 / 100; informational, not used for ranking)"
     )
+    lines.append(f"Total ranked pairs: {len(result.top_pairs)}")
     lines.append("")
+
+    # ---------------- TOP-N RANKED PAIRS TABLE ----------------------------
+    if result.top_pairs:
+        lines.append(_BAR)
+        lines.append(f"TOP {len(result.top_pairs)} RANKED pegRNA + ngRNA PAIRS")
+        lines.append(_BAR)
+        lines.append("(see CSV report for full per-pair sequences)")
+        lines.append("")
+        header = (
+            f"{'rank':>4}  {'pegrna_spacer':<22}  {'strand':>6}  "
+            f"{'PE2_'+cl[:5]:>10}  {'ngrna_spacer':<22}  {'dist':>5}  "
+            f"{'DeepCas9':>9}  {'jointPE3':>9}"
+        )
+        lines.append(header)
+        lines.append("-" * len(header))
+        for p in result.top_pairs:
+            lines.append(
+                f"{p.rank:>4}  {p.spacer:<22}  {p.pegrna_strand:>6}  "
+                f"{p.pegrna_pe2_score:>10.2f}  {p.ngrna_spacer:<22}  "
+                f"{p.ngrna_distance_to_edit:>+5d}  "
+                f"{p.ngrna_deepcas9_score:>9.2f}  {p.joint_pe3_score:>9.3f}"
+            )
+        lines.append("")
+
     lines.append(_BAR)
-    lines.append("WINNING pegRNA + ngRNA")
+    lines.append("RANK 1 — pegRNA + ngRNA DETAIL")
     lines.append(_BAR)
     lines.append("")
     lines.append(f"FULL pegRNA OLIGO ({len(result.pegRNA_full)} nt):")
@@ -168,7 +192,7 @@ def write_pe7_txt_report(
             lines.append(_wrap(f"Notes: {ann.design_notes}", indent="  "))
     lines.append("")
     lines.append(_DASH)
-    lines.append("OFF-TARGET ANALYSIS")
+    lines.append("OFF-TARGET ANALYSIS (every unique spacer across all ranked pairs)")
     lines.append(_DASH)
     _append_offtarget_block(lines, offtarget_reports)
     lines.append("")
@@ -261,17 +285,21 @@ def write_pa_txt_report(
 
 
 def _append_offtarget_block(lines: List[str], reports: List[OffTargetReport]) -> None:
+    from pegrna_pipeline.hpc.offtarget_scorer import _fmt_float, _fmt_int
+
     if not reports:
         lines.append("(no off-target reports generated)")
         return
     for r in reports:
         lines.append("")
         lines.append(f"{r.guide_id}: spacer 5'-{r.spacer}-3'")
-        lines.append(f"  DeepSpCas9:    {r.deepspcas9:.3f}")
-        lines.append(f"  DeepHF:        {r.deephf:.3f}")
-        lines.append(f"  CFD spec:      {r.cfd_specificity:.3f}")
+        lines.append(f"  DeepSpCas9:    {_fmt_float(r.deepspcas9)}")
+        lines.append(f"  DeepHF:        {_fmt_float(r.deephf)}")
+        lines.append(f"  CFD spec:      {_fmt_float(r.cfd_specificity)}")
         lines.append(
-            f"  0/1/2/3 mismatch hits: " f"{r.mm0_count}/{r.mm1_count}/{r.mm2_count}/{r.mm3_count}"
+            "  0/1/2/3 mismatch hits: "
+            f"{_fmt_int(r.mm0_count)}/{_fmt_int(r.mm1_count)}/"
+            f"{_fmt_int(r.mm2_count)}/{_fmt_int(r.mm3_count)}"
         )
 
 
@@ -355,34 +383,67 @@ PE7_CSV_COLUMNS = [
 
 
 def write_pe7_csv(result: PE7Result, output_path: Path) -> None:
+    """Write one row per ranked (pegRNA, ngRNA) pair in ``result.top_pairs``.
+
+    Falls back to a single rank=1 row built from the legacy top-level
+    fields when ``top_pairs`` is empty (e.g. older callers that haven't
+    populated it yet).
+    """
+    pairs = list(result.top_pairs)
+    if not pairs and result.spacer:
+        # Synthesize a single-row pair from the legacy top-level fields.
+        from pegrna_pipeline.hpc.pe7_workflow import PE7DesignPair
+
+        pairs = [
+            PE7DesignPair(
+                rank=1,
+                variant_sequence_name=getattr(result.winning_variant, "sequence_name", ""),
+                pegRNA_full=result.pegRNA_full,
+                spacer=result.spacer,
+                pbs=result.pbs,
+                rt=result.rt,
+                pegrna_strand=result.pegrna_strand,
+                pegrna_pe2_score=result.pegrna_pe2_score,
+                pegrna_pe2_cell_line=result.pegrna_pe2_cell_line,
+                ngrna_spacer=result.ngrna_spacer,
+                ngrna_distance_to_edit=result.ngrna_distance_to_edit,
+                ngrna_strand=result.ngrna_strand,
+                ngrna_deepcas9_score=result.ngrna_deepcas9_score,
+                ngrna_nick_in_mrna=result.ngrna_nick_in_mrna,
+                joint_pe3_score=result.joint_pe3_score,
+            )
+        ]
+    dna = result.full_insert_dna
+    gc = (dna.count("G") + dna.count("C")) / max(len(dna), 1)
+    cytosines = dna.count("C")
     with output_path.open("w", newline="") as fh:
         writer = csv.DictWriter(fh, fieldnames=PE7_CSV_COLUMNS)
         writer.writeheader()
-        dna = result.full_insert_dna
-        gc = (dna.count("G") + dna.count("C")) / max(len(dna), 1)
-        writer.writerow(
-            {
-                "rank": 1,
-                "variant_sequence_name": getattr(result.winning_variant, "sequence_name", ""),
-                "full_insert_dna": result.full_insert_dna,
-                "pegrna_spacer": result.spacer,
-                "pegrna_pbs": result.pbs,
-                "pegrna_rt": result.rt,
-                "pegrna_strand": result.pegrna_strand,
-                "pegRNA_full": result.pegRNA_full,
-                "ngrna_spacer": result.ngrna_spacer,
-                "ngrna_distance_to_edit": result.ngrna_distance_to_edit,
-                "ngrna_strand": result.ngrna_strand,
-                "ngrna_deepcas9_score": f"{result.ngrna_deepcas9_score:.4f}",
-                "pegrna_pe2_score": f"{result.pegrna_pe2_score:.4f}",
-                "pegrna_pe2_cell_line": result.pegrna_pe2_cell_line,
-                "joint_pe3_score": f"{result.joint_pe3_score:.4f}",
-                "edit_position_in_mrna": result.edit_position_in_mrna,
-                "ngrna_nick_in_mrna": result.ngrna_nick_in_mrna,
-                "cytosine_count": dna.count("C"),
-                "gc_content": f"{gc:.4f}",
-            }
-        )
+        for p in pairs:
+            writer.writerow(
+                {
+                    "rank": p.rank,
+                    "variant_sequence_name": p.variant_sequence_name,
+                    "full_insert_dna": result.full_insert_dna,
+                    "pegrna_spacer": p.spacer,
+                    "pegrna_pbs": p.pbs,
+                    "pegrna_rt": p.rt,
+                    "pegrna_strand": p.pegrna_strand,
+                    "pegRNA_full": p.pegRNA_full,
+                    "ngrna_spacer": p.ngrna_spacer,
+                    "ngrna_distance_to_edit": p.ngrna_distance_to_edit,
+                    "ngrna_strand": p.ngrna_strand,
+                    "ngrna_deepcas9_score": f"{p.ngrna_deepcas9_score:.4f}",
+                    "pegrna_pe2_score": f"{p.pegrna_pe2_score:.4f}",
+                    "pegrna_pe2_cell_line": p.pegrna_pe2_cell_line,
+                    "joint_pe3_score": f"{p.joint_pe3_score:.4f}",
+                    "edit_position_in_mrna": result.edit_position_in_mrna,
+                    "ngrna_nick_in_mrna": p.ngrna_nick_in_mrna,
+                    "cytosine_count": cytosines,
+                    "gc_content": f"{gc:.4f}",
+                }
+            )
+    return None
 
 
 PA_CSV_COLUMNS = [
@@ -464,6 +525,8 @@ OFFTARGET_CSV_COLUMNS = [
 
 
 def write_offtarget_csv(reports: List[OffTargetReport], output_path: Path) -> None:
+    from pegrna_pipeline.hpc.offtarget_scorer import _fmt_float, _fmt_int
+
     with output_path.open("w", newline="") as fh:
         writer = csv.DictWriter(fh, fieldnames=OFFTARGET_CSV_COLUMNS)
         writer.writeheader()
@@ -472,13 +535,13 @@ def write_offtarget_csv(reports: List[OffTargetReport], output_path: Path) -> No
                 {
                     "guide_id": r.guide_id,
                     "spacer": r.spacer,
-                    "deepspcas9": f"{r.deepspcas9:.4f}",
-                    "deephf": f"{r.deephf:.4f}",
-                    "cfd_specificity": f"{r.cfd_specificity:.4f}",
-                    "mm0_count": r.mm0_count,
-                    "mm1_count": r.mm1_count,
-                    "mm2_count": r.mm2_count,
-                    "mm3_count": r.mm3_count,
+                    "deepspcas9": _fmt_float(r.deepspcas9, width=4),
+                    "deephf": _fmt_float(r.deephf, width=4),
+                    "cfd_specificity": _fmt_float(r.cfd_specificity, width=4),
+                    "mm0_count": _fmt_int(r.mm0_count),
+                    "mm1_count": _fmt_int(r.mm1_count),
+                    "mm2_count": _fmt_int(r.mm2_count),
+                    "mm3_count": _fmt_int(r.mm3_count),
                 }
             )
 

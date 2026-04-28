@@ -46,9 +46,11 @@ def test_parse_offtarget_tsv_handles_na():
     )
     reports = parse_offtarget_tsv(tsv)
     assert len(reports) == 1
-    # NA values are materialised as 0.0 (NaN would also be acceptable;
-    # our convention is "treat NA as missing -> 0.0" for now).
-    assert reports[0].deepspcas9 == 0.0
+    # NA values now materialise as None so callers can distinguish
+    # "unscanned / unscoreable" from a real zero.
+    assert reports[0].deepspcas9 is None
+    assert reports[0].deephf is None
+    assert reports[0].cfd_specificity is None
 
 
 class FakeSSH:

@@ -11,47 +11,66 @@ import csv
 import io
 import tempfile
 from dataclasses import dataclass
-from typing import List, Sequence, Tuple
+from typing import List, Optional, Sequence, Tuple
 
 OFFTARGET_SCORING_DONE = "OFFTARGET_SCORING_DONE"
 
 
 @dataclass(frozen=True)
 class OffTargetReport:
-    """One row of :file:`offtarget_scores.tsv`."""
+    """One row of :file:`offtarget_scores.tsv`.
+
+    On-target score columns (deepspcas9, deephf, cfd_specificity) and
+    mismatch counts are ``Optional[float]`` / ``Optional[int]`` so a
+    missing-score / unscanned guide can be distinguished from a real
+    zero. Renderers print ``"NA"`` for ``None``.
+    """
 
     guide_id: str
     spacer: str
-    deepspcas9: float
-    deephf: float
-    cfd_specificity: float
-    mm0_count: int
-    mm1_count: int
-    mm2_count: int
-    mm3_count: int
+    deepspcas9: Optional[float]
+    deephf: Optional[float]
+    cfd_specificity: Optional[float]
+    mm0_count: Optional[int]
+    mm1_count: Optional[int]
+    mm2_count: Optional[int]
+    mm3_count: Optional[int]
 
 
-def _to_float(value: str) -> float:
-    """Parse a float; treat empty / NA / NaN as 0.0."""
+def _to_float(value: str) -> Optional[float]:
+    """Parse a float; ``None`` for empty / NA / NaN / NULL / unparseable."""
     if value is None:
-        return 0.0
+        return None
     v = value.strip()
     if v == "" or v.upper() in {"NA", "NAN", "NULL"}:
-        return 0.0
+        return None
     try:
         return float(v)
     except ValueError:
-        return 0.0
+        return None
 
 
-def _to_int(value: str) -> int:
+def _to_int(value: str) -> Optional[int]:
+    """Parse an int; ``None`` for empty / NA / NaN / NULL / unparseable."""
     v = (value or "").strip()
     if v == "" or v.upper() in {"NA", "NAN", "NULL"}:
-        return 0
+        return None
     try:
         return int(v)
     except ValueError:
-        return 0
+        return None
+
+
+def _fmt_float(value: Optional[float], width: int = 3) -> str:
+    """``"%.3f" % value`` or ``"NA"`` for None."""
+    if value is None:
+        return "NA"
+    return f"{value:.{width}f}"
+
+
+def _fmt_int(value: Optional[int]) -> str:
+    """``str(value)`` or ``"NA"`` for None."""
+    return "NA" if value is None else str(value)
 
 
 def parse_offtarget_tsv(tsv_text: str) -> List[OffTargetReport]:
@@ -123,11 +142,11 @@ def submit_offtarget_job(
     remote_run_dir: str,
     rscript_path: str,
     conda_env: str = "pegrna-ngrna",
-    nuclease: str = "SpCas9_H840A",
+    nuclease: str = "SpCas9",
     scores: Tuple[str, ...] = ("DeepSpCas9", "DeepHF", "CFD"),
     genome: str = "GRCh38",
     max_mismatches: int = 3,
-    walltime_hours: int = 4,
+    walltime_hours: int = 6,
 ) -> List[OffTargetReport]:
     """Submit the off-target scorer, wait for it, and return parsed reports."""
     from pegrna_pipeline.hpc.pbs import (

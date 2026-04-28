@@ -176,29 +176,41 @@ def _build_variant_scores_from_batch(
 def _extract_winning_guides(
     result: Union[TJPEResult, PAResult, PE7Result],
 ) -> List[Dict[str, str]]:
-    """Return a list of ``{"guide_id", "spacer"}`` dicts for off-target scoring."""
+    """Return ``{"guide_id", "spacer"}`` dicts for off-target scoring.
+
+    For PE7 / TJPE we collect the *deduplicated* set of pegRNA + ngRNA
+    spacers across every entry in ``top_pairs`` (falling back to the
+    rank-1 fields when ``top_pairs`` is empty). guide_id is suffixed
+    with the rank where the spacer first appears so the off-target TSV
+    rows can be mapped back to specific designs.
+    """
+    seen: Dict[str, str] = {}  # spacer -> guide_id
     out: List[Dict[str, str]] = []
-    if isinstance(result, (TJPEResult, PE7Result)):
-        if result.spacer:
-            out.append({"guide_id": "pegrna_spacer", "spacer": result.spacer})
-        if result.ngrna_spacer:
-            out.append({"guide_id": "ngrna_spacer", "spacer": result.ngrna_spacer})
+
+    def _add(label: str, spacer: str) -> None:
+        if not spacer or spacer in seen:
+            return
+        seen[spacer] = label
+        out.append({"guide_id": label, "spacer": spacer})
+
+    if isinstance(result, PE7Result):
+        if result.top_pairs:
+            for p in result.top_pairs:
+                _add(f"pegrna_spacer_rank{p.rank}", p.spacer)
+                _add(f"ngrna_spacer_rank{p.rank}", p.ngrna_spacer)
+        else:
+            _add("pegrna_spacer", result.spacer)
+            _add("ngrna_spacer", result.ngrna_spacer)
+        return out
+    if isinstance(result, TJPEResult):
+        _add("pegrna_spacer", result.spacer)
+        _add("ngrna_spacer", result.ngrna_spacer)
         return out
     if isinstance(result, PAResult):
         if result.winning_pair is None:
             return []
-        out.append(
-            {
-                "guide_id": "upstream_pegrna_spacer",
-                "spacer": result.winning_pair.upstream.spacer,
-            }
-        )
-        out.append(
-            {
-                "guide_id": "downstream_pegrna_spacer",
-                "spacer": result.winning_pair.downstream.spacer,
-            }
-        )
+        _add("upstream_pegrna_spacer", result.winning_pair.upstream.spacer)
+        _add("downstream_pegrna_spacer", result.winning_pair.downstream.spacer)
         return out
     raise TypeError(f"unsupported result type {type(result).__name__}")
 

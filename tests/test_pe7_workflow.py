@@ -198,9 +198,13 @@ def test_run_pe7_with_no_variants_returns_empty_fields():
     assert result.edit_position_in_mrna == 1000
 
 
-def test_run_pe7_with_no_usable_ngrna_returns_pegrna_only():
-    """All ngRNAs fail the distance window — result keeps the pegRNA, drops
-    ngRNA fields."""
+def test_run_pe7_with_no_usable_ngrna_returns_empty_pairs():
+    """All ngRNAs fail the PE3 distance window — no usable PE7 pair exists.
+
+    Under top-N semantics, a PE7 design needs both a pegRNA AND a valid
+    PE3 ngRNA. So this case yields an empty result (top_pairs == []),
+    not a pegRNA-only one.
+    """
     pegs = [_peg(score=0.5)]
     ngs = [_ng(distance=10, score=0.9)]  # below the 40 bp PE3 floor
     result = run_pe7_workflow(
@@ -208,7 +212,8 @@ def test_run_pe7_with_no_usable_ngrna_returns_pegrna_only():
         insert_full_dna="ATG",
         variant_scores=[_variant(pegs=pegs, ngs=ngs)],
     )
-    assert result.spacer == pegs[0].spacer
-    assert result.pegrna_pe2_score == pytest.approx(0.5)
+    assert result.top_pairs == []
+    assert result.spacer == ""
     assert result.ngrna_spacer == ""
+    assert result.pegrna_pe2_score == 0.0
     assert result.ngrna_deepcas9_score == 0.0

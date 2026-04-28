@@ -41,6 +41,11 @@ _NGRNA_REQUIRED = [
     "DeepCas9score",
 ]
 
+# PRIDICT 2.0's nicking-guides CSV currently spells the PAM-disrupt
+# column ``Nicking-PAMdisrupt``; pre-2.0 builds used ``PAM_disrupted``.
+# Look for either, in priority order.
+_PAM_DISRUPT_COLS = ("Nicking-PAMdisrupt", "PAM_disrupted")
+
 
 PathLike = Union[str, Path]
 
@@ -52,12 +57,27 @@ def _require_columns(df: pd.DataFrame, required: List[str], source: PathLike) ->
 
 
 def _coerce_bool(val: object) -> bool:
+    """Map a PRIDICT 2.0 boolean-ish value to Python ``bool``.
+
+    PRIDICT emits these flags as strings ("PE3b" / "No_PE3b" for PE3b,
+    "Nicking_PAM_disrupt" / "No_nicking_PAM_disrupt" for the PAM-disrupt
+    flag) rather than canonical booleans, so we map any value with a
+    leading ``no_`` (case-insensitive) to ``False`` and any non-empty
+    other string to ``True``.
+    """
     if isinstance(val, bool):
         return val
     if isinstance(val, (int, float)) and not isinstance(val, bool):
         return bool(val)
     s = str(val).strip().lower()
-    return s in {"true", "1", "yes", "t", "y"}
+    if not s or s in {"false", "0", "no", "f", "n", "na", "nan"}:
+        return False
+    if s.startswith("no_"):
+        return False
+    if s in {"true", "1", "yes", "t", "y"}:
+        return True
+    # Anything else non-empty (e.g. "PE3b", "Nicking_PAM_disrupt") → True.
+    return True
 
 
 # ---------------------------------------------------------------- parsers
@@ -77,7 +97,13 @@ def parse_pegrna_csv(path: PathLike) -> List[PegRNADesign]:
 
     # Optional columns — fall back to sentinel values if absent.
     has_k562 = "PRIDICT2_0_editing_Score_deep_K562" in df.columns
-    has_full = "pegRNA_full" in df.columns
+    # PRIDICT 2.0 emits the assembled oligo as ``pegRNA`` (column 32 in
+    # the v2.0 output schema). Older builds used ``Scaffold_Optimized``
+    # or ``pegRNA_full`` — fall back through the chain.
+    full_col = next(
+        (c for c in ("pegRNA", "Scaffold_Optimized", "pegRNA_full") if c in df.columns),
+        None,
+    )
 
     designs: List[PegRNADesign] = []
     for _, row in df.iterrows():
@@ -93,7 +119,7 @@ def parse_pegrna_csv(path: PathLike) -> List[PegRNADesign]:
                 editing_position=int(row["Editing_Position"]),
                 pe2_hek293t=float(row["PRIDICT2_0_editing_Score_deep_HEK"]),
                 pe2_k562=float(row["PRIDICT2_0_editing_Score_deep_K562"]) if has_k562 else 0.0,
-                pegrna_full=str(row["pegRNA_full"]) if has_full else "",
+                pegrna_full=str(row[full_col]) if full_col else "",
             )
         )
     return designs
@@ -112,7 +138,7 @@ def parse_ngrna_csv(path: PathLike) -> List[NgRNADesign]:
     _require_columns(df, _NGRNA_REQUIRED, path)
 
     has_pe3b = "PE3b" in df.columns
-    has_pam_disrupt = "PAM_disrupted" in df.columns
+    pam_col = next((c for c in _PAM_DISRUPT_COLS if c in df.columns), None)
 
     designs: List[NgRNADesign] = []
     for _, row in df.iterrows():
@@ -123,7 +149,7 @@ def parse_ngrna_csv(path: PathLike) -> List[NgRNADesign]:
                 target_strand=str(row["Target_Strand"]),  # "Fw" or "Rv"
                 deepcas9_score=float(row["DeepCas9score"]),
                 pe3b=_coerce_bool(row["PE3b"]) if has_pe3b else False,
-                pam_disrupt=_coerce_bool(row["PAM_disrupted"]) if has_pam_disrupt else False,
+                pam_disrupt=_coerce_bool(row[pam_col]) if pam_col else False,
             )
         )
     return designs

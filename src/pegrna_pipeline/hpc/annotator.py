@@ -124,9 +124,10 @@ def annotate_tjpe_result(result: TJPEResult, gene: GeneRecord) -> List[Component
             sequence=result.ngrna_spacer,
             length_bp=len(result.ngrna_spacer),
             functional_role=(
-                f"20-nt nicking-sgRNA spacer. Directs Cas9-H840A to nick the "
-                f"opposite strand {abs(result.ngrna_distance_to_edit)} bp from "
-                f"the edit (signed {result.ngrna_distance_to_edit:+d})."
+                f"{len(result.ngrna_spacer)}-nt nicking-sgRNA spacer. "
+                f"Directs Cas9-H840A to nick the opposite strand "
+                f"{abs(result.ngrna_distance_to_edit)} bp from the edit "
+                f"(signed {result.ngrna_distance_to_edit:+d})."
             ),
             source=ComponentSource.PRIDICT2,
             design_notes=f"DeepCas9 score = {result.ngrna_deepcas9_score:.2f}",
@@ -202,9 +203,9 @@ def annotate_pe7_result(result: PE7Result, gene: GeneRecord) -> List[ComponentAn
             sequence=result.ngrna_spacer,
             length_bp=len(result.ngrna_spacer),
             functional_role=(
-                f"20-nt nicking-sgRNA spacer. Directs Cas9-H840A to nick the "
-                f"opposite ({result.ngrna_strand}) strand "
-                f"{abs(result.ngrna_distance_to_edit)} bp from the edit "
+                f"{len(result.ngrna_spacer)}-nt nicking-sgRNA spacer. "
+                f"Directs Cas9-H840A to nick the opposite ({result.ngrna_strand}) "
+                f"strand {abs(result.ngrna_distance_to_edit)} bp from the edit "
                 f"(signed {result.ngrna_distance_to_edit:+d}). Drives PE3-style "
                 f"repair bias."
             ),
