@@ -75,6 +75,10 @@ def write_tjpe_txt_report(
         f"PE2 {result.pegrna_pe2_cell_line.upper()}:    " f"{result.pegrna_pe2_score:.2f}%"
     )
     lines.append(f"ngRNA distance: {result.ngrna_distance_to_edit:+d} bp from edit")
+    lines.append(
+        f"Joint PE3:      {result.joint_pe3_score:.3f} "
+        f"(PE2 × DeepCas9 / 100; informational, not used for ranking)"
+    )
     lines.append("")
     lines.append(_BAR)
     lines.append("WINNING TJ-pegRNA + ngRNA")
@@ -135,6 +139,10 @@ def write_pe7_txt_report(
         f"PE2 {result.pegrna_pe2_cell_line.upper()}:    " f"{result.pegrna_pe2_score:.2f}%"
     )
     lines.append(f"ngRNA distance: {result.ngrna_distance_to_edit:+d} bp from edit")
+    lines.append(
+        f"Joint PE3:      {result.joint_pe3_score:.3f} "
+        f"(PE2 × DeepCas9 / 100; informational, not used for ranking)"
+    )
     lines.append("")
     lines.append(_BAR)
     lines.append("WINNING pegRNA + ngRNA")
@@ -284,6 +292,7 @@ TJPE_CSV_COLUMNS = [
     "ngrna_deepcas9_score",
     "pegrna_pe2_score",
     "pegrna_pe2_cell_line",
+    "joint_pe3_score",
     "edit_position_in_mrna",
     "ngrna_nick_in_mrna",
     "cytosine_count",
@@ -313,6 +322,7 @@ def write_tjpe_csv(result: TJPEResult, output_path: Path) -> None:
                 "ngrna_deepcas9_score": f"{result.ngrna_deepcas9_score:.4f}",
                 "pegrna_pe2_score": f"{result.pegrna_pe2_score:.4f}",
                 "pegrna_pe2_cell_line": result.pegrna_pe2_cell_line,
+                "joint_pe3_score": f"{result.joint_pe3_score:.4f}",
                 "edit_position_in_mrna": result.edit_position_in_mrna,
                 "ngrna_nick_in_mrna": result.ngrna_nick_in_mrna,
                 "cytosine_count": dna.count("C"),
@@ -336,6 +346,7 @@ PE7_CSV_COLUMNS = [
     "ngrna_deepcas9_score",
     "pegrna_pe2_score",
     "pegrna_pe2_cell_line",
+    "joint_pe3_score",
     "edit_position_in_mrna",
     "ngrna_nick_in_mrna",
     "cytosine_count",
@@ -365,6 +376,7 @@ def write_pe7_csv(result: PE7Result, output_path: Path) -> None:
                 "ngrna_deepcas9_score": f"{result.ngrna_deepcas9_score:.4f}",
                 "pegrna_pe2_score": f"{result.pegrna_pe2_score:.4f}",
                 "pegrna_pe2_cell_line": result.pegrna_pe2_cell_line,
+                "joint_pe3_score": f"{result.joint_pe3_score:.4f}",
                 "edit_position_in_mrna": result.edit_position_in_mrna,
                 "ngrna_nick_in_mrna": result.ngrna_nick_in_mrna,
                 "cytosine_count": dna.count("C"),

@@ -64,6 +64,9 @@ class PE7Result:
     ngrna_deepcas9_score: float
     edit_position_in_mrna: int
     ngrna_nick_in_mrna: int
+    # Informational PE3 composite — pegRNA PE2 score × ngRNA DeepCas9 score
+    # / 100. Reported for transparency; NOT used for ranking.
+    joint_pe3_score: float = 0.0
     all_evaluated_variants: List[VariantScore] = field(default_factory=list)
 
 
@@ -203,6 +206,7 @@ def run_pe7_workflow(
         ngrna_deepcas9_score=best_ng.deepcas9_score,
         edit_position_in_mrna=edit_position_in_mrna,
         ngrna_nick_in_mrna=ngrna_nick_in_mrna,
+        joint_pe3_score=pe2_value * float(best_ng.deepcas9_score) / 100.0,
         all_evaluated_variants=variants,
     )
 
