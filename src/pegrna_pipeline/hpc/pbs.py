@@ -181,7 +181,18 @@ def poll_until_done(
     elapsed = 0
     while True:
         ids = " ".join(j.scheduler_id for j in job_list if j.scheduler_id)
-        out, _err, _rc = ssh.exec(f"/opt/pbs/bin/qstat {ids}")
+        out, _err, rc = ssh.exec(f"/opt/pbs/bin/qstat {ids}")
+        # If qstat itself fails (PBS server temporarily unreachable, rc != 0
+        # and stdout empty), skip state updates for this iteration so we don't
+        # incorrectly mark running jobs as finished.
+        if rc != 0 and not out.strip():
+            if elapsed >= max_seconds:
+                raise TimeoutError(
+                    f"poll_until_done: qstat unreachable and {max_hours}h elapsed"
+                )
+            sleep_fn(interval_seconds)
+            elapsed += interval_seconds
+            continue
         pending = 0
         for job in job_list:
             prefix = job.scheduler_id.split(".")[0]

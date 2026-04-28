@@ -100,6 +100,7 @@ def _build_offtarget_pbs_body(
     rscript_path: str,
     guides_csv: str,
     output_tsv: str,
+    done_flag: str,
     nuclease: str,
     scores: Sequence[str],
     genome: str,
@@ -120,7 +121,10 @@ def _build_offtarget_pbs_body(
         f"--genome {genome} "
         f"--max-mismatches {max_mismatches} "
         f"--output {output_tsv}\n"
-        f"echo {OFFTARGET_SCORING_DONE}\n"
+        # Write sentinel to shared RDS filesystem (not PBS log, which is staged
+        # asynchronously and may not exist when the driver checks immediately
+        # after poll_until_done returns).
+        f"touch {done_flag}\n"
     )
 
 
@@ -159,6 +163,10 @@ def submit_offtarget_job(
 
     guides_csv = f"{remote_run_dir}/guides.csv"
     output_tsv = f"{remote_run_dir}/offtarget_scores.tsv"
+    # Sentinel written to shared RDS filesystem by the PBS job body.
+    # Checking this avoids the PBS log staging race (PBS Pro stages stdout
+    # asynchronously; the file may not exist immediately after qstat shows done).
+    done_flag = f"{remote_run_dir}/OFFTARGET_DONE"
     log_path = f"{remote_run_dir}/offtarget_pbs.log"
     script_path = f"{remote_run_dir}/offtarget.pbs"
 
@@ -169,6 +177,7 @@ def submit_offtarget_job(
         rscript_path=rscript_path,
         guides_csv=guides_csv,
         output_tsv=output_tsv,
+        done_flag=done_flag,
         nuclease=nuclease,
         scores=scores,
         genome=genome,
@@ -190,14 +199,11 @@ def submit_offtarget_job(
     qsub(ssh, job)
     poll_until_done(ssh, [job], max_hours=walltime_hours)
 
-    # Verify success
-    out, _err, _rc = ssh.exec(f"grep -c {OFFTARGET_SCORING_DONE} {log_path} || true")
-    try:
-        hits = int(out.strip().splitlines()[0]) if out.strip() else 0
-    except ValueError:
-        hits = 0
-    if hits == 0:
-        raise RuntimeError(f"off-target job did not emit {OFFTARGET_SCORING_DONE}")
+    # Verify success via the RDS sentinel file (written by the PBS job body
+    # immediately after the R script finishes, on the shared filesystem).
+    out, _err, _rc = ssh.exec(f"test -f {done_flag} && echo 1 || echo 0")
+    if out.strip() != "1":
+        raise RuntimeError(f"off-target job did not write sentinel {done_flag}")
 
     # Download the TSV
     with tempfile.NamedTemporaryFile(mode="r", suffix=".tsv", delete=False) as tmp:
