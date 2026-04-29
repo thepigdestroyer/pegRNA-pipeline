@@ -18,10 +18,15 @@ from pegrna_pipeline.hpc.data_types import GeneRecord
 from pegrna_pipeline.hpc.offtarget_scorer import OffTargetReport
 from pegrna_pipeline.hpc.pa_workflow import PAResult
 from pegrna_pipeline.hpc.pe7_workflow import PE7Result
-from pegrna_pipeline.hpc.tjpe_workflow import TJPEResult
+from pegrna_pipeline.hpc.tjpe_workflow import STANDARD_SGRNA_SCAFFOLD, TJPEResult
 
 _BAR = "=" * 72
 _DASH = "-" * 72
+
+
+def _assemble_ngrna(spacer: str) -> str:
+    """Return the full, orderable ngRNA oligo: spacer + standard scaffold."""
+    return spacer + STANDARD_SGRNA_SCAFFOLD
 
 _CAVEATS = """\
 - PRIDICT 2.0 is validated for inserts <= 15 bp; our probes (TJ-PE 24 bp,
@@ -84,12 +89,12 @@ def write_tjpe_txt_report(
     lines.append("WINNING TJ-pegRNA + ngRNA")
     lines.append(_BAR)
     lines.append("")
+    ngrna_full = _assemble_ngrna(result.ngrna_spacer)
     lines.append(f"FULL TJ-pegRNA OLIGO ({len(result.tjpe_pegRNA_sequence)} nt):")
     lines.append(_wrap(result.tjpe_pegRNA_sequence))
     lines.append("")
-    lines.append(
-        f"FULL ngRNA (spacer only, append standard scaffold): " f"5'-{result.ngrna_spacer}-3'"
-    )
+    lines.append(f"FULL ngRNA OLIGO ({len(ngrna_full)} nt):")
+    lines.append(_wrap(ngrna_full))
     lines.append("")
     lines.append(_DASH)
     lines.append("COMPONENT BREAKDOWN")
@@ -150,7 +155,6 @@ def write_pe7_txt_report(
         lines.append(_BAR)
         lines.append(f"TOP {len(result.top_pairs)} RANKED pegRNA + ngRNA PAIRS")
         lines.append(_BAR)
-        lines.append("(see CSV report for full per-pair sequences)")
         lines.append("")
         header = (
             f"{'rank':>4}  {'pegrna_spacer':<22}  {'strand':>6}  "
@@ -167,17 +171,34 @@ def write_pe7_txt_report(
                 f"{p.ngrna_deepcas9_score:>9.2f}  {p.joint_pe3_score:>9.3f}"
             )
         lines.append("")
+        lines.append(_BAR)
+        lines.append("ORDERABLE SEQUENCES — ALL RANKED PAIRS")
+        lines.append(_BAR)
+        lines.append("Copy-paste directly into synthesis order form.")
+        lines.append("")
+        for p in result.top_pairs:
+            ngrna_full = _assemble_ngrna(p.ngrna_spacer)
+            lines.append(_DASH)
+            lines.append(
+                f"RANK {p.rank}  |  pegRNA PE2={p.pegrna_pe2_score:.2f}%  "
+                f"ngRNA dist={p.ngrna_distance_to_edit:+d} bp  "
+                f"DeepCas9={p.ngrna_deepcas9_score:.2f}"
+            )
+            lines.append(f"  pegRNA ({len(p.pegRNA_full)} nt):  {p.pegRNA_full}")
+            lines.append(f"  ngRNA  ({len(ngrna_full)} nt):  {ngrna_full}")
+        lines.append(_DASH)
+        lines.append("")
 
     lines.append(_BAR)
     lines.append("RANK 1 — pegRNA + ngRNA DETAIL")
     lines.append(_BAR)
     lines.append("")
+    ngrna_full_r1 = _assemble_ngrna(result.ngrna_spacer)
     lines.append(f"FULL pegRNA OLIGO ({len(result.pegRNA_full)} nt):")
     lines.append(_wrap(result.pegRNA_full or "<not assembled>"))
     lines.append("")
-    lines.append(
-        f"FULL ngRNA (spacer only, append standard scaffold): " f"5'-{result.ngrna_spacer}-3'"
-    )
+    lines.append(f"FULL ngRNA OLIGO ({len(ngrna_full_r1)} nt):")
+    lines.append(_wrap(ngrna_full_r1))
     lines.append("")
     lines.append(_DASH)
     lines.append("COMPONENT BREAKDOWN")
