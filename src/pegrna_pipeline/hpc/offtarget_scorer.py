@@ -192,8 +192,10 @@ def submit_offtarget_job(
         body=body,
     )
     script_text = render_pbs_script(spec)
-    # Heredoc upload
-    ssh.exec(f"cat > {script_path} <<'PBS_EOF'\n{script_text}\nPBS_EOF")
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".pbs", delete=False) as tmp:
+        tmp.write(script_text)
+        local_pbs = tmp.name
+    ssh.upload(local_pbs, script_path)
 
     job = PBSJob(spec=spec, remote_script_path=script_path)
     qsub(ssh, job)

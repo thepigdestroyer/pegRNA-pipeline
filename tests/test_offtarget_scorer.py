@@ -63,7 +63,12 @@ class FakeSSH:
         self._qsub_ids = iter([f"{2000 + i}.pbs" for i in range(100)])
 
     def upload(self, local, remote):
-        self.uploads.append((local, remote))
+        try:
+            with open(local) as fh:
+                content = fh.read()
+        except Exception:
+            content = ""
+        self.uploads.append((local, remote, content))
 
     def download(self, remote, local):
         self.downloads.append((remote, local))
@@ -101,6 +106,9 @@ def test_submit_offtarget_job_returns_reports(tmp_path, monkeypatch):
     # guides CSV was uploaded
     csv_uploads = [u for u in ssh.uploads if u[1].endswith(".csv")]
     assert len(csv_uploads) == 1
+    # PBS script was uploaded (not pushed via heredoc)
+    pbs_uploads = [u for u in ssh.uploads if u[1].endswith(".pbs")]
+    assert len(pbs_uploads) == 1
 
 
 def test_submit_offtarget_job_uses_configured_nuclease():
@@ -114,7 +122,38 @@ def test_submit_offtarget_job_uses_configured_nuclease():
         nuclease="SpCas9",
         walltime_hours=1,
     )
-    # The rendered PBS script referenced SpCas9 (uploaded as .pbs via exec heredoc).
-    # We check the heredoc catted by exec commands.
-    joined = "\n".join(ssh.commands)
-    assert "SpCas9" in joined
+    # PBS script is uploaded (not sent via heredoc) — check upload content.
+    pbs_uploads = [
+        (loc, rem, content) for (loc, rem, content) in ssh.uploads if rem.endswith(".pbs")
+    ]
+    assert pbs_uploads, "no .pbs script was uploaded"
+    assert any("SpCas9" in content for (_, _, content) in pbs_uploads)
+
+
+def test_submit_offtarget_job_raises_when_sentinel_absent(tmp_path, monkeypatch):
+    """RuntimeError raised when the PBS job completes but OFFTARGET_DONE is missing."""
+
+    class NoSentinelSSH(FakeSSH):
+        def exec(self, cmd: str):
+            self.commands.append(cmd)
+            if cmd.startswith("/opt/pbs/bin/qsub "):
+                return (next(self._qsub_ids) + "\n", "", 0)
+            if cmd.startswith("/opt/pbs/bin/qstat"):
+                return ("", "", 0)
+            if cmd.startswith("test -f ") and "OFFTARGET_DONE" in cmd:
+                return ("0\n", "", 0)  # sentinel absent — R-script failed
+            return ("", "", 0)
+
+    monkeypatch.chdir(tmp_path)
+    ssh = NoSentinelSSH(CANNED_TSV)
+    import pytest
+
+    with pytest.raises(RuntimeError, match="sentinel"):
+        submit_offtarget_job(
+            ssh=ssh,
+            guides=[{"guide_id": "g1", "spacer": "ACGT"}],
+            remote_run_dir="/work/run",
+            rscript_path="/home/mj/score_guides.R",
+            conda_env="pegrna-ngrna",
+            walltime_hours=1,
+        )

@@ -6,7 +6,7 @@ can operate against past runs without re-contacting HPC.
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from sqlalchemy import Column, DateTime, String, create_engine
 from sqlalchemy.orm import DeclarativeBase, Session
@@ -26,7 +26,7 @@ class Run(Base):
     driver_job_id = Column(String, default="")
     remote_run_dir = Column(String, default="")
     local_reports_dir = Column(String, default="")
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     completed_at = Column(DateTime)
 
 
@@ -77,7 +77,7 @@ class RunsDB:
                 raise KeyError(run_id)
             run.status = status
             if status in ("success", "failed", "cancelled"):
-                run.completed_at = datetime.utcnow()
+                run.completed_at = datetime.now(timezone.utc)
             session.commit()
 
     def mark_cancelled(self, run_id: str) -> None:

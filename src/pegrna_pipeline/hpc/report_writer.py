@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import csv
 import gzip
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from textwrap import fill
 from typing import Any, Dict, List
@@ -72,7 +72,7 @@ def write_tjpe_txt_report(
 ) -> None:
     annotations = annotate_tjpe_result(result, gene)
     lines: List[str] = [_BAR, "pegRNA DESIGN REPORT -- TJ-PE mode", _BAR]
-    lines.append(f"Generated:      {datetime.utcnow().isoformat(timespec='seconds')}Z")
+    lines.append(f"Generated:      {datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%S')}Z")
     lines.append(f"Gene:           {gene.gene_name} ({gene.refseq_accession})")
     lines.append(f"Stop codon:     {gene.stop_codon} at mRNA position {gene.stop_codon_start}")
     lines.append(f"Construct:      {construct_str}")
@@ -136,7 +136,7 @@ def write_pe7_txt_report(
 ) -> None:
     annotations = annotate_pe7_result(result, gene)
     lines: List[str] = [_BAR, "pegRNA DESIGN REPORT -- PE7 (PE3-strategy) mode", _BAR]
-    lines.append(f"Generated:      {datetime.utcnow().isoformat(timespec='seconds')}Z")
+    lines.append(f"Generated:      {datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%S')}Z")
     lines.append(f"Gene:           {gene.gene_name} ({gene.refseq_accession})")
     lines.append(f"Stop codon:     {gene.stop_codon} at mRNA position {gene.stop_codon_start}")
     lines.append(f"Construct:      {construct_str}")
@@ -194,12 +194,12 @@ def write_pe7_txt_report(
     lines.append("RANK 1 — pegRNA + ngRNA DETAIL")
     lines.append(_BAR)
     lines.append("")
-    ngrna_full_r1 = _assemble_ngrna(result.ngrna_spacer)
+    ngrna_full_r1 = _assemble_ngrna(result.ngrna_spacer) if result.ngrna_spacer else ""
     lines.append(f"FULL pegRNA OLIGO ({len(result.pegRNA_full)} nt):")
     lines.append(_wrap(result.pegRNA_full or "<not assembled>"))
     lines.append("")
     lines.append(f"FULL ngRNA OLIGO ({len(ngrna_full_r1)} nt):")
-    lines.append(_wrap(ngrna_full_r1))
+    lines.append(_wrap(ngrna_full_r1 if ngrna_full_r1 else "<not assembled>"))
     lines.append("")
     lines.append(_DASH)
     lines.append("COMPONENT BREAKDOWN")
@@ -249,7 +249,7 @@ def write_pa_txt_report(
     up_score = float(getattr(up, score_attr))
     dn_score = float(getattr(dn, score_attr))
     lines: List[str] = [_BAR, "pegRNA DESIGN REPORT -- Prime Assembly mode", _BAR]
-    lines.append(f"Generated:      {datetime.utcnow().isoformat(timespec='seconds')}Z")
+    lines.append(f"Generated:      {datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%S')}Z")
     lines.append(f"Gene:           {gene.gene_name} ({gene.refseq_accession})")
     lines.append(f"Stop codon:     {gene.stop_codon} at mRNA position {gene.stop_codon_start}")
     lines.append(f"Construct:      {construct_str}")

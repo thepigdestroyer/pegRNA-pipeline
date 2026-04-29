@@ -14,7 +14,7 @@ from pegrna_pipeline.hpc.data_types import GeneRecord, PegRNADesign, VariantScor
 from pegrna_pipeline.hpc.offtarget_scorer import OffTargetReport
 from pegrna_pipeline.hpc.pa_workflow import PAResult
 from pegrna_pipeline.hpc.pair_scorer import PegRNAPair
-from pegrna_pipeline.hpc.pe7_workflow import PE7Result
+from pegrna_pipeline.hpc.pe7_workflow import PE7DesignPair, PE7Result
 from pegrna_pipeline.hpc.report_writer import (
     ALL_VARIANTS_CSV_COLUMNS,
     OFFTARGET_CSV_COLUMNS,
@@ -267,6 +267,74 @@ def test_write_reports_pe7_produces_expected_files(tmp_path: Path):
     assert "GCAGCAGCATGCATGCAGCT" in csv_text
     assert paths["offtarget"].exists()
     assert paths["all_variants"].suffix == ".gz"
+
+
+def test_write_reports_pe7_with_top_pairs_shows_orderable_sequences(tmp_path: Path):
+    """top_pairs table + ORDERABLE SEQUENCES block are rendered correctly."""
+    pair = PE7DesignPair(
+        rank=1,
+        variant_sequence_name="pe7_var_0",
+        pegRNA_full="PE7_PEG_FULL_OLIGO",
+        spacer="GCAGCAGCATGCATGCAGCT",
+        pbs="TCACCAGCAGCAGC",
+        rt="GACAAGGACGACGAT",
+        pegrna_strand="Fw",
+        pegrna_pe2_score=55.0,
+        pegrna_pe2_cell_line="k562",
+        ngrna_spacer="GCTAGCATGCAGCATGCATC",
+        ngrna_distance_to_edit=-50,
+        ngrna_strand="Rv",
+        ngrna_deepcas9_score=0.91,
+        ngrna_nick_in_mrna=150,
+        joint_pe3_score=0.50,
+    )
+    result = _fake_pe7_result()
+    result.top_pairs.append(pair)
+    paths = write_reports(
+        result=result,
+        gene=_fake_gene(),
+        construct_str="FLAG",
+        offtarget_reports=[],
+        all_evaluated_variants=[],
+        reports_dir=tmp_path,
+        base_name="pe7_top_pairs",
+    )
+    txt = paths["txt"].read_text()
+    assert "ORDERABLE SEQUENCES" in txt
+    assert "PE7_PEG_FULL_OLIGO" in txt
+    # ngRNA oligo must be spacer + scaffold (not just the scaffold alone)
+    from pegrna_pipeline.hpc.tjpe_workflow import STANDARD_SGRNA_SCAFFOLD
+
+    expected_ngrna = "GCTAGCATGCAGCATGCATC" + STANDARD_SGRNA_SCAFFOLD
+    assert expected_ngrna in txt
+
+
+def test_write_reports_pe7_empty_result_no_misleading_ngrna(tmp_path: Path):
+    """An empty PE7 result must not print the scaffold alone as a valid ngRNA oligo."""
+    from pegrna_pipeline.hpc.pe7_workflow import _empty_result
+
+    gene = _fake_gene()
+    result = _empty_result(
+        gene=gene,
+        insert_full_dna="ACGT",
+        variants=[],
+        score_cell_line="k562",
+    )
+    paths = write_reports(
+        result=result,
+        gene=gene,
+        construct_str="ACGT",
+        offtarget_reports=[],
+        all_evaluated_variants=[],
+        reports_dir=tmp_path,
+        base_name="pe7_empty",
+    )
+    txt = paths["txt"].read_text()
+    # The ngRNA oligo line must show "<not assembled>", not the 76-nt scaffold alone.
+    assert "FULL ngRNA OLIGO (0 nt):" in txt
+    assert "<not assembled>" in txt
+    # The label must never be followed by just the bare scaffold as the "oligo"
+    assert "FULL ngRNA OLIGO (76 nt):" not in txt
 
 
 def test_column_schemas_exposed():

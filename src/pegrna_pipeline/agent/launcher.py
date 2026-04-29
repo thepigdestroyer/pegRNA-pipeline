@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import tempfile
 import time
 import uuid
 from dataclasses import dataclass
@@ -100,14 +101,18 @@ class HPCLauncher:
         return GeneRecord(**data)
 
     def _upload_json(self, ssh, remote_path: str, payload: Dict[str, Any]) -> None:
-        """Upload ``payload`` as pretty-printed JSON via a heredoc."""
         text = json.dumps(payload, indent=2)
-        escaped = text.replace("$", "\\$")
-        ssh.exec(f"cat > {remote_path} <<'JSON_EOF'\n{escaped}\nJSON_EOF")
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as tmp:
+            tmp.write(text)
+            local = tmp.name
+        ssh.upload(local, remote_path)
 
     def _upload_yaml(self, ssh, remote_path: str, payload: Dict[str, Any]) -> None:
         text = yaml.safe_dump(payload, sort_keys=False)
-        ssh.exec(f"cat > {remote_path} <<'YAML_EOF'\n{text}\nYAML_EOF")
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as tmp:
+            tmp.write(text)
+            local = tmp.name
+        ssh.upload(local, remote_path)
 
     def _qsub_driver(self, ssh, remote_run_dir: str) -> str:
         """qsub the wrapper with -v RUN_DIR=... and return the scheduler id."""
@@ -169,7 +174,12 @@ class HPCLauncher:
             if hits > 0:
                 return True
             # Check if the job is still in the queue; if not, something went wrong.
-            _safe_exec(f"/opt/pbs/bin/qstat {driver_id}")
+            qs_out, _qs_err, _qs_rc = _safe_exec(f"/opt/pbs/bin/qstat {driver_id}")
+            if not qs_out.strip():
+                raise RuntimeError(
+                    f"driver job {driver_id} disappeared from qstat without emitting "
+                    f"DRIVER_DONE — check {remote_run_dir}/driver.log for the error"
+                )
             if elapsed >= max_seconds:
                 raise TimeoutError(f"driver {driver_id} not done after {max_hours}h")
             sleep_fn(interval)

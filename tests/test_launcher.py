@@ -47,7 +47,12 @@ class FakeSSH:
         self.disconnect()
 
     def upload(self, local, remote):
-        self.uploads.append((local, remote))
+        try:
+            with open(local) as fh:
+                content = fh.read()
+        except Exception:
+            content = ""
+        self.uploads.append((local, remote, content))
 
     def download(self, remote, local):
         self.downloads.append((remote, local))
@@ -125,9 +130,9 @@ def test_launch_run_uploads_inputs_json(tmp_path):
         mode="tjpe",
         local_output_dir=str(tmp_path / "out"),
     )
-    # Find the command that writes inputs.json (heredoc style)
-    writes = [c for c in fake.commands if "inputs.json" in c]
-    assert writes, "no command touched inputs.json"
+    # inputs.json is now uploaded via ssh.upload() — check uploads, not commands.
+    json_uploads = [u for u in fake.uploads if "inputs.json" in u[1]]
+    assert json_uploads, "inputs.json was not uploaded"
 
 
 def test_launch_run_uses_qsub_v_flag_for_run_dir(tmp_path):
@@ -207,3 +212,52 @@ def test_fetch_gene_record_on_login(tmp_path):
     # Ensure we called the login-node CLI form
     cmds = [c for c in fake.commands if "sequence_fetcher" in c]
     assert any("--json" in c for c in cmds)
+
+
+def test_poll_driver_raises_when_job_disappears_without_done():
+    """If qstat shows the job is gone but DRIVER_DONE was never logged, raise RuntimeError."""
+
+    class DeadJobSSH(FakeSSH):
+        def exec(self, cmd: str):
+            self.commands.append(cmd)
+            if cmd.startswith("/opt/pbs/bin/qstat"):
+                return ("", "", 0)  # job gone, no DRIVER_DONE
+            return ("0\n", "", 0)  # grep always returns 0 hits
+
+    import pytest
+
+    launcher = HPCLauncher(
+        config=CONFIG,
+        password_provider=lambda: "pw",
+        ssh_factory=_ssh_factory(DeadJobSSH()),
+    )
+    dead = DeadJobSSH()
+    with dead:
+        with pytest.raises(RuntimeError, match="DRIVER_DONE"):
+            launcher._poll_driver(dead, "9999.pbs", "/remote/run", interval=1)
+
+
+def test_poll_driver_raises_on_timeout():
+    """TimeoutError raised when the job stays in the queue past max_hours."""
+
+    class StuckJobSSH(FakeSSH):
+        def exec(self, cmd: str):
+            self.commands.append(cmd)
+            if cmd.startswith("/opt/pbs/bin/qstat"):
+                # Return a fake qstat row so the job appears to still be running
+                return ("9999.pbs  user  queue  job  R  queue\n", "", 0)
+            return ("0\n", "", 0)  # grep never finds DRIVER_DONE
+
+    import pytest
+
+    launcher = HPCLauncher(
+        config=CONFIG,
+        password_provider=lambda: "pw",
+        ssh_factory=_ssh_factory(StuckJobSSH()),
+    )
+    stuck = StuckJobSSH()
+    with stuck:
+        with pytest.raises(TimeoutError):
+            launcher._poll_driver(
+                stuck, "9999.pbs", "/remote/run", interval=1, max_hours=0, sleep_fn=lambda _: None
+            )

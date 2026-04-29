@@ -484,8 +484,6 @@ def run_driver(run_dir: Union[str, Path]) -> Union[TJPEResult, PAResult, PE7Resu
             score_cell_line=cfg.score_cell_line,
         )
 
-    # Signal success for the PBS wrapper
-    (run_path / "DRIVER_DONE").write_text("ok\n")
     return result
 
 
