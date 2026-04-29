@@ -186,14 +186,14 @@ def poll_until_done(
         # cannot connect). A finished job that has aged out of qstat produces
         # rc=1 + "Unknown Job Id" in stderr — that is NOT a server error and
         # should fall through so parse_qstat_state returns "" → job marked F.
-        _server_down = rc != 0 and not out.strip() and any(
-            kw in err for kw in ("Connection refused", "cannot connect", "errno=")
+        _server_down = (
+            rc != 0
+            and not out.strip()
+            and any(kw in err for kw in ("Connection refused", "cannot connect", "errno="))
         )
         if _server_down:
             if elapsed >= max_seconds:
-                raise TimeoutError(
-                    f"poll_until_done: qstat unreachable and {max_hours}h elapsed"
-                )
+                raise TimeoutError(f"poll_until_done: qstat unreachable and {max_hours}h elapsed")
             sleep_fn(interval_seconds)
             elapsed += interval_seconds
             continue

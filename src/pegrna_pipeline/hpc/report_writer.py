@@ -28,6 +28,7 @@ def _assemble_ngrna(spacer: str) -> str:
     """Return the full, orderable ngRNA oligo: spacer + standard scaffold."""
     return spacer + STANDARD_SGRNA_SCAFFOLD
 
+
 _CAVEATS = """\
 - PRIDICT 2.0 is validated for inserts <= 15 bp; our probes (TJ-PE 24 bp,
   PA 30 bp default) are extrapolation. Use the scores as relative rankings
