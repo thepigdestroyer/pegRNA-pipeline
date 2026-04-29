@@ -192,7 +192,8 @@ def test_extract_winning_guides_from_tjpe_result():
         ngrna_spacer="CCCCCCCCCCCCCCCCCCCC",
         ngrna_distance_to_edit=60,
         ngrna_deepcas9_score=0.9,
-        pegrna_pe2_hek293t=0.5,
+        pegrna_pe2_score=0.5,
+        pegrna_pe2_cell_line="k562",
         edit_position_in_mrna=100,
         ngrna_nick_in_mrna=160,
     )
@@ -252,6 +253,32 @@ def test_extract_winning_guides_from_pa_result():
     assert ids == {"upstream_pegrna_spacer", "downstream_pegrna_spacer"}
 
 
+def test_extract_winning_guides_from_pe7_result():
+    """PE7Result follows the same shape as TJPEResult for off-target purposes."""
+    from pegrna_pipeline.hpc.pe7_workflow import PE7Result
+
+    res = PE7Result(
+        winning_variant=None,
+        full_insert_dna="ACGT",
+        pegRNA_full="full",
+        spacer="GATCGATCGATCGATCGATC",
+        pbs="AAAAAAAAAA",
+        rt="TTTTTTTTTT",
+        pegrna_strand="Fw",
+        pegrna_pe2_score=0.7,
+        pegrna_pe2_cell_line="k562",
+        ngrna_spacer="CCCCCCCCCCCCCCCCCCCC",
+        ngrna_distance_to_edit=55,
+        ngrna_strand="Rv",
+        ngrna_deepcas9_score=0.9,
+        edit_position_in_mrna=100,
+        ngrna_nick_in_mrna=155,
+    )
+    guides = _extract_winning_guides(res)
+    ids = {g["guide_id"] for g in guides}
+    assert ids == {"pegrna_spacer", "ngrna_spacer"}
+
+
 def test_extract_winning_guides_empty_results():
     # No winning guides.
     res = TJPEResult(
@@ -265,7 +292,8 @@ def test_extract_winning_guides_empty_results():
         ngrna_spacer="",
         ngrna_distance_to_edit=0,
         ngrna_deepcas9_score=0.0,
-        pegrna_pe2_hek293t=0.0,
+        pegrna_pe2_score=0.0,
+        pegrna_pe2_cell_line="k562",
         edit_position_in_mrna=0,
         ngrna_nick_in_mrna=0,
     )

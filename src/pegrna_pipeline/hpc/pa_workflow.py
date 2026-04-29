@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import List, Optional, Sequence, Tuple, Union
 
 from pegrna_pipeline.hpc.data_types import (
+    DEFAULT_SCORE_CELL_LINE,
     GeneRecord,
     PegRNADesign,
     VariantScore,
@@ -165,6 +166,7 @@ def run_pa_workflow(
     flap_length_aa: int = 10,  # noqa: ARG001 — passed through for Plan 3
     min_pair_distance: int = 30,
     max_pair_distance: int = 80,
+    score_cell_line: str = DEFAULT_SCORE_CELL_LINE,
 ) -> PAResult:
     """Run the Prime Assembly workflow for one gene + flap pair.
 
@@ -195,6 +197,7 @@ def run_pa_workflow(
         stop_codon_position=gene.stop_codon_start,
         min_distance=min_pair_distance,
         max_distance=max_pair_distance,
+        score_cell_line=score_cell_line,
     )
     winning = compat_pairs[0] if compat_pairs else None
 

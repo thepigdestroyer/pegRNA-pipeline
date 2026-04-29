@@ -21,10 +21,12 @@ from typing import List, Optional, Sequence, Union
 from Bio.Seq import Seq
 
 from pegrna_pipeline.hpc.data_types import (
+    DEFAULT_SCORE_CELL_LINE,
     GeneRecord,
     NgRNADesign,
     PegRNADesign,
     VariantScore,
+    _score_attr,
 )
 from pegrna_pipeline.hpc.pridict_parser import (
     parse_ngrna_csv,
@@ -239,9 +241,13 @@ class TJPEResult:
     ngrna_spacer: str
     ngrna_distance_to_edit: int
     ngrna_deepcas9_score: float
-    pegrna_pe2_hek293t: float
+    pegrna_pe2_score: float  # PE2 score actually used for ranking
+    pegrna_pe2_cell_line: str  # "k562" | "hek293t" — cell line that score came from
     edit_position_in_mrna: int
     ngrna_nick_in_mrna: int
+    # Informational PE3 composite — pegRNA PE2 score × ngRNA DeepCas9 score
+    # / 100. Reported for transparency; NOT used for ranking.
+    joint_pe3_score: float = 0.0
     all_evaluated_variants: List[VariantScore] = field(default_factory=list)
 
 
@@ -285,6 +291,7 @@ def run_tjpe_workflow(
     ngrna_distance_min: int = 40,
     ngrna_distance_max: int = 100,
     pbs2_length: int = 17,
+    score_cell_line: str = DEFAULT_SCORE_CELL_LINE,
 ) -> TJPEResult:
     """Run the TJ-PE workflow end-to-end for one gene + insertion.
 
@@ -312,6 +319,11 @@ def run_tjpe_workflow(
     else:
         variants = list(variant_scores or [])
 
+    # Stamp the requested cell line on every variant so best_pegRNA /
+    # top_score select the right PE2 column.
+    for v in variants:
+        v.score_cell_line = score_cell_line
+
     # -------- rank & pick best pegRNA --------
     ranked = rank_variants_by_pe2(variants)
     winning: Optional[VariantScore] = ranked[0] if ranked else None
@@ -334,7 +346,8 @@ def run_tjpe_workflow(
             ngrna_spacer="",
             ngrna_distance_to_edit=0,
             ngrna_deepcas9_score=0.0,
-            pegrna_pe2_hek293t=0.0,
+            pegrna_pe2_score=0.0,
+            pegrna_pe2_cell_line=score_cell_line,
             edit_position_in_mrna=edit_position_in_mrna,
             ngrna_nick_in_mrna=edit_position_in_mrna,
             all_evaluated_variants=list(variants),
@@ -364,7 +377,8 @@ def run_tjpe_workflow(
             ngrna_spacer="",
             ngrna_distance_to_edit=0,
             ngrna_deepcas9_score=0.0,
-            pegrna_pe2_hek293t=best_peg.pe2_hek293t,
+            pegrna_pe2_score=float(getattr(best_peg, _score_attr(score_cell_line))),
+            pegrna_pe2_cell_line=score_cell_line,
             edit_position_in_mrna=edit_position_in_mrna,
             ngrna_nick_in_mrna=edit_position_in_mrna,
             all_evaluated_variants=list(variants),
@@ -386,6 +400,7 @@ def run_tjpe_workflow(
         rc_pbs2=rc_pbs2,
     )
 
+    pe2_value = float(getattr(best_peg, _score_attr(score_cell_line)))
     return TJPEResult(
         winning_variant=winning,
         full_insert_dna=insert_full_dna,
@@ -397,8 +412,10 @@ def run_tjpe_workflow(
         ngrna_spacer=best_ng.spacer,
         ngrna_distance_to_edit=best_ng.distance_to_edit,
         ngrna_deepcas9_score=best_ng.deepcas9_score,
-        pegrna_pe2_hek293t=best_peg.pe2_hek293t,
+        pegrna_pe2_score=pe2_value,
+        pegrna_pe2_cell_line=score_cell_line,
         edit_position_in_mrna=edit_position_in_mrna,
         ngrna_nick_in_mrna=ngrna_nick_in_mrna,
+        joint_pe3_score=pe2_value * float(best_ng.deepcas9_score) / 100.0,
         all_evaluated_variants=list(variants),
     )

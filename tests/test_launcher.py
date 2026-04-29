@@ -72,9 +72,9 @@ class FakeSSH:
                 "flanking_bp": 100,
             }
             return (json.dumps(gene_dict) + "\n", "", 0)
-        if cmd.startswith("qsub "):
+        if cmd.startswith("/opt/pbs/bin/qsub "):
             return ("9999.pbs\n", "", 0)
-        if cmd.startswith("qstat"):
+        if cmd.startswith("/opt/pbs/bin/qstat"):
             return ("", "", 0)  # job gone -> finished
         if "DRIVER_DONE" in cmd:
             return ("1\n", "", 0)
@@ -143,7 +143,7 @@ def test_launch_run_uses_qsub_v_flag_for_run_dir(tmp_path):
         mode="tjpe",
         local_output_dir=str(tmp_path / "out"),
     )
-    qsub_cmds = [c for c in fake.commands if c.startswith("qsub ")]
+    qsub_cmds = [c for c in fake.commands if c.startswith("/opt/pbs/bin/qsub ")]
     assert qsub_cmds
     # Per v1.1: qsub -v RUN_DIR=...
     assert any("-v" in c and "RUN_DIR=" in c for c in qsub_cmds)

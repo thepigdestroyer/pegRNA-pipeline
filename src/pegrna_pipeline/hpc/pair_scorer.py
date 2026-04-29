@@ -6,8 +6,9 @@ Compatibility rules (Plan 2 v1.1):
 * ``|edit_pos_up - edit_pos_dn|`` within [``min_distance``, ``max_distance``].
 * Distance is also >= :data:`MIN_NICK_SEPARATION_BP` (hard floor).
 
-The joint quality score is the geometric mean of the two
-``pe2_hek293t`` values.
+The joint quality score is the geometric mean of the two PE2 efficiency
+predictions, drawn from PRIDICT 2.0's K562 column by default (override
+via ``score_cell_line``).
 """
 
 from __future__ import annotations
@@ -16,7 +17,11 @@ import math
 from dataclasses import dataclass
 from typing import List
 
-from pegrna_pipeline.hpc.data_types import PegRNADesign
+from pegrna_pipeline.hpc.data_types import (
+    DEFAULT_SCORE_CELL_LINE,
+    PegRNADesign,
+    _score_attr,
+)
 
 #: Hard floor on the distance between the two pegRNA nicks. Closer than
 #: this and the two edits interfere, so no pair ever survives — even if
@@ -41,6 +46,7 @@ def filter_compatible_pairs(
     stop_codon_position: int,  # noqa: ARG001 — kept for API clarity / future use
     min_distance: int = 30,
     max_distance: int = 80,
+    score_cell_line: str = DEFAULT_SCORE_CELL_LINE,
 ) -> List[PegRNAPair]:
     """Return all valid upstream/downstream pairs, sorted by joint score desc.
 
@@ -63,6 +69,7 @@ def filter_compatible_pairs(
     compatibility filters.
     """
     effective_min = max(min_distance, MIN_NICK_SEPARATION_BP)
+    score_attr = _score_attr(score_cell_line)
     pairs: List[PegRNAPair] = []
     for up in upstream:
         for dn in downstream:
@@ -71,7 +78,9 @@ def filter_compatible_pairs(
             distance = abs(up.editing_position - dn.editing_position)
             if distance < effective_min or distance > max_distance:
                 continue
-            joint = math.sqrt(max(up.pe2_hek293t, 0.0) * max(dn.pe2_hek293t, 0.0))
+            up_score = float(getattr(up, score_attr))
+            dn_score = float(getattr(dn, score_attr))
+            joint = math.sqrt(max(up_score, 0.0) * max(dn_score, 0.0))
             pairs.append(
                 PegRNAPair(
                     upstream=up,

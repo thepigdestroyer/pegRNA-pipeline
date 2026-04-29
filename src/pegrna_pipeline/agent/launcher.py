@@ -81,7 +81,14 @@ class HPCLauncher:
         """Run ``sequence_fetcher --json`` on the login node, parse the record."""
         repo_dir = self.config.get("repo_dir", "~/pegRNA-pipeline")
         email = self.config.get("entrez_email", "user@example.com")
+        # Bootstrap conda — ssh exec runs in a non-login shell on Imperial
+        # CX3, so neither the miniforge module nor ~/miniforge3 is on PATH
+        # by default. See setup_hpc.sh / driver_pbs_wrapper.sh for the same
+        # pattern.
         cmd = (
+            "module load miniforge/3 >/dev/null 2>&1 || true; "
+            'source "$HOME/miniforge3/etc/profile.d/conda.sh" && '
+            "conda activate pegrna-pipeline && "
             f"cd {repo_dir} && "
             f"python -m pegrna_pipeline.hpc.sequence_fetcher "
             f"{gene} --email {email} --json"
@@ -106,7 +113,7 @@ class HPCLauncher:
         """qsub the wrapper with -v RUN_DIR=... and return the scheduler id."""
         repo_dir = self.config.get("repo_dir", "~/pegRNA-pipeline")
         wrapper = f"{repo_dir}/scripts/driver_pbs_wrapper.sh"
-        out, err, rc = ssh.exec(f"qsub -v RUN_DIR={remote_run_dir} {wrapper}")
+        out, err, rc = ssh.exec(f"/opt/pbs/bin/qsub -v RUN_DIR={remote_run_dir} {wrapper}")
         if rc != 0:
             raise RuntimeError(f"qsub failed: rc={rc} err={err!r}")
         sid = out.strip().split()[0] if out.strip() else ""
@@ -127,12 +134,34 @@ class HPCLauncher:
 
         Per v1.1 corrections: greps ``<remote_run_dir>/driver.log`` — never
         a wildcard — to avoid colliding with other runs.
+
+        Long-running PBS jobs routinely outlive a single paramiko session
+        (Imperial CX3 closes idle channels after a few minutes). When
+        ``ssh.exec`` raises, we reconnect once and retry; if that also
+        fails we let the exception propagate.
         """
+        from pegrna_pipeline.hpc.ssh_client import SSHError
+
         driver_log = f"{remote_run_dir}/driver.log"
         max_seconds = max_hours * 3600
         elapsed = 0
+
+        def _safe_exec(cmd: str):
+            try:
+                return ssh.exec(cmd)
+            except (SSHError, Exception) as exc:
+                # Try a single reconnect — paramiko 'SSH session not active'
+                # and similar are typical after long sleeps.
+                if hasattr(ssh, "reconnect"):
+                    try:
+                        ssh.reconnect()
+                        return ssh.exec(cmd)
+                    except Exception:
+                        raise exc
+                raise
+
         while True:
-            out, _err, _rc = ssh.exec(f"grep -c DRIVER_DONE {driver_log} || true")
+            out, _err, _rc = _safe_exec(f"grep -c DRIVER_DONE {driver_log} || true")
             try:
                 hits = int(out.strip().splitlines()[0]) if out.strip() else 0
             except ValueError:
@@ -140,7 +169,7 @@ class HPCLauncher:
             if hits > 0:
                 return True
             # Check if the job is still in the queue; if not, something went wrong.
-            qstat_out, _q_err, _q_rc = ssh.exec(f"qstat {driver_id}")
+            _safe_exec(f"/opt/pbs/bin/qstat {driver_id}")
             if elapsed >= max_seconds:
                 raise TimeoutError(f"driver {driver_id} not done after {max_hours}h")
             sleep_fn(interval)
@@ -200,6 +229,7 @@ class HPCLauncher:
                 "conda_env": self.config.get("conda_env", "pridict2"),
                 "compute_mode": self.config.get("compute_mode", "local"),
                 "back_ssh": self.config.get("back_ssh", {}),
+                "score_cell_line": self.config.get("score_cell_line", "k562"),
             }
             self._upload_json(ssh, f"{remote_run_dir}/inputs.json", inputs)
 

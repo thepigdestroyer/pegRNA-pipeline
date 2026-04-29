@@ -104,7 +104,7 @@ def test_qsub_calls_ssh_exec_and_captures_id():
     got = qsub(ssh, job)
     assert got == "9999.pbs"
     assert job.scheduler_id == "9999.pbs"
-    ssh.exec.assert_called_once_with("qsub /work/job.pbs")
+    ssh.exec.assert_called_once_with("/opt/pbs/bin/qsub /work/job.pbs")
 
 
 def test_qsub_raises_on_nonzero_rc():
@@ -151,7 +151,7 @@ def test_qdel_calls_ssh_exec():
     )
     job = PBSJob(spec=spec, remote_script_path="/a", scheduler_id="42.pbs")
     qdel(ssh, job)
-    ssh.exec.assert_called_once_with("qdel 42.pbs")
+    ssh.exec.assert_called_once_with("/opt/pbs/bin/qdel 42.pbs")
 
 
 # ------------------------------------------------------------------ poll

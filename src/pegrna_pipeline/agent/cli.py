@@ -2,7 +2,12 @@
 
 from __future__ import annotations
 
+import getpass
+import os
+import shlex
 import sys
+from pathlib import Path
+from typing import Callable
 
 import click
 
@@ -20,6 +25,40 @@ from pegrna_pipeline.agent.motif_library import (
     MotifLibrary,
     MotifNotFoundError,
 )
+
+
+def _resolve_hpc_password_provider(non_interactive: bool) -> Callable[[], str]:
+    """Build a password-provider callable for the HPC SSH client.
+
+    Priority order:
+
+    1. ``CX3_PASSWORD`` environment variable.
+    2. ``HPC_PASS=...`` line in ``~/.cx3-credentials`` (chmod 600 file
+       written by the ``hpc-connect`` skill / ``connect.sh`` setup).
+    3. Interactive ``getpass.getpass`` prompt — disabled when
+       ``--non-interactive`` is set, in which case launcher will get an
+       empty password and SSH will fail loudly with a clear auth error.
+    """
+    pw = os.environ.get("CX3_PASSWORD")
+    if pw:
+        return lambda: pw
+
+    cred_path = Path("~/.cx3-credentials").expanduser()
+    if cred_path.exists():
+        for line in cred_path.read_text().splitlines():
+            if line.startswith("HPC_PASS="):
+                rhs = line.split("=", 1)[1]
+                # The credentials file is typically written by bash via
+                # `printf 'HPC_PASS=%q\n' "$HPC_PASS"`, which shell-quotes
+                # specials (e.g. ``a*b`` becomes ``a\*b``). shlex.split
+                # round-trips those forms cleanly.
+                tokens = shlex.split(rhs)
+                value = tokens[0] if tokens else ""
+                return lambda: value
+
+    if non_interactive:
+        return lambda: ""
+    return lambda: getpass.getpass("HPC password: ")
 
 
 @click.group()
@@ -115,7 +154,7 @@ def motif_show(name: str) -> None:
 @cli.command("run")
 @click.option("--gene", required=True)
 @click.option("--construct", required=True)
-@click.option("--mode", type=click.Choice(["tjpe", "pa"]), required=True)
+@click.option("--mode", type=click.Choice(["tjpe", "pa", "pe7"]), required=True)
 @click.option("--cell-line", default="KOLF2_iPSC")
 @click.option("--output-dir", default="results", type=click.Path())
 @click.option("--cleanup", is_flag=True)
@@ -167,7 +206,10 @@ def run_cmd(
         sys.exit(1)
     click.echo(f"Construct resolved locally; submitting {mode} run for {gene} ...")
 
-    launcher = HPCLauncher(config=config)
+    launcher = HPCLauncher(
+        config=config,
+        password_provider=_resolve_hpc_password_provider(non_interactive),
+    )
     db = RunsDB.local_default()
     result = launcher.launch_run(
         gene=gene,
@@ -228,7 +270,7 @@ def cancel_cmd(run_id: str) -> None:
     run = db.get(run_id)
     launcher = HPCLauncher(config=config)
     with launcher._build_ssh() as ssh:
-        ssh.exec(f"qdel {run.driver_job_id}")
+        ssh.exec(f"/opt/pbs/bin/qdel {run.driver_job_id}")
     db.mark_cancelled(run_id)
     click.echo(f"Cancelled {run_id} (driver job {run.driver_job_id}).")
 
@@ -324,6 +366,11 @@ def setup_cmd() -> None:
             type=click.Choice(["local", "back_ssh"]),
         ),
         "cell_line": click.prompt("Default cell line", default="KOLF2_iPSC"),
+        "score_cell_line": click.prompt(
+            "PRIDICT2 PE2 score cell line (k562 recommended for KOLF2/iPSC)",
+            default="k562",
+            type=click.Choice(["k562", "hek293t"]),
+        ),
     }
     config_path.write_text(yaml.safe_dump(cfg, sort_keys=False))
     click.echo(f"Wrote {config_path}")

@@ -54,8 +54,9 @@ def test_run_tjpe_workflow_end_to_end_with_fixtures():
     assert result.full_insert_dna == INSERT_DNA
     # Scaffold must appear in the assembled pegRNA.
     assert STANDARD_SGRNA_SCAFFOLD in result.tjpe_pegRNA_sequence
-    # Winning variant has the highest pe2_hek293t score (0.682 in fixture).
-    assert result.pegrna_pe2_hek293t == pytest.approx(0.682)
+    # Default ranking is K562; pegRNA1 still wins (K562=0.511 vs 0.388, 0.301 in fixture).
+    assert result.pegrna_pe2_score == pytest.approx(0.511)
+    assert result.pegrna_pe2_cell_line == "k562"
     # The winning pegRNA is pegRNA1 (Fw) — so ngRNA must be Rv.
     assert result.ngrna_spacer
     # Arithmetic per v1.1: edit_position_in_mrna == stop_codon_start.
@@ -107,4 +108,5 @@ def test_run_tjpe_winning_variant_has_best_score():
         variant_fixtures_dir=FIXTURES,
     )
     assert result.winning_variant is not None
-    assert result.winning_variant.top_score == pytest.approx(0.682)
+    # Default is K562 ranking → pegRNA1's K562 score = 0.511.
+    assert result.winning_variant.top_score == pytest.approx(0.511)

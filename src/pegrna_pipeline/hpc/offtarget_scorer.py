@@ -11,47 +11,66 @@ import csv
 import io
 import tempfile
 from dataclasses import dataclass
-from typing import List, Sequence, Tuple
+from typing import List, Optional, Sequence, Tuple
 
 OFFTARGET_SCORING_DONE = "OFFTARGET_SCORING_DONE"
 
 
 @dataclass(frozen=True)
 class OffTargetReport:
-    """One row of :file:`offtarget_scores.tsv`."""
+    """One row of :file:`offtarget_scores.tsv`.
+
+    On-target score columns (deepspcas9, deephf, cfd_specificity) and
+    mismatch counts are ``Optional[float]`` / ``Optional[int]`` so a
+    missing-score / unscanned guide can be distinguished from a real
+    zero. Renderers print ``"NA"`` for ``None``.
+    """
 
     guide_id: str
     spacer: str
-    deepspcas9: float
-    deephf: float
-    cfd_specificity: float
-    mm0_count: int
-    mm1_count: int
-    mm2_count: int
-    mm3_count: int
+    deepspcas9: Optional[float]
+    deephf: Optional[float]
+    cfd_specificity: Optional[float]
+    mm0_count: Optional[int]
+    mm1_count: Optional[int]
+    mm2_count: Optional[int]
+    mm3_count: Optional[int]
 
 
-def _to_float(value: str) -> float:
-    """Parse a float; treat empty / NA / NaN as 0.0."""
+def _to_float(value: str) -> Optional[float]:
+    """Parse a float; ``None`` for empty / NA / NaN / NULL / unparseable."""
     if value is None:
-        return 0.0
+        return None
     v = value.strip()
     if v == "" or v.upper() in {"NA", "NAN", "NULL"}:
-        return 0.0
+        return None
     try:
         return float(v)
     except ValueError:
-        return 0.0
+        return None
 
 
-def _to_int(value: str) -> int:
+def _to_int(value: str) -> Optional[int]:
+    """Parse an int; ``None`` for empty / NA / NaN / NULL / unparseable."""
     v = (value or "").strip()
     if v == "" or v.upper() in {"NA", "NAN", "NULL"}:
-        return 0
+        return None
     try:
         return int(v)
     except ValueError:
-        return 0
+        return None
+
+
+def _fmt_float(value: Optional[float], width: int = 3) -> str:
+    """``"%.3f" % value`` or ``"NA"`` for None."""
+    if value is None:
+        return "NA"
+    return f"{value:.{width}f}"
+
+
+def _fmt_int(value: Optional[int]) -> str:
+    """``str(value)`` or ``"NA"`` for None."""
+    return "NA" if value is None else str(value)
 
 
 def parse_offtarget_tsv(tsv_text: str) -> List[OffTargetReport]:
@@ -81,6 +100,7 @@ def _build_offtarget_pbs_body(
     rscript_path: str,
     guides_csv: str,
     output_tsv: str,
+    done_flag: str,
     nuclease: str,
     scores: Sequence[str],
     genome: str,
@@ -90,6 +110,9 @@ def _build_offtarget_pbs_body(
     return (
         "set -euo pipefail\n"
         "module load miniforge/3\n"
+        # Imperial CX3 ships only a miniforge bootstrap; conda lives in
+        # ~/miniforge3 (created by setup_hpc.sh).
+        'source "$HOME/miniforge3/etc/profile.d/conda.sh"\n'
         f"conda activate {conda_env}\n"
         f"Rscript {rscript_path} "
         f"--guides {guides_csv} "
@@ -98,7 +121,10 @@ def _build_offtarget_pbs_body(
         f"--genome {genome} "
         f"--max-mismatches {max_mismatches} "
         f"--output {output_tsv}\n"
-        f"echo {OFFTARGET_SCORING_DONE}\n"
+        # Write sentinel to shared RDS filesystem (not PBS log, which is staged
+        # asynchronously and may not exist when the driver checks immediately
+        # after poll_until_done returns).
+        f"touch {done_flag}\n"
     )
 
 
@@ -120,11 +146,11 @@ def submit_offtarget_job(
     remote_run_dir: str,
     rscript_path: str,
     conda_env: str = "pegrna-ngrna",
-    nuclease: str = "SpCas9_H840A",
+    nuclease: str = "SpCas9",
     scores: Tuple[str, ...] = ("DeepSpCas9", "DeepHF", "CFD"),
     genome: str = "GRCh38",
     max_mismatches: int = 3,
-    walltime_hours: int = 1,
+    walltime_hours: int = 6,
 ) -> List[OffTargetReport]:
     """Submit the off-target scorer, wait for it, and return parsed reports."""
     from pegrna_pipeline.hpc.pbs import (
@@ -137,6 +163,10 @@ def submit_offtarget_job(
 
     guides_csv = f"{remote_run_dir}/guides.csv"
     output_tsv = f"{remote_run_dir}/offtarget_scores.tsv"
+    # Sentinel written to shared RDS filesystem by the PBS job body.
+    # Checking this avoids the PBS log staging race (PBS Pro stages stdout
+    # asynchronously; the file may not exist immediately after qstat shows done).
+    done_flag = f"{remote_run_dir}/OFFTARGET_DONE"
     log_path = f"{remote_run_dir}/offtarget_pbs.log"
     script_path = f"{remote_run_dir}/offtarget.pbs"
 
@@ -147,6 +177,7 @@ def submit_offtarget_job(
         rscript_path=rscript_path,
         guides_csv=guides_csv,
         output_tsv=output_tsv,
+        done_flag=done_flag,
         nuclease=nuclease,
         scores=scores,
         genome=genome,
@@ -168,14 +199,11 @@ def submit_offtarget_job(
     qsub(ssh, job)
     poll_until_done(ssh, [job], max_hours=walltime_hours)
 
-    # Verify success
-    out, _err, _rc = ssh.exec(f"grep -c {OFFTARGET_SCORING_DONE} {log_path} || true")
-    try:
-        hits = int(out.strip().splitlines()[0]) if out.strip() else 0
-    except ValueError:
-        hits = 0
-    if hits == 0:
-        raise RuntimeError(f"off-target job did not emit {OFFTARGET_SCORING_DONE}")
+    # Verify success via the RDS sentinel file (written by the PBS job body
+    # immediately after the R script finishes, on the shared filesystem).
+    out, _err, _rc = ssh.exec(f"test -f {done_flag} && echo 1 || echo 0")
+    if out.strip() != "1":
+        raise RuntimeError(f"off-target job did not write sentinel {done_flag}")
 
     # Download the TSV
     with tempfile.NamedTemporaryFile(mode="r", suffix=".tsv", delete=False) as tmp:

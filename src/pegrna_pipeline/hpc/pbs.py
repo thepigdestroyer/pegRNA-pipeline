@@ -127,7 +127,7 @@ def qsub(ssh, job: PBSJob) -> str:
     scheduler id (PBS Pro prints ``1234567.hostname\\n``). The id is
     stored on ``job.scheduler_id`` and also returned.
     """
-    out, err, rc = ssh.exec(f"qsub {job.remote_script_path}")
+    out, err, rc = ssh.exec(f"/opt/pbs/bin/qsub {job.remote_script_path}")
     if rc != 0:
         raise RuntimeError(f"qsub failed: rc={rc} stderr={err!r}")
     sid = out.strip().split()[0] if out.strip() else ""
@@ -139,13 +139,13 @@ def qsub(ssh, job: PBSJob) -> str:
 
 def qstat_one(ssh, job: PBSJob) -> str:
     """Return the current state of ``job`` ('' if it has aged out)."""
-    out, _err, _rc = ssh.exec(f"qstat {job.scheduler_id}")
+    out, _err, _rc = ssh.exec(f"/opt/pbs/bin/qstat {job.scheduler_id}")
     return parse_qstat_state(out, job.scheduler_id.split(".")[0])
 
 
 def qdel(ssh, job: PBSJob) -> None:
     """Best-effort ``qdel <scheduler_id>`` — does not raise on non-zero rc."""
-    ssh.exec(f"qdel {job.scheduler_id}")
+    ssh.exec(f"/opt/pbs/bin/qdel {job.scheduler_id}")
 
 
 # ---------------------------------------------------------------- poll
@@ -181,7 +181,22 @@ def poll_until_done(
     elapsed = 0
     while True:
         ids = " ".join(j.scheduler_id for j in job_list if j.scheduler_id)
-        out, _err, _rc = ssh.exec(f"qstat {ids}")
+        out, err, rc = ssh.exec(f"/opt/pbs/bin/qstat {ids}")
+        # Only skip when the PBS *server* is unreachable (connection refused /
+        # cannot connect). A finished job that has aged out of qstat produces
+        # rc=1 + "Unknown Job Id" in stderr — that is NOT a server error and
+        # should fall through so parse_qstat_state returns "" → job marked F.
+        _server_down = (
+            rc != 0
+            and not out.strip()
+            and any(kw in err for kw in ("Connection refused", "cannot connect", "errno="))
+        )
+        if _server_down:
+            if elapsed >= max_seconds:
+                raise TimeoutError(f"poll_until_done: qstat unreachable and {max_hours}h elapsed")
+            sleep_fn(interval_seconds)
+            elapsed += interval_seconds
+            continue
         pending = 0
         for job in job_list:
             prefix = job.scheduler_id.split(".")[0]
@@ -229,7 +244,7 @@ def retry_with_doubled_resources(
 
 def _default_active_count_fn(ssh) -> int:
     """Return the number of this user's pending+running jobs."""
-    out, _err, _rc = ssh.exec("qstat -u $USER")
+    out, _err, _rc = ssh.exec("/opt/pbs/bin/qstat -u $USER")
     # Very simple count: any non-header line that contains an R or Q state.
     count = 0
     for line in out.splitlines():

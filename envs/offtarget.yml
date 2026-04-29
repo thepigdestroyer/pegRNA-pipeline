@@ -1,20 +1,49 @@
 name: pegrna-ngrna
-# R environment for off-target scoring via Bioconductor crisprScore/crisprDesign.
-# After creation run the R install block below once:
+# R + Bioconductor environment for off-target scoring (crisprScore +
+# crisprDesign + BSgenome.Hsapiens.UCSC.hg38).
 #
-#   conda activate pegrna-ngrna
-#   Rscript -e "
-#     options(repos = BiocManager::repositories())
-#     BiocManager::install(c(
-#       'crisprScore', 'crisprDesign', 'Biostrings',
-#       'BSgenome.Hsapiens.UCSC.hg38'
-#     ), ask = FALSE)
-#   "
+# We pull every Bioconductor package as a *conda binary* from the
+# bioconda channel rather than letting BiocManager source-compile them
+# inside the env. Source compilation needs system libraries (zlib,
+# libpng, libxml2, openssl, bzip2, xz) that aren't present in a vanilla
+# conda env on Imperial CX3 — bioconda's pre-built binaries dodge the
+# whole problem.
 channels:
   - conda-forge
   - bioconda
 dependencies:
+  # Toolchain + system libs (needed if any minor package still source-builds)
   - r-base>=4.3
   - r-biocmanager
   - r-data.table
+  - r-optparse
+  - r-png
+  - r-xml
+  - r-xml2
+  - r-openssl
+  - r-curl
+  - zlib
+  - libpng
+  - libxml2
+  - openssl
+  - bzip2
+  - xz
+
+  # Core Bioconductor binaries
+  - bioconductor-biocgenerics
+  - bioconductor-s4vectors
+  - bioconductor-iranges
   - bioconductor-genomicranges
+  - bioconductor-xvector
+  - bioconductor-biostrings
+  - bioconductor-bsgenome
+  - bioconductor-bsgenome.hsapiens.ucsc.hg38
+  - bioconductor-rhtslib
+  - bioconductor-rsamtools
+  - bioconductor-genomeinfodb
+
+  # crisprVerse (bioconda has these as binaries)
+  - bioconductor-crisprbase
+  - bioconductor-crisprscore
+  - bioconductor-crisprscoredata
+  - bioconductor-crisprdesign

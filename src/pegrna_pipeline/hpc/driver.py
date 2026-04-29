@@ -35,6 +35,7 @@ from typing import Any, Dict, List, Optional, Sequence, Union
 import yaml
 
 from pegrna_pipeline.hpc.data_types import (
+    DEFAULT_SCORE_CELL_LINE,
     GeneRecord,
     NgRNADesign,
     PegRNADesign,
@@ -42,6 +43,7 @@ from pegrna_pipeline.hpc.data_types import (
 )
 from pegrna_pipeline.hpc.input_formatter import format_bracket_insertion
 from pegrna_pipeline.hpc.pa_workflow import PAResult, run_pa_workflow
+from pegrna_pipeline.hpc.pe7_workflow import PE7Result, run_pe7_workflow
 from pegrna_pipeline.hpc.pridict_parser import parse_ngrna_csv, parse_pegrna_csv
 from pegrna_pipeline.hpc.pridict_submitter import (
     BatchResult,
@@ -172,58 +174,76 @@ def _build_variant_scores_from_batch(
 
 # --------------------------------------------------------------- winners -> guides
 def _extract_winning_guides(
-    result: Union[TJPEResult, PAResult],
+    result: Union[TJPEResult, PAResult, PE7Result],
 ) -> List[Dict[str, str]]:
-    """Return a list of ``{"guide_id", "spacer"}`` dicts for off-target scoring."""
+    """Return ``{"guide_id", "spacer"}`` dicts for off-target scoring.
+
+    For PE7 / TJPE we collect the *deduplicated* set of pegRNA + ngRNA
+    spacers across every entry in ``top_pairs`` (falling back to the
+    rank-1 fields when ``top_pairs`` is empty). guide_id is suffixed
+    with the rank where the spacer first appears so the off-target TSV
+    rows can be mapped back to specific designs.
+    """
+    seen: Dict[str, str] = {}  # spacer -> guide_id
     out: List[Dict[str, str]] = []
+
+    def _add(label: str, spacer: str) -> None:
+        if not spacer or spacer in seen:
+            return
+        seen[spacer] = label
+        out.append({"guide_id": label, "spacer": spacer})
+
+    if isinstance(result, PE7Result):
+        if result.top_pairs:
+            for p in result.top_pairs:
+                _add(f"pegrna_spacer_rank{p.rank}", p.spacer)
+                _add(f"ngrna_spacer_rank{p.rank}", p.ngrna_spacer)
+        else:
+            _add("pegrna_spacer", result.spacer)
+            _add("ngrna_spacer", result.ngrna_spacer)
+        return out
     if isinstance(result, TJPEResult):
-        if result.spacer:
-            out.append({"guide_id": "pegrna_spacer", "spacer": result.spacer})
-        if result.ngrna_spacer:
-            out.append({"guide_id": "ngrna_spacer", "spacer": result.ngrna_spacer})
+        _add("pegrna_spacer", result.spacer)
+        _add("ngrna_spacer", result.ngrna_spacer)
         return out
     if isinstance(result, PAResult):
         if result.winning_pair is None:
             return []
-        out.append(
-            {
-                "guide_id": "upstream_pegrna_spacer",
-                "spacer": result.winning_pair.upstream.spacer,
-            }
-        )
-        out.append(
-            {
-                "guide_id": "downstream_pegrna_spacer",
-                "spacer": result.winning_pair.downstream.spacer,
-            }
-        )
+        _add("upstream_pegrna_spacer", result.winning_pair.upstream.spacer)
+        _add("downstream_pegrna_spacer", result.winning_pair.downstream.spacer)
         return out
     raise TypeError(f"unsupported result type {type(result).__name__}")
 
 
-# --------------------------------------------------------------- write_reports stub
+# --------------------------------------------------------------- write_reports
 def write_reports(
     *,
     run_dir: Path,
     gene: GeneRecord,
-    result: Union[TJPEResult, PAResult],
+    result: Union[TJPEResult, PAResult, PE7Result],
     offtarget_reports: Sequence[Any],
+    construct_str: str = "",
+    all_evaluated_variants: Optional[Sequence[Any]] = None,
+    score_cell_line: str = DEFAULT_SCORE_CELL_LINE,
 ) -> Path:
-    """Plan 4 will implement this properly — for now drop a text placeholder.
+    """Delegate to :func:`pegrna_pipeline.hpc.report_writer.write_reports`.
 
-    Returns the path of the primary report file.
+    Returns the path of the primary text report file.
     """
+    from pegrna_pipeline.hpc.report_writer import write_reports as _full_write_reports
+
     reports_dir = run_dir / "reports"
-    reports_dir.mkdir(parents=True, exist_ok=True)
-    base_name = gene.gene_name
-    report_path = reports_dir / f"{base_name}.txt"
-    report_path.write_text(
-        f"pegRNA-pipeline report placeholder (Plan 4 will expand this)\n"
-        f"Gene: {gene.gene_name} ({gene.refseq_accession})\n"
-        f"Result type: {type(result).__name__}\n"
-        f"Off-target reports: {len(offtarget_reports)}\n"
+    paths = _full_write_reports(
+        result=result,
+        gene=gene,
+        construct_str=construct_str,
+        offtarget_reports=list(offtarget_reports),
+        all_evaluated_variants=list(all_evaluated_variants or []),
+        reports_dir=reports_dir,
+        base_name=gene.gene_name,
+        score_cell_line=score_cell_line,
     )
-    return report_path
+    return paths["txt"]
 
 
 # --------------------------------------------------------------- enumerate helpers
@@ -251,7 +271,7 @@ class DriverConfig:
     """Parsed ``inputs.json`` + ``construct.yaml`` shape."""
 
     gene: GeneRecord
-    mode: str  # "tjpe" | "pa"
+    mode: str  # "tjpe" | "pa" | "pe7"
     construct_aa: str
     construct_dna: str
     cell_line: str
@@ -260,6 +280,7 @@ class DriverConfig:
     rscript_path: str
     compute_mode: str
     back_ssh: Dict[str, Any]
+    score_cell_line: str  # "k562" | "hek293t" — which PRIDICT PE2 column ranks pegRNAs
 
 
 def _load_inputs(run_dir: Path) -> DriverConfig:
@@ -290,6 +311,7 @@ def _load_inputs(run_dir: Path) -> DriverConfig:
         rscript_path=inputs["rscript_path"],
         compute_mode=inputs.get("compute_mode", "local"),
         back_ssh=inputs.get("back_ssh", {}),
+        score_cell_line=inputs.get("score_cell_line", DEFAULT_SCORE_CELL_LINE),
     )
 
 
@@ -311,19 +333,43 @@ def _pridict_variants_for_window(
     return out
 
 
-def run_driver(run_dir: Union[str, Path]) -> Union[TJPEResult, PAResult]:
+def run_driver(run_dir: Union[str, Path]) -> Union[TJPEResult, PAResult, PE7Result]:
     """Run the full compute-node pipeline for ``run_dir``.
 
     Writes a report into ``run_dir/reports/<gene>.txt`` (Plan 4 will
-    expand this). Returns the :class:`TJPEResult` or :class:`PAResult`
-    so callers (the integration test) can assert on the shape.
+    expand this). Returns the :class:`TJPEResult`, :class:`PAResult`, or
+    :class:`PE7Result` so callers (the integration tests) can assert on
+    the shape.
     """
     run_path = Path(run_dir)
     cfg = _load_inputs(run_path)
     ssh_cfg = {"compute_mode": cfg.compute_mode, **cfg.back_ssh}
 
     with _local_compute_ssh(ssh_cfg) as ssh:
-        if cfg.mode == "tjpe":
+        if cfg.mode == "pe7":
+            # PE7: single submission of the user's exact insert DNA — no
+            # codon enumeration. The workflow itself enforces the ≤40 bp
+            # PRIDICT range.
+            variants = _pridict_variants_for_window(
+                cfg.gene,
+                [cfg.construct_dna],
+                name_prefix="pe7_var",
+            )
+            batch = submit_pridict_batches(
+                ssh=ssh,
+                variants=variants,
+                remote_run_dir=str(run_path),
+                pridict_install_path=cfg.pridict_install_path,
+                conda_env=cfg.conda_env,
+            )
+            variant_scores = _build_variant_scores_from_batch(batch, variants)
+            result: Union[TJPEResult, PAResult, PE7Result] = run_pe7_workflow(
+                gene=cfg.gene,
+                insert_full_dna=cfg.construct_dna,
+                variant_scores=variant_scores,
+                score_cell_line=cfg.score_cell_line,
+            )
+        elif cfg.mode == "tjpe":
             dna_variants = _enumerate_first_aa(cfg.construct_aa, 8)
             variants = _pridict_variants_for_window(cfg.gene, dna_variants, name_prefix="tjpe_var")
             batch = submit_pridict_batches(
@@ -334,10 +380,11 @@ def run_driver(run_dir: Union[str, Path]) -> Union[TJPEResult, PAResult]:
                 conda_env=cfg.conda_env,
             )
             variant_scores = _build_variant_scores_from_batch(batch, variants)
-            result: Union[TJPEResult, PAResult] = run_tjpe_workflow(
+            result = run_tjpe_workflow(
                 gene=cfg.gene,
                 insert_full_dna=cfg.construct_dna,
                 variant_scores=variant_scores,
+                score_cell_line=cfg.score_cell_line,
             )
         elif cfg.mode == "pa":
             from pegrna_pipeline.hpc.codon_expander import optimise_bulk
@@ -393,6 +440,7 @@ def run_driver(run_dir: Union[str, Path]) -> Union[TJPEResult, PAResult]:
                 downstream_flap_dna=downstream_flap_dna,
                 bulk_dna=bulk_dna,
                 donor_dna=linear_donor,
+                score_cell_line=cfg.score_cell_line,
             )
         else:
             raise ValueError(f"unknown mode {cfg.mode!r}")
@@ -418,11 +466,22 @@ def run_driver(run_dir: Union[str, Path]) -> Union[TJPEResult, PAResult]:
             except Exception as exc:  # pragma: no cover - integration-only
                 print(f"offtarget scoring failed: {exc}", file=sys.stderr)
 
+        # Pull all_evaluated_variants from whichever result type we have
+        # so the gzipped per-variant CSV is populated.
+        all_variants: Sequence[Any] = ()
+        if isinstance(result, (TJPEResult, PE7Result)):
+            all_variants = result.all_evaluated_variants
+        # PAResult doesn't expose a single all-variants list (it has
+        # per-flap rankings); leave empty for now.
+
         write_reports(
             run_dir=run_path,
             gene=cfg.gene,
             result=result,
             offtarget_reports=offtarget_reports,
+            construct_str=cfg.construct_dna,
+            all_evaluated_variants=all_variants,
+            score_cell_line=cfg.score_cell_line,
         )
 
     # Signal success for the PBS wrapper

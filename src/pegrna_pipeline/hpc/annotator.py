@@ -1,8 +1,8 @@
-"""Per-component annotations for TJ-PE and PA results.
+"""Per-component annotations for TJ-PE, PA, and PE7 results.
 
-Takes Plan 2's TJPEResult / PAResult plus a GeneRecord and produces an
-ordered list of ComponentAnnotation records that the report writers
-render mode-aware.
+Takes Plan 2's TJPEResult / PAResult / PE7Result plus a GeneRecord and
+produces an ordered list of ComponentAnnotation records that the report
+writers render mode-aware.
 """
 
 from __future__ import annotations
@@ -13,6 +13,7 @@ from typing import List
 
 from pegrna_pipeline.hpc.data_types import GeneRecord
 from pegrna_pipeline.hpc.pa_workflow import PAResult
+from pegrna_pipeline.hpc.pe7_workflow import PE7Result
 from pegrna_pipeline.hpc.tjpe_workflow import STANDARD_SGRNA_SCAFFOLD, TJPEResult
 
 
@@ -54,7 +55,9 @@ def annotate_tjpe_result(result: TJPEResult, gene: GeneRecord) -> List[Component
                 f"single-strand nick on the target strand."
             ),
             source=ComponentSource.PRIDICT2,
-            design_notes=f"PE2 HEK293T = {result.pegrna_pe2_hek293t:.2f}%",
+            design_notes=(
+                f"PE2 {result.pegrna_pe2_cell_line.upper()} = " f"{result.pegrna_pe2_score:.2f}%"
+            ),
         )
     )
     annotations.append(
@@ -121,9 +124,10 @@ def annotate_tjpe_result(result: TJPEResult, gene: GeneRecord) -> List[Component
             sequence=result.ngrna_spacer,
             length_bp=len(result.ngrna_spacer),
             functional_role=(
-                f"20-nt nicking-sgRNA spacer. Directs Cas9-H840A to nick the "
-                f"opposite strand {abs(result.ngrna_distance_to_edit)} bp from "
-                f"the edit (signed {result.ngrna_distance_to_edit:+d})."
+                f"{len(result.ngrna_spacer)}-nt nicking-sgRNA spacer. "
+                f"Directs Cas9-H840A to nick the opposite strand "
+                f"{abs(result.ngrna_distance_to_edit)} bp from the edit "
+                f"(signed {result.ngrna_distance_to_edit:+d})."
             ),
             source=ComponentSource.PRIDICT2,
             design_notes=f"DeepCas9 score = {result.ngrna_deepcas9_score:.2f}",
@@ -141,10 +145,101 @@ def annotate_tjpe_result(result: TJPEResult, gene: GeneRecord) -> List[Component
     return annotations
 
 
-def annotate_pa_result(result: PAResult, gene: GeneRecord) -> List[ComponentAnnotation]:
-    """Build per-component annotations for a Prime Assembly design."""
+def annotate_pe7_result(result: PE7Result, gene: GeneRecord) -> List[ComponentAnnotation]:
+    """Build per-component annotations for a PE7 (standard PE3-strategy) design.
+
+    Ordered: spacer, sgRNA_scaffold, RT_template, PBS, ngRNA_spacer,
+    ngRNA_scaffold. The insert is *encoded inside* the RT template — there is
+    no separate ``insert`` component as in TJ-PE.
+    """
+    return [
+        ComponentAnnotation(
+            name="spacer",
+            sequence=result.spacer,
+            length_bp=len(result.spacer),
+            functional_role=(
+                f"{len(result.spacer)}-nt guide that directs the prime editor "
+                f"(Cas9-H840A nickase) to the {gene.gene_name} locus on the "
+                f"{result.pegrna_strand} strand. Creates the pegRNA-side nick."
+            ),
+            source=ComponentSource.PRIDICT2,
+            design_notes=(
+                f"PE2 {result.pegrna_pe2_cell_line.upper()} = " f"{result.pegrna_pe2_score:.2f}%"
+            ),
+        ),
+        ComponentAnnotation(
+            name="sgRNA_scaffold",
+            sequence=STANDARD_SGRNA_SCAFFOLD,
+            length_bp=len(STANDARD_SGRNA_SCAFFOLD),
+            functional_role=(
+                "Invariant hairpin recognised by Cas9; identical for every "
+                "pegRNA and supplied by the cloning backbone."
+            ),
+            source=ComponentSource.INVARIANT,
+        ),
+        ComponentAnnotation(
+            name="RT_template",
+            sequence=result.rt,
+            length_bp=len(result.rt),
+            functional_role=(
+                f"{len(result.rt)}-nt reverse-transcription template. Encodes "
+                f"the {len(result.full_insert_dna)}-bp insert plus a few "
+                f"flanking nucleotides for hybridisation."
+            ),
+            source=ComponentSource.PRIDICT2,
+        ),
+        ComponentAnnotation(
+            name="PBS",
+            sequence=result.pbs,
+            length_bp=len(result.pbs),
+            functional_role=(
+                f"{len(result.pbs)}-nt primer binding site. Hybridises to the "
+                f"3' end exposed by the pegRNA nick, priming RT extension."
+            ),
+            source=ComponentSource.PRIDICT2,
+        ),
+        ComponentAnnotation(
+            name="ngRNA_spacer",
+            sequence=result.ngrna_spacer,
+            length_bp=len(result.ngrna_spacer),
+            functional_role=(
+                f"{len(result.ngrna_spacer)}-nt nicking-sgRNA spacer. "
+                f"Directs Cas9-H840A to nick the opposite ({result.ngrna_strand}) "
+                f"strand {abs(result.ngrna_distance_to_edit)} bp from the edit "
+                f"(signed {result.ngrna_distance_to_edit:+d}). Drives PE3-style "
+                f"repair bias."
+            ),
+            source=ComponentSource.PRIDICT2,
+            design_notes=f"DeepCas9 score = {result.ngrna_deepcas9_score:.2f}",
+        ),
+        ComponentAnnotation(
+            name="ngRNA_scaffold",
+            sequence=STANDARD_SGRNA_SCAFFOLD,
+            length_bp=len(STANDARD_SGRNA_SCAFFOLD),
+            functional_role="Invariant sgRNA scaffold (same as pegRNA scaffold).",
+            source=ComponentSource.INVARIANT,
+        ),
+    ]
+
+
+def annotate_pa_result(
+    result: PAResult,
+    gene: GeneRecord,
+    score_cell_line: str = "k562",
+) -> List[ComponentAnnotation]:
+    """Build per-component annotations for a Prime Assembly design.
+
+    ``score_cell_line`` controls which PRIDICT PE2 column the per-pegRNA
+    notes display ("k562" or "hek293t").
+    """
+    from pegrna_pipeline.hpc.data_types import _score_attr
+
+    score_attr = _score_attr(score_cell_line)
     up = result.winning_pair.upstream
     dn = result.winning_pair.downstream
+    cl_label = score_cell_line.upper()
+    up_score = float(getattr(up, score_attr))
+    dn_score = float(getattr(dn, score_attr))
     return [
         ComponentAnnotation(
             name="upstream_pegRNA_spacer",
@@ -156,7 +251,7 @@ def annotate_pa_result(result: PAResult, gene: GeneRecord) -> List[ComponentAnno
                 f"position {up.editing_position}. Installs the upstream flap."
             ),
             source=ComponentSource.PRIDICT2,
-            design_notes=f"PE2 HEK293T = {up.pe2_hek293t:.2f}%",
+            design_notes=f"PE2 {cl_label} = {up_score:.2f}%",
         ),
         ComponentAnnotation(
             name="upstream_sgRNA_scaffold",
@@ -203,7 +298,7 @@ def annotate_pa_result(result: PAResult, gene: GeneRecord) -> List[ComponentAnno
                 f"position {dn.editing_position}. Installs the downstream flap."
             ),
             source=ComponentSource.PRIDICT2,
-            design_notes=f"PE2 HEK293T = {dn.pe2_hek293t:.2f}%",
+            design_notes=f"PE2 {cl_label} = {dn_score:.2f}%",
         ),
         ComponentAnnotation(
             name="downstream_sgRNA_scaffold",

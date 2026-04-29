@@ -27,20 +27,23 @@ def test_script_has_required_cli_flags():
         assert flag in text, f"missing {flag}"
 
 
-def test_script_default_nuclease_is_spcas9_h840a():
-    text = SCRIPT_PATH.read_text()
-    assert "SpCas9_H840A" in text
+def test_script_default_nuclease_is_spcas9():
+    """Default nuclease is the canonical SpCas9 (predefined in crisprBase).
 
-
-def test_script_default_scores_include_required_three():
+    Earlier versions used the bare string SpCas9_H840A which crisprDesign
+    couldn't resolve — recognition is identical so SpCas9 is the right
+    default. The CLI still accepts --nuclease overrides.
+    """
     text = SCRIPT_PATH.read_text()
-    for s in ("DeepSpCas9", "DeepHF", "CFD"):
-        assert s in text
+    assert 'default = "SpCas9"' in text
 
 
 def test_script_loads_required_bioconductor_pkgs():
     text = SCRIPT_PATH.read_text()
-    for pkg in ("crisprScore", "crisprDesign", "BSgenome.Hsapiens.UCSC.hg38"):
+    # We dropped crisprDesign / crisprScore in favour of Biostrings-only
+    # off-target counting (no precomputed BWA/bowtie index needed); the
+    # one mandatory package is BSgenome.Hsapiens.UCSC.hg38.
+    for pkg in ("Biostrings", "BSgenome.Hsapiens.UCSC.hg38"):
         assert pkg in text, f"missing package {pkg}"
 
 

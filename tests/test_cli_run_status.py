@@ -25,6 +25,73 @@ def test_run_errors_when_config_missing(monkeypatch, tmp_path: Path):
     assert "pegrna setup" in result.output
 
 
+def test_run_accepts_pe7_mode(monkeypatch, tmp_path: Path):
+    """``--mode pe7`` is a recognised choice (rejected here only because
+    config is missing, not the mode itself)."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    result = CliRunner().invoke(
+        cli,
+        ["run", "--gene", "CTCF", "--construct", "FLAG", "--mode", "pe7", "--non-interactive"],
+    )
+    # exit code 2 == "pegrna setup" required (config missing); we just
+    # need to confirm Click didn't reject the mode value.
+    assert result.exit_code == 2
+    assert "pegrna setup" in result.output
+    assert "Invalid value for '--mode'" not in result.output
+
+
+def test_password_provider_prefers_env(monkeypatch, tmp_path: Path):
+    from pegrna_pipeline.agent.cli import _resolve_hpc_password_provider
+
+    monkeypatch.setenv("CX3_PASSWORD", "from-env")
+    monkeypatch.setenv("HOME", str(tmp_path))
+    assert _resolve_hpc_password_provider(non_interactive=True)() == "from-env"
+
+
+def test_password_provider_falls_back_to_credentials_file(monkeypatch, tmp_path: Path):
+    from pegrna_pipeline.agent.cli import _resolve_hpc_password_provider
+
+    monkeypatch.delenv("CX3_PASSWORD", raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    cred = tmp_path / ".cx3-credentials"
+    cred.write_text("HPC_USER=mj1824\nHPC_PASS='secret with spaces'\n")
+    cred.chmod(0o600)
+    assert _resolve_hpc_password_provider(non_interactive=True)() == "secret with spaces"
+
+
+def test_password_provider_handles_printf_q_escaping(monkeypatch, tmp_path: Path):
+    """printf %q output (backslash-escaped specials) must round-trip."""
+    from pegrna_pipeline.agent.cli import _resolve_hpc_password_provider
+
+    monkeypatch.delenv("CX3_PASSWORD", raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    cred = tmp_path / ".cx3-credentials"
+    # Mimic what `printf 'HPC_PASS=%q\n' 'NousGnosis*2207'` writes.
+    cred.write_text("HPC_USER=mj1824\nHPC_PASS=NousGnosis\\*2207\n")
+    cred.chmod(0o600)
+    assert _resolve_hpc_password_provider(non_interactive=True)() == "NousGnosis*2207"
+
+
+def test_password_provider_returns_empty_in_noninteractive_when_nothing_available(
+    monkeypatch, tmp_path: Path
+):
+    from pegrna_pipeline.agent.cli import _resolve_hpc_password_provider
+
+    monkeypatch.delenv("CX3_PASSWORD", raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    assert _resolve_hpc_password_provider(non_interactive=True)() == ""
+
+
+def test_run_rejects_unknown_mode(monkeypatch, tmp_path: Path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    result = CliRunner().invoke(
+        cli,
+        ["run", "--gene", "CTCF", "--construct", "FLAG", "--mode", "pe6", "--non-interactive"],
+    )
+    assert result.exit_code != 0
+    assert "Invalid value" in result.output or "invalid choice" in result.output.lower()
+
+
 def test_status_empty_when_no_runs(monkeypatch, tmp_path: Path):
     monkeypatch.setenv("HOME", str(tmp_path))
     result = CliRunner().invoke(cli, ["status"])
@@ -59,6 +126,7 @@ def test_setup_writes_config(monkeypatch, tmp_path: Path):
                 "",  # conda_env default
                 "local",  # compute_mode
                 "",  # cell_line default
+                "",  # score_cell_line default (k562)
             ]
         )
         + "\n"

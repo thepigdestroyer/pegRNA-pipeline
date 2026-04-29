@@ -46,9 +46,11 @@ def test_parse_offtarget_tsv_handles_na():
     )
     reports = parse_offtarget_tsv(tsv)
     assert len(reports) == 1
-    # NA values are materialised as 0.0 (NaN would also be acceptable;
-    # our convention is "treat NA as missing -> 0.0" for now).
-    assert reports[0].deepspcas9 == 0.0
+    # NA values now materialise as None so callers can distinguish
+    # "unscanned / unscoreable" from a real zero.
+    assert reports[0].deepspcas9 is None
+    assert reports[0].deephf is None
+    assert reports[0].cfd_specificity is None
 
 
 class FakeSSH:
@@ -70,12 +72,12 @@ class FakeSSH:
 
     def exec(self, cmd: str):
         self.commands.append(cmd)
-        if cmd.startswith("qsub "):
+        if cmd.startswith("/opt/pbs/bin/qsub "):
             return (next(self._qsub_ids) + "\n", "", 0)
-        if cmd.startswith("qstat"):
+        if cmd.startswith("/opt/pbs/bin/qstat"):
             return ("", "", 0)
-        if cmd.startswith("grep "):
-            return ("1\n", "", 0)  # marker present
+        if cmd.startswith("test -f ") and "OFFTARGET_DONE" in cmd:
+            return ("1\n", "", 0)  # sentinel present
         return ("", "", 0)
 
 
@@ -95,7 +97,7 @@ def test_submit_offtarget_job_returns_reports(tmp_path, monkeypatch):
     assert len(reports) == 2
     assert reports[0].guide_id == "g1"
     # qsub was called exactly once
-    assert sum(1 for c in ssh.commands if c.startswith("qsub ")) == 1
+    assert sum(1 for c in ssh.commands if c.startswith("/opt/pbs/bin/qsub ")) == 1
     # guides CSV was uploaded
     csv_uploads = [u for u in ssh.uploads if u[1].endswith(".csv")]
     assert len(csv_uploads) == 1
