@@ -76,8 +76,8 @@ class FakeSSH:
             return (next(self._qsub_ids) + "\n", "", 0)
         if cmd.startswith("/opt/pbs/bin/qstat"):
             return ("", "", 0)
-        if cmd.startswith("grep "):
-            return ("1\n", "", 0)  # marker present
+        if cmd.startswith("test -f ") and "OFFTARGET_DONE" in cmd:
+            return ("1\n", "", 0)  # sentinel present
         return ("", "", 0)
 
 
