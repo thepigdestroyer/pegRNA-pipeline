@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import csv
 import io
+import os
 import tempfile
 from dataclasses import dataclass
 from typing import List, Optional, Sequence, Tuple
@@ -136,7 +137,10 @@ def _write_guides_csv_and_upload(ssh, guides, remote_path: str) -> None:
         for g in guides:
             writer.writerow([g["guide_id"], g["spacer"]])
         local = tmp.name
-    ssh.upload(local, remote_path)
+    try:
+        ssh.upload(local, remote_path)
+    finally:
+        os.unlink(local)
 
 
 def submit_offtarget_job(
@@ -195,7 +199,10 @@ def submit_offtarget_job(
     with tempfile.NamedTemporaryFile(mode="w", suffix=".pbs", delete=False) as tmp:
         tmp.write(script_text)
         local_pbs = tmp.name
-    ssh.upload(local_pbs, script_path)
+    try:
+        ssh.upload(local_pbs, script_path)
+    finally:
+        os.unlink(local_pbs)
 
     job = PBSJob(spec=spec, remote_script_path=script_path)
     qsub(ssh, job)
@@ -208,9 +215,12 @@ def submit_offtarget_job(
         raise RuntimeError(f"off-target job did not write sentinel {done_flag}")
 
     # Download the TSV
-    with tempfile.NamedTemporaryFile(mode="r", suffix=".tsv", delete=False) as tmp:
-        local_tsv = tmp.name
-    ssh.download(output_tsv, local_tsv)
-    with open(local_tsv) as fh:
-        tsv_text = fh.read()
+    fd, local_tsv = tempfile.mkstemp(suffix=".tsv")
+    os.close(fd)
+    try:
+        ssh.download(output_tsv, local_tsv)
+        with open(local_tsv) as fh:
+            tsv_text = fh.read()
+    finally:
+        os.unlink(local_tsv)
     return parse_offtarget_tsv(tsv_text)

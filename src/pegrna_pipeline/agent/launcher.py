@@ -100,19 +100,21 @@ class HPCLauncher:
         data = json.loads(out)
         return GeneRecord(**data)
 
-    def _upload_json(self, ssh, remote_path: str, payload: Dict[str, Any]) -> None:
-        text = json.dumps(payload, indent=2)
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as tmp:
+    @staticmethod
+    def _write_and_upload(ssh, text: str, remote_path: str, suffix: str = "") -> None:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=suffix, delete=False) as tmp:
             tmp.write(text)
             local = tmp.name
-        ssh.upload(local, remote_path)
+        try:
+            ssh.upload(local, remote_path)
+        finally:
+            Path(local).unlink(missing_ok=True)
+
+    def _upload_json(self, ssh, remote_path: str, payload: Dict[str, Any]) -> None:
+        self._write_and_upload(ssh, json.dumps(payload, indent=2), remote_path, ".json")
 
     def _upload_yaml(self, ssh, remote_path: str, payload: Dict[str, Any]) -> None:
-        text = yaml.safe_dump(payload, sort_keys=False)
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as tmp:
-            tmp.write(text)
-            local = tmp.name
-        ssh.upload(local, remote_path)
+        self._write_and_upload(ssh, yaml.safe_dump(payload, sort_keys=False), remote_path, ".yaml")
 
     def _qsub_driver(self, ssh, remote_run_dir: str) -> str:
         """qsub the wrapper with -v RUN_DIR=... and return the scheduler id."""

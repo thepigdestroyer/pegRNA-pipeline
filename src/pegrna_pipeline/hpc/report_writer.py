@@ -24,6 +24,10 @@ _BAR = "=" * 72
 _DASH = "-" * 72
 
 
+def _utc_iso_now() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S") + "Z"
+
+
 def _assemble_ngrna(spacer: str) -> str:
     """Return the full, orderable ngRNA oligo: spacer + standard scaffold."""
     return spacer + STANDARD_SGRNA_SCAFFOLD
@@ -72,7 +76,7 @@ def write_tjpe_txt_report(
 ) -> None:
     annotations = annotate_tjpe_result(result, gene)
     lines: List[str] = [_BAR, "pegRNA DESIGN REPORT -- TJ-PE mode", _BAR]
-    lines.append(f"Generated:      {datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%S')}Z")
+    lines.append(f"Generated:      {_utc_iso_now()}")
     lines.append(f"Gene:           {gene.gene_name} ({gene.refseq_accession})")
     lines.append(f"Stop codon:     {gene.stop_codon} at mRNA position {gene.stop_codon_start}")
     lines.append(f"Construct:      {construct_str}")
@@ -136,7 +140,7 @@ def write_pe7_txt_report(
 ) -> None:
     annotations = annotate_pe7_result(result, gene)
     lines: List[str] = [_BAR, "pegRNA DESIGN REPORT -- PE7 (PE3-strategy) mode", _BAR]
-    lines.append(f"Generated:      {datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%S')}Z")
+    lines.append(f"Generated:      {_utc_iso_now()}")
     lines.append(f"Gene:           {gene.gene_name} ({gene.refseq_accession})")
     lines.append(f"Stop codon:     {gene.stop_codon} at mRNA position {gene.stop_codon_start}")
     lines.append(f"Construct:      {construct_str}")
@@ -249,7 +253,7 @@ def write_pa_txt_report(
     up_score = float(getattr(up, score_attr))
     dn_score = float(getattr(dn, score_attr))
     lines: List[str] = [_BAR, "pegRNA DESIGN REPORT -- Prime Assembly mode", _BAR]
-    lines.append(f"Generated:      {datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%S')}Z")
+    lines.append(f"Generated:      {_utc_iso_now()}")
     lines.append(f"Gene:           {gene.gene_name} ({gene.refseq_accession})")
     lines.append(f"Stop codon:     {gene.stop_codon} at mRNA position {gene.stop_codon_start}")
     lines.append(f"Construct:      {construct_str}")

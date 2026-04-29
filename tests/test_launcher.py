@@ -227,9 +227,7 @@ def test_poll_driver_raises_when_job_disappears_without_done():
     import pytest
 
     launcher = HPCLauncher(
-        config=CONFIG,
-        password_provider=lambda: "pw",
-        ssh_factory=_ssh_factory(DeadJobSSH()),
+        config=CONFIG, password_provider=lambda: "pw", ssh_factory=_ssh_factory(FakeSSH())
     )
     dead = DeadJobSSH()
     with dead:
@@ -244,16 +242,13 @@ def test_poll_driver_raises_on_timeout():
         def exec(self, cmd: str):
             self.commands.append(cmd)
             if cmd.startswith("/opt/pbs/bin/qstat"):
-                # Return a fake qstat row so the job appears to still be running
                 return ("9999.pbs  user  queue  job  R  queue\n", "", 0)
             return ("0\n", "", 0)  # grep never finds DRIVER_DONE
 
     import pytest
 
     launcher = HPCLauncher(
-        config=CONFIG,
-        password_provider=lambda: "pw",
-        ssh_factory=_ssh_factory(StuckJobSSH()),
+        config=CONFIG, password_provider=lambda: "pw", ssh_factory=_ssh_factory(FakeSSH())
     )
     stuck = StuckJobSSH()
     with stuck:
