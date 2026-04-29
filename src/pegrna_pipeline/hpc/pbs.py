@@ -181,11 +181,15 @@ def poll_until_done(
     elapsed = 0
     while True:
         ids = " ".join(j.scheduler_id for j in job_list if j.scheduler_id)
-        out, _err, rc = ssh.exec(f"/opt/pbs/bin/qstat {ids}")
-        # If qstat itself fails (PBS server temporarily unreachable, rc != 0
-        # and stdout empty), skip state updates for this iteration so we don't
-        # incorrectly mark running jobs as finished.
-        if rc != 0 and not out.strip():
+        out, err, rc = ssh.exec(f"/opt/pbs/bin/qstat {ids}")
+        # Only skip when the PBS *server* is unreachable (connection refused /
+        # cannot connect). A finished job that has aged out of qstat produces
+        # rc=1 + "Unknown Job Id" in stderr — that is NOT a server error and
+        # should fall through so parse_qstat_state returns "" → job marked F.
+        _server_down = rc != 0 and not out.strip() and any(
+            kw in err for kw in ("Connection refused", "cannot connect", "errno=")
+        )
+        if _server_down:
             if elapsed >= max_seconds:
                 raise TimeoutError(
                     f"poll_until_done: qstat unreachable and {max_hours}h elapsed"
