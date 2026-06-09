@@ -32,6 +32,11 @@ from pegrna_pipeline.hpc.pridict_parser import (
     parse_ngrna_csv,
     parse_pegrna_csv,
 )
+from pegrna_pipeline.hpc.scarless import (
+    assert_inv0,
+    build_restored_segment,
+    predict_edited_allele,
+)
 
 OPPOSITE_STRAND = {"Fw": "Rv", "Rv": "Fw"}
 
@@ -278,6 +283,27 @@ class TJPEResult:
     # / 100. Reported for transparency; NOT used for ranking.
     joint_pe3_score: float = 0.0
     all_evaluated_variants: List[VariantScore] = field(default_factory=list)
+    # ---- scarless mode fields (defaults keep back-compat for deleting tjPE) ----
+    scarless: bool = False
+    restored_segment: str = ""
+    silent_pam_edit: Optional[dict] = None
+    predicted_edited_allele: str = ""
+    deletion_size: int = 0
+    insert_end_score: float = 0.0
+    pbs2_end_score: float = 0.0
+    combined_score: float = 0.0
+    microhomology_flag: bool = False
+    recut_flag: bool = False
+    structure_norm_mfe: float = 0.0
+    warnings: List[str] = field(default_factory=list)
+
+
+class ScarlessNoValidDesign(RuntimeError):
+    """Raised when scarless mode finds no candidate passing all hard gates.
+
+    Per the adversarial-review risk register (R4), scarless mode must **fail
+    loudly with a reason** rather than silently return an empty/garbage design.
+    """
 
 
 def _load_variants_from_fixtures(fixtures_dir: Path) -> List[VariantScore]:
@@ -321,6 +347,7 @@ def run_tjpe_workflow(
     ngrna_distance_max: int = 100,
     pbs2_length: int = 17,
     score_cell_line: str = DEFAULT_SCORE_CELL_LINE,
+    scarless: bool = False,
 ) -> TJPEResult:
     """Run the TJ-PE workflow end-to-end for one gene + insertion.
 
@@ -361,6 +388,11 @@ def run_tjpe_workflow(
     edit_position_in_mrna = gene.stop_codon_start
 
     if winning is None or best_peg is None:
+        if scarless:
+            raise ScarlessNoValidDesign(
+                f"no valid scarless design for {gene.gene_name}: no ranked pegRNA "
+                f"variant available (0 of {len(variants)} variants usable)"
+            )
         # Degenerate case: caller asked us to design with no variants.  We
         # return a TJPEResult with zeroed strings so downstream diagnostics
         # can still inspect all_evaluated_variants.
@@ -391,6 +423,12 @@ def run_tjpe_workflow(
     )
 
     if best_ng is None:
+        if scarless:
+            raise ScarlessNoValidDesign(
+                f"no valid scarless design for {gene.gene_name}: no safe nicking "
+                f"sgRNA in the {ngrna_distance_min}-{ngrna_distance_max} bp window "
+                f"(strand-opposite of {best_peg.target_strand})"
+            )
         # No usable ngRNA for this variant — surface via empty ngRNA fields
         # so callers can decide to fail vs retry.  A full-on exception would
         # be wrong here because the caller may well want to iterate through
@@ -421,12 +459,65 @@ def run_tjpe_workflow(
         pbs2_length=pbs2_length,
     )
 
+    # -------- scarless construction (zero endogenous deletion) --------
+    restored_segment = ""
+    predicted_allele = ""
+    deletion_size = 0
+    warnings: List[str] = []
+    if scarless:
+        # Reverse-strand pegRNA must have its nicking nick exactly at S.
+        if not require_b_at_s(
+            distance_to_edit=best_ng.distance_to_edit,
+            pegrna_strand=best_peg.target_strand,
+        ):
+            raise ScarlessNoValidDesign(
+                f"no valid scarless design for {gene.gene_name}: reverse-strand "
+                f"pegRNA requires the nicking nick exactly at S (distance 0), "
+                f"got {best_ng.distance_to_edit}"
+            )
+        a_nick = edit_position_in_mrna
+        b_nick = ngrna_nick_in_mrna
+        restored_segment = build_restored_segment(
+            gene.mrna_sequence,
+            a_nick=a_nick,
+            b_nick=b_nick,
+            pegrna_strand=best_peg.target_strand,
+        )
+        predicted_allele = predict_edited_allele(
+            gene.mrna_sequence,
+            site_s=edit_position_in_mrna,
+            cargo=insert_full_dna,
+            a_nick=a_nick,
+            b_nick=b_nick,
+            pegrna_strand=best_peg.target_strand,
+            silent_pam_edit=None,
+        )
+        # INV-0 HARD GATE — zero endogenous deletion (raises on failure).
+        assert_inv0(
+            reference=gene.mrna_sequence,
+            edited=predicted_allele,
+            site_s=edit_position_in_mrna,
+            cargo=insert_full_dna,
+            allowed_silent=None,
+        )
+        # Advisory warnings (A-only: surfaced, never blocking).
+        warnings.append(
+            "microhomology: restored segment is 100% genome-homologous "
+            "(see spec §10 R1)"
+        )
+        if abs(best_ng.distance_to_edit) < 70:
+            warnings.append(
+                f"distance {abs(best_ng.distance_to_edit)} bp < 70 bp validated "
+                "minimum (R3, untested)"
+            )
+
     # -------- assemble final pegRNA --------
     tjpe_pegrna = assemble_tj_pegrna(
         spacer=best_peg.spacer,
         insert_dna=insert_full_dna,
         pbs1=best_peg.pbs,
         rc_pbs2=rc_pbs2,
+        restored_segment=restored_segment,
     )
 
     pe2_value = float(getattr(best_peg, _score_attr(score_cell_line)))
@@ -447,4 +538,11 @@ def run_tjpe_workflow(
         ngrna_nick_in_mrna=ngrna_nick_in_mrna,
         joint_pe3_score=pe2_value * float(best_ng.deepcas9_score) / 100.0,
         all_evaluated_variants=list(variants),
+        scarless=scarless,
+        restored_segment=restored_segment,
+        predicted_edited_allele=predicted_allele,
+        deletion_size=deletion_size,
+        microhomology_flag=bool(scarless),
+        recut_flag=False,
+        warnings=warnings,
     )
