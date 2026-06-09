@@ -30,6 +30,9 @@ dev = [
     "ruff>=0.5",
     "black>=24",
 ]
+scarless = [
+    "ViennaRNA>=2.6",
+]
 
 [project.scripts]
 pegrna = "pegrna_pipeline.agent.cli:cli"
