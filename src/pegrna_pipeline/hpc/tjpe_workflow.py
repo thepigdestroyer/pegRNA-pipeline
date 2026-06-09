@@ -134,6 +134,28 @@ def select_tjpe_ngrna(
     return max(survivors, key=lambda c: c.deepcas9_score)
 
 
+# ------------------------------------------------- scarless helpers (Tasks 6/7)
+
+
+def require_b_at_s(*, distance_to_edit: int, pegrna_strand: str) -> bool:
+    """Scarless strand rule: a reverse-strand pegRNA requires the nicking-sgRNA
+    nick to fall **exactly at the edit site S** (signed ``distance_to_edit == 0``)
+    so no endogenous base is lost. For a forward-strand pegRNA this constraint
+    does not apply (returns ``True``).
+    """
+    if pegrna_strand == "Rv":
+        return distance_to_edit == 0
+    if pegrna_strand == "Fw":
+        return True
+    raise ValueError(f"pegrna_strand must be 'Fw'/'Rv'; got {pegrna_strand!r}")
+
+
+def combine_two_end_scores(*, insert_score: float, pbs2_score: float) -> float:
+    """Bottleneck combination of the two-end PRIDICT decomposition: a design is
+    only as good as its weaker end (insert/initiation vs PBS2/second-strand)."""
+    return min(float(insert_score), float(pbs2_score))
+
+
 # ------------------------------------------------------------------ T8
 
 
@@ -194,27 +216,34 @@ def assemble_tj_pegrna(
     insert_dna: str,
     pbs1: str,
     rc_pbs2: str,
+    restored_segment: str = "",
     scaffold: str = STANDARD_SGRNA_SCAFFOLD,
 ) -> str:
     """Return the full TJ-PE pegRNA DNA string.
 
     Layout (5' -> 3'):
 
-        spacer + scaffold + insert_dna + pbs1 + rc_pbs2
+        spacer + scaffold + insert_dna + restored_segment + pbs1 + rc_pbs2
 
-    All four sequence components (plus the scaffold) must be non-empty
+    The optional ``restored_segment`` carries the re-templated A→B genomic span
+    used by the **scarless** mode (zero endogenous deletion); when empty the
+    layout is the standard deleting tjPE construct, so existing callers are
+    unaffected. All non-empty sequence components (plus the scaffold) must be
     uppercase ACGT. Any lowercase letter, ``U``, or ambiguity code raises
     :class:`ValueError`.
     """
-    for label, value in (
+    checks = [
         ("spacer", spacer),
         ("insert_dna", insert_dna),
         ("pbs1", pbs1),
         ("rc_pbs2", rc_pbs2),
         ("scaffold", scaffold),
-    ):
+    ]
+    if restored_segment:
+        checks.append(("restored_segment", restored_segment))
+    for label, value in checks:
         _check_acgt(label, value)
-    return spacer + scaffold + insert_dna + pbs1 + rc_pbs2
+    return spacer + scaffold + insert_dna + restored_segment + pbs1 + rc_pbs2
 
 
 # ------------------------------------------------------------------ T10
