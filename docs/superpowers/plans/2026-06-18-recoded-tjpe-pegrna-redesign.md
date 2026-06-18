@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Redesign the TJ-pegRNA design workflow so it enumerates PBS1×synonymous-RTT variants through PRIDICT2 (reverse-targeting), derives the nicking guide + PBS2 from a second PRIDICT2 run over off-target-screened nick sites, recodes the deletion-replacement arm to the minimum edits that destroy microhomology while preserving every codon, applies splice/AlphaFold/protein-silence hard gates, surfaces allele-specific pairings + het-SNP advisories from the diploid line genome, and emits the first candidate from a ranked pool that survives a final full-pegRNA (RiNALMo 2D) structure check and a scaffold–nCas9 complex (Boltz-2) docking check — no full restart.
+**Goal:** Redesign the TJ-pegRNA design workflow so it enumerates PBS1×synonymous-RTT variants through PRIDICT2 (reverse-targeting), derives the nicking guide + PBS2 from a second PRIDICT2 run over off-target-screened nick sites, recodes the deletion-replacement arm to the minimum edits that destroy microhomology while preserving every codon, applies splice/AlphaFold/protein-silence hard gates, surfaces allele-specific pairings + het-SNP advisories from the diploid line genome (with an opt-in `allele_hunt` mode that may move the *nick* — never the insert site S — to capture a discriminating het, byte-exact in non-coding), and emits the first candidate from a ranked pool that survives a final full-pegRNA (RiNALMo 2D) structure check and a scaffold–nCas9 complex (Boltz-2) docking check — no full restart.
 
 **Architecture:** A new orchestrator `recoded_tjpe_workflow.py` drives a **ranked-pool walk**: build candidate pool once (Stages 1–4), cheap gates prune early, expensive gates (splice, AlphaFold, RiNALMo, Boltz-2) run last on survivors, and failure advances to the next pre-ranked candidate rather than restarting. New pure modules (`microhomology.py`, `recode_arm.py`, `nick_search.py`, `genome_context.py`, `splice_screen.py`, `structure_importance.py`, `full_structure.py`, `complex_dock.py`, `allele_specificity.py`) are injected via Protocols so the core + CI stay light; heavy deps (DnaChisel, SpliceAI/Pangolin, AlphaFold/DSSP, RiNALMo, RNAformer, Boltz-2) live behind optional extras and lazy imports, mirroring the existing `rnafold.py` pattern.
 
@@ -46,6 +46,11 @@ Everything else (enumeration reshape, nick search, ngRNA/PBS2 derivation, microh
 12. **Het-SNP targeting = ADVISORY, never blocking, and often PREFERABLE.** A spacer/PBS/RTT overlapping a heterozygous SNP enables allele-specific editing → homogeneous all-het edited population (more consistent), vs homozygous-region targeting → mixed het+homozygous population. Flag (never gate) with: which element, **position class (PAM/seed/distal)**, predicted discrimination strength, consequence, and require the SNP be **confidently phased**. (Distinct from clone-validation: a Zeocin-surviving clone may still carry one clean + one damaged allele → allele-resolved long-read genotyping downstream.)
 13. **Allele-specific pairing = always searched + surfaced (advisory feature).** When a het SNP sits in a discriminating position of the pegRNA (PBS1/spacer/PAM) **OR** the ngRNA (spacer/PAM), the pipeline **always designs and reports ≥1 single-allele-targeting pegRNA–ngRNA pairing**, even if far below the best-predicted pairing. **Both pegRNA-side and ngRNA-side discrimination are valid** (ngRNA-side: allele B sees only an SSB/nick → faithfully repaired, MMR reverts toward WT, and the large cargo cannot install without the 2nd nick → cleanly allele-specific; residual = low-frequency PE2-like byproduct on allele B, raised if PE4/PE5 MMR-inhibition is used → **report note, not a scar warning**). Strength hierarchy: PAM-destroying SNP > seed SNP > PBS1 SNP > distal (≈none). Constraints: SNPs exploited in both guides must be **same-haplotype (phased)**; the **other allele is scored as an explicit off-target**; specificity **cannot be manufactured** (the 2 silent PAM edits write to both alleles) — it is capped by natural heterozygosity (expect an allele-specific option for only ~5–10 % of targets; **compute the exact panel-wide count from the diploid genome and report it**).
 14. **Insert size (near-term target): ~200–500 bp** → full pegRNA ≤ ~700 nt (drives the RiNALMo length choice; >800 bp would require a long-context model such as LoRNA).
+15. **Mode-gated pegRNA-nick freedom for allele-specificity hunting (Route 4 — probability-raiser, NOT a guarantee).** The **insert site S NEVER moves** (cargo always lands at S; moving S is FORBIDDEN in every mode). **Only in `allele_hunt` mode**, the pegRNA *nick* may move 5′/3′ of its default to sweep its spacer/PAM/seed/PBS1 across more genomic territory and capture a discriminating het SNP. The extra gDNA between the moved nick and S is **re-templated (filled back) by the RTT**, partitioned by annotation:
+    - **CDS bases → may be synonymously recoded** (decision 4 logic) to break microhomology.
+    - **Non-coding bases (3′UTR / UTR / intron) → re-templated BYTE-EXACT to the *targeted allele's* sequence. ZERO changes, NO silent edits** (non-coding is base-sensitive: RBP / polyA / splice / miRNA).
+    - **Accepted coupled tradeoff (advisory):** the 3′UTR is both where het SNPs are densest *and* where recoding is forbidden, so movement into it re-introduces 100 % microhomology on the locked stretch (the Zheng/Fah imperfect-edit mode). Mitigations: search nick movement **both directions** and report the tradeoff (5′-into-CDS = recodable but SNP-poor; 3′-into-3′UTR = SNP-rich but locked + microhomology); **minimise movement distance** (smallest stretch capturing a discriminating het → smallest locked span + shortest RTT); microhomology on the locked non-coding stretch is an **advisory flag** (wet-lab validate).
+    - **B2-ii interaction:** "silent edit" is meaningless in non-coding, so the ≤2 silent PAM edits are **CDS-only**. A PAM in non-coding cannot be silently broken → rely on the het SNP itself disrupting that PAM (a PAM-destroying SNP is the strongest discriminator anyway) or leave it intact + re-cut advisory. A discriminating SNP inside the re-templated span is **locked to the targeted allele's base**.
 
 ---
 
@@ -70,7 +75,7 @@ Everything else (enumeration reshape, nick search, ngRNA/PBS2 derivation, microh
 - `structure_importance.py` — `ImportanceScorer` Protocol (AlphaFold pLDDT/RSA/contacts/side-chain rules) + lazy adapter + fake.
 - `full_structure.py` — `FullStructureScorer` Protocol + lazy **RiNALMo** adapter (primary) + **RNAformer** adapter (CPU/CI fallback) + fake; ViennaRNA pre-screen reused from `rnafold.py`. Scores cross-region pairing (scaffold excluded).
 - `complex_dock.py` — `ComplexDockScorer` Protocol + lazy **Boltz-2** adapter + fake; apo-vs-candidate scaffold–nCas9 interface comparison.
-- `allele_specificity.py` — pure: het-SNP overlap detection across functional elements, position-class (PAM/seed/distal), discrimination-strength, phasing check, other-allele off-target framing, allele-specific pairing search.
+- `allele_specificity.py` — pure: het-SNP overlap detection across functional elements, position-class (PAM/seed/distal), discrimination-strength, phasing check, other-allele off-target framing, allele-specific pairing search, **and `allele_hunt`-mode nick-movement search** (decision 15: shift the nick — never S — partition re-templated span into CDS `recode_span` + non-coding `locked_span`, rank by smallest shift, flag the CDS-vs-3′UTR tradeoff + microhomology advisory).
 - `recoded_tjpe_workflow.py` — the ranked-pool-walk orchestrator tying it together.
 
 **Modified:**
@@ -208,6 +213,8 @@ git commit -m "feat(microhomology): longest-common-run metric for arm recode"
 - Test: `tests/test_scarless.py` (add cases), `tests/test_inv0_recode_span.py` (new)
 
 **B2 RESOLVED (= B2-ii):** `allowed_silent` is a **list of ≤2** declared silent PAM edits (pegRNA PAM + ngRNA PAM). Max **2** changes outside the recode span; each must be single-base, translationally silent (verified by injected `protein_check`), and — if outside the recoded arm — independently pass the splice + AlphaFold gates (enforced by the Task 13 orchestrator, not here). A 3rd endogenous change ⇒ INV-0 fail. The Step-3 implementation below uses a `max_outside = len(allowed_silent or [])` capped at 2; `allowed_silent=None`/`recode_span=None` preserves legacy strict (≤1) behaviour byte-identically.
+
+**Allele-hunt extension (decision 15):** when the nick is moved (`allele_hunt` mode), the re-templated arm partitions into a `recode_span` (CDS — synonymous changes allowed, protein-checked) and a `locked_span` (non-coding — **must equal the targeted allele's sequence byte-exact**; zero diffs, even silent). `assert_inv0` therefore also accepts an optional `locked_span` + `locked_expected` (the targeted-allele bytes) and raises if `edited[locked_span] != locked_expected`. Add a test: a single silent change inside `locked_span` must RAISE (`match="non-coding locked span"`), while the same change inside `recode_span` passes. When `locked_span=None` behaviour is unchanged.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -1450,6 +1457,8 @@ git commit -m "feat(pbs2): joint length/GC/Tm + repetitive gate"
 
 Ties Tasks 1–12 together with the **pool-walk** control flow: build ranked pool, cheap gates prune, expensive gates last, first survivor wins, exhaust → fail-loud. All heavy scorers injected (fakes in test).
 
+**`allele_hunt` mode (decision 15).** `run_recoded_tjpe(..., allele_hunt: bool = False)`. When `False` (default): the pegRNA nick stays at its default position, **S never moves**, and the re-templated span is empty/CDS-only as today. When `True`: the orchestrator calls `enumerate_nick_movements` (Task 17) to try nick shifts that capture a discriminating het SNP — **S still never moves** — and for each shift partitions the re-templated span into `recode_span` (CDS, recoded) + `locked_span` (non-coding, byte-exact to the targeted allele, passed to `assert_inv0` per Task 2). Moving the insert site S is FORBIDDEN in both modes (assert S unchanged). Add a test that `allele_hunt=True` with a discriminating het returns an allele-specific design whose `locked_span` matches the targeted allele exactly and whose microhomology advisory is set; and that `allele_hunt=False` never moves the nick.
+
 - [ ] **Step 1: Write the failing test**
 
 ```python
@@ -1738,7 +1747,32 @@ git commit -m "feat(complex-dock): Boltz-2 scaffold-nCas9 interface gate (apo-vs
 - Create: `src/pegrna_pipeline/hpc/allele_specificity.py`
 - Test: `tests/test_allele_specificity.py`
 
-Pure module (decisions 12 + 13). Detects het-SNP overlap across functional elements with position-class and discrimination strength, and searches for allele-specific pairings. Consumes the diploid `GenomicContext` (Task 7). Advisory only — never gates.
+Pure module (decisions 12 + 13 + 15). Detects het-SNP overlap across functional elements with position-class and discrimination strength, and searches for allele-specific pairings. Consumes the diploid `GenomicContext` (Task 7). Advisory only — never gates.
+
+**Allele-hunt nick-movement search (decision 15).** Add `enumerate_nick_movements(s_site, genome, cds_mask, max_shift, het_snps)` that, **only when invoked in `allele_hunt` mode**, yields candidate pegRNA nick positions shifted 5′/3′ of the default (S never moves). For each shift it returns: the discriminating het SNP captured (if any) + position class + strength; the re-templated span S↔nick partitioned into `recode_span` (CDS, via `cds_mask`) and `locked_span` (non-coding, byte-exact to the targeted allele); the **direction tradeoff** (5′-into-CDS recodable/SNP-poor vs 3′-into-3′UTR SNP-rich/locked+microhomology); and a **microhomology advisory** for the locked span. Candidates are ranked by **smallest movement distance** first (minimise locked span + RTT length). Outside `allele_hunt` mode this function is never called — the nick stays at its default and S↔nick is empty/CDS-only as today.
+
+- [ ] **Step 1b: Write the failing test (nick-movement)**
+
+```python
+from pegrna_pipeline.hpc.allele_specificity import enumerate_nick_movements
+
+def test_nick_movement_partitions_cds_vs_noncoding_and_locks():
+    genome = "ACGT" * 50            # 200 nt
+    s_site = 120                    # insert site (e.g. before stop)
+    cds_mask = [i < 120 for i in range(200)]   # CDS upstream of S; 3'UTR downstream
+    het = [{"pos": 130, "element": "spacer", "offset": 1, "haplotype": 1, "phased": True}]
+    moves = enumerate_nick_movements(s_site=s_site, genome=genome,
+                                     cds_mask=cds_mask, max_shift=20, het_snps=het)
+    # a 3' move into the 3'UTR captures the het but the re-templated span is locked
+    m = next(x for x in moves if x.direction == "3prime")
+    assert m.locked_span is not None and m.recode_span is None
+    assert m.microhomology_advisory is True          # non-coding cannot be recoded
+    # a 5' move into CDS is recodable but captures no het here
+    m5 = next(x for x in moves if x.direction == "5prime")
+    assert m5.recode_span is not None
+    # ranked by smallest movement first
+    assert moves == sorted(moves, key=lambda x: x.shift_abs)
+```
 
 - [ ] **Step 1: Write the failing test**
 
