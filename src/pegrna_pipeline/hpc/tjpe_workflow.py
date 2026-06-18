@@ -226,9 +226,26 @@ def assemble_tj_pegrna(
 ) -> str:
     """Return the full TJ-PE pegRNA DNA string.
 
-    Layout (5' -> 3'):
+    Current layout (5' -> 3'):
 
         spacer + scaffold + insert_dna + restored_segment + pbs1 + rc_pbs2
+
+    .. note:: AUTHORITATIVE tjPE pegRNA STRUCTURE (locked 2026-06-18, B1).
+       The recoded-redesign target order is::
+
+           Spacer · Scaffold · PBS2 · RTT(Insert + Deletion-Replacement-Arm) · PBS1 · PolyU(2-3 U)
+
+       i.e. **PBS2 occupies the Homology-Arm slot** (HA is *replaced* by PBS2 in
+       tjPE) immediately 3' of the scaffold and 5' of the RTT; PBS1 is INTERNAL;
+       the construct ends in a **PolyU (2-3 U) tail that binds the La protein of
+       the PE7 editor**. Mechanism: PBS1 (3'-proximal) primes first-strand
+       synthesis; the RT copies the RTT; PBS2 (5' of the extension) is copied
+       last and becomes the 3' jumping end for the template jump. This function
+       is rewritten to that signature in
+       ``docs/superpowers/plans/2026-06-18-recoded-tjpe-pegrna-redesign.md``
+       Task 11b. The historical 3'-terminal ``rc_pbs2`` arg below predates that
+       decision; the PBS2-slot literal-vs-reverse-complement convention is
+       asserted against the predicted product in the recoded workflow (Task 13).
 
     The optional ``restored_segment`` carries the re-templated A→B genomic span
     used by the **scarless** mode (zero endogenous deletion); when empty the
