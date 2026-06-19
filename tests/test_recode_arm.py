@@ -45,5 +45,6 @@ def test_recode_result_fields():
 
 def test_recode_rejects_non_codon_aligned_frame():
     import pytest
+
     with pytest.raises(ValueError, match="codon-aligned"):
         recode_min_edits("GAAGAA", genome="GAAGAA", frame=1, max_run=3)

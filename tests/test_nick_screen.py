@@ -5,10 +5,7 @@ from pegrna_pipeline.hpc.nick_search import NickCandidate, screen_nick_candidate
 
 def _fake_scorer(protospacers):
     # {protospacer: (ontarget, offtarget_count, has_offtarget)}
-    return {
-        p: (0.7, 0, False) if "ACGT" in p else (0.2, 9, True)
-        for p in protospacers
-    }
+    return {p: (0.7, 0, False) if "ACGT" in p else (0.2, 9, True) for p in protospacers}
 
 
 def test_screen_drops_offtarget_and_low_ontarget():
@@ -16,8 +13,7 @@ def test_screen_drops_offtarget_and_low_ontarget():
         NickCandidate("ACGT" * 5, "AGG", 10, 45, "Fw"),  # clean
         NickCandidate("TTTT" * 5, "AGG", 12, 47, "Fw"),  # offtarget-heavy
     ]
-    kept = screen_nick_candidates(cands, scorer=_fake_scorer,
-                                  min_ontarget=0.5, max_offtargets=0)
+    kept = screen_nick_candidates(cands, scorer=_fake_scorer, min_ontarget=0.5, max_offtargets=0)
     assert len(kept) == 1
     assert kept[0].protospacer == "ACGT" * 5
 
@@ -26,7 +22,10 @@ def test_screen_drops_candidate_matching_other_allele():
     # other allele identical => would cut both alleles => not allele-specific => drop
     clean = NickCandidate("ACGT" * 5, "AGG", 10, 45, "Fw")
     kept = screen_nick_candidates(
-        [clean], scorer=_fake_scorer, min_ontarget=0.5, max_offtargets=0,
+        [clean],
+        scorer=_fake_scorer,
+        min_ontarget=0.5,
+        max_offtargets=0,
         other_allele_seqs={"ACGT" * 5: "ACGT" * 5},
     )
     assert kept == []
@@ -35,7 +34,10 @@ def test_screen_drops_candidate_matching_other_allele():
 def test_screen_keeps_candidate_when_other_allele_differs():
     clean = NickCandidate("ACGT" * 5, "AGG", 10, 45, "Fw")
     kept = screen_nick_candidates(
-        [clean], scorer=_fake_scorer, min_ontarget=0.5, max_offtargets=0,
+        [clean],
+        scorer=_fake_scorer,
+        min_ontarget=0.5,
+        max_offtargets=0,
         other_allele_seqs={"ACGT" * 5: "ACGA" * 5},  # SNP differs => discriminating
     )
     assert len(kept) == 1

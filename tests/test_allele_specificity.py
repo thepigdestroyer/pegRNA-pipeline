@@ -55,7 +55,11 @@ def test_nick_movement_partitions_cds_vs_noncoding_and_locks():
     cds_mask = [i < 120 for i in range(200)]  # CDS upstream of S; 3'UTR downstream
     het = [{"pos": 130, "element": "spacer", "offset": 1, "haplotype": 1, "phased": True}]
     moves = enumerate_nick_movements(
-        s_site=s_site, genome=genome, cds_mask=cds_mask, max_shift=20, het_snps=het,
+        s_site=s_site,
+        genome=genome,
+        cds_mask=cds_mask,
+        max_shift=20,
+        het_snps=het,
     )
     assert moves, "expected at least one movement candidate"
     three = [m for m in moves if m.direction == "3prime"]

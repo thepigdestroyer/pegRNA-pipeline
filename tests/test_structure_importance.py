@@ -10,8 +10,13 @@ from pegrna_pipeline.hpc.structure_importance import (
 
 def _m(**kw):
     base = dict(
-        plddt=50.0, rsa=0.5, contact_number=4, is_catalytic=False,
-        is_disulfide=False, is_positive_phi_gly=False, is_structural_pro=False,
+        plddt=50.0,
+        rsa=0.5,
+        contact_number=4,
+        is_catalytic=False,
+        is_disulfide=False,
+        is_positive_phi_gly=False,
+        is_structural_pro=False,
     )
     base.update(kw)
     return ResidueMetrics(**base)
@@ -57,8 +62,8 @@ def test_span_blocked_is_or_over_residues():
 
 def test_indel_in_secondary_structure_blocks():
     # decision/AlphaFold-gate: in-frame indel landing in helix/strand is CRITICAL
-    assert indel_blocked("H") is True   # alpha helix
-    assert indel_blocked("E") is True   # beta strand
-    assert indel_blocked("G") is True   # 3-10 helix
+    assert indel_blocked("H") is True  # alpha helix
+    assert indel_blocked("E") is True  # beta strand
+    assert indel_blocked("G") is True  # 3-10 helix
     assert indel_blocked("C") is False  # coil/loop tolerated
     assert indel_blocked("T") is False  # turn tolerated

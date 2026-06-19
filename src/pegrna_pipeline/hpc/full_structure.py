@@ -57,8 +57,11 @@ def _region_of(i: int, regions: Dict[str, Tuple[int, int]]):
 
 
 def functional_region_pairing(
-    seq: str, *, regions: Dict[str, Tuple[int, int]],
-    scorer: FullStructureScorer, threshold: float = 0.5,
+    seq: str,
+    *,
+    regions: Dict[str, Tuple[int, int]],
+    scorer: FullStructureScorer,
+    threshold: float = 0.5,
 ) -> StructureScore:
     """Count pairings (prob ≥ ``threshold``) that couple two DISTINCT functional
     regions, excluding any pair touching the scaffold."""

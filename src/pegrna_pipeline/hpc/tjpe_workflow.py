@@ -300,8 +300,13 @@ def assemble_tj_pegrna_v2(
        slot is asserted against the predicted product by the recoded workflow
        (Task 13), not here.
     """
-    for label, value in (("spacer", spacer), ("scaffold", scaffold),
-                         ("pbs2", pbs2), ("rtt", rtt), ("pbs1", pbs1)):
+    for label, value in (
+        ("spacer", spacer),
+        ("scaffold", scaffold),
+        ("pbs2", pbs2),
+        ("rtt", rtt),
+        ("pbs1", pbs1),
+    ):
         _check_acgt(label, value)
     if not polyu or set(polyu.upper()) - {"U"}:
         raise ValueError(f"polyu must be 2-3 uridines (U only); got {polyu!r}")
@@ -561,8 +566,7 @@ def run_tjpe_workflow(
         )
         # Advisory warnings (A-only: surfaced, never blocking).
         warnings.append(
-            "microhomology: restored segment is 100% genome-homologous "
-            "(see spec §10 R1)"
+            "microhomology: restored segment is 100% genome-homologous " "(see spec §10 R1)"
         )
         if abs(best_ng.distance_to_edit) < 70:
             warnings.append(

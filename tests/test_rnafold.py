@@ -1,4 +1,5 @@
 """Tests for the ViennaRNA structure wrapper. Skipped if ViennaRNA absent."""
+
 from __future__ import annotations
 
 import pytest
@@ -16,9 +17,7 @@ def test_fold_metrics_returns_mfe_and_accessibility():
 
 
 def test_passes_structure_returns_bool():
-    assert isinstance(
-        passes_structure("AUAUAUAUAUAU", regions={}, max_norm_mfe=0.5), bool
-    )
+    assert isinstance(passes_structure("AUAUAUAUAUAU", regions={}, max_norm_mfe=0.5), bool)
 
 
 def test_passes_structure_rejects_strong_hairpin():

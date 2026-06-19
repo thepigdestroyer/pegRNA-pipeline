@@ -1,4 +1,5 @@
 """Tests for scarless tjPE sequence construction + INV-0 verification."""
+
 from __future__ import annotations
 
 import pytest
@@ -46,8 +47,13 @@ def test_predict_edited_allele_zero_deletion():
     genome = "AAAACCCCGG" + "TACG" + "TTTTGGGG"
     cargo = "ATGTAA"
     edited = predict_edited_allele(
-        genome, site_s=10, cargo=cargo, a_nick=10, b_nick=14,
-        pegrna_strand="Fw", silent_pam_edit=None,
+        genome,
+        site_s=10,
+        cargo=cargo,
+        a_nick=10,
+        b_nick=14,
+        pegrna_strand="Fw",
+        silent_pam_edit=None,
     )
     assert edited == genome[:10] + cargo + genome[10:]
 
@@ -72,9 +78,14 @@ def test_inv0_allows_single_silent_pam_base():
     expected = genome[:10] + cargo + genome[10:]
     # change exactly one base in the restored span (position 14 in cargo-shifted allele)
     shifted = 14 + len(cargo)
-    edited = expected[:shifted] + ("A" if expected[shifted] != "A" else "C") + expected[shifted + 1:]
+    edited = (
+        expected[:shifted] + ("A" if expected[shifted] != "A" else "C") + expected[shifted + 1 :]
+    )
     assert_inv0(
-        reference=genome, edited=edited, site_s=10, cargo=cargo,
+        reference=genome,
+        edited=edited,
+        site_s=10,
+        cargo=cargo,
         allowed_silent={"pos": 14, "ref": genome[14], "alt": edited[shifted]},
     )
 
@@ -88,8 +99,13 @@ def test_inv0_rejects_two_changes():
     e[17] = "A" if e[17] != "A" else "C"
     edited = "".join(e)
     with pytest.raises(ValueError, match="(?i)endogenous|change"):
-        assert_inv0(reference=genome, edited=edited, site_s=10, cargo=cargo,
-                    allowed_silent={"pos": 14, "ref": genome[14], "alt": "A"})
+        assert_inv0(
+            reference=genome,
+            edited=edited,
+            site_s=10,
+            cargo=cargo,
+            allowed_silent={"pos": 14, "ref": genome[14], "alt": "A"},
+        )
 
 
 # ------------------------------------------------------------------ Task 3 (pam break)

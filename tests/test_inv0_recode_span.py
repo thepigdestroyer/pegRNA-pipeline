@@ -20,8 +20,13 @@ def test_inv0_allows_many_synonymous_changes_inside_recode_span():
     # cargo inserted at S=12 (before stop); recode span [3,12) recoded synonymously
     edited = "ATG" "AAG" "CCA" "GGA" "TTTTTT" "TAA"  # 3 changes inside [3,12)
     assert_inv0(
-        reference=ref, edited=edited, site_s=12, cargo=cargo,
-        recode_span=(3, 12), protein_check=_silent_ok, allowed_silent=None,
+        reference=ref,
+        edited=edited,
+        site_s=12,
+        cargo=cargo,
+        recode_span=(3, 12),
+        protein_check=_silent_ok,
+        allowed_silent=None,
     )
 
 
@@ -32,8 +37,13 @@ def test_inv0_rejects_change_outside_recode_span():
     edited = "ATC" "AAACCCGGG" "TTTTTT" "TAA"
     with pytest.raises(ValueError, match="outside"):
         assert_inv0(
-            reference=ref, edited=edited, site_s=12, cargo=cargo,
-            recode_span=(3, 12), protein_check=_silent_ok, allowed_silent=None,
+            reference=ref,
+            edited=edited,
+            site_s=12,
+            cargo=cargo,
+            recode_span=(3, 12),
+            protein_check=_silent_ok,
+            allowed_silent=None,
         )
 
 
@@ -43,8 +53,13 @@ def test_inv0_recode_span_changes_must_be_protein_silent():
     edited = "ATG" "AAG" "CCA" "GGA" "TTTTTT" "TAA"
     with pytest.raises(ValueError, match="not protein-silent"):
         assert_inv0(
-            reference=ref, edited=edited, site_s=12, cargo=cargo,
-            recode_span=(3, 12), protein_check=_silent_bad, allowed_silent=None,
+            reference=ref,
+            edited=edited,
+            site_s=12,
+            cargo=cargo,
+            recode_span=(3, 12),
+            protein_check=_silent_bad,
+            allowed_silent=None,
         )
 
 
@@ -65,8 +80,12 @@ def test_inv0_allows_up_to_two_silent_pam_edits_outside_span():
     exp[7] = "A"  # change 2 (outside span, pos 7)
     edited = "".join(exp)
     assert_inv0(
-        reference=_REF, edited=edited, site_s=18, cargo=_CARGO,
-        recode_span=(9, 18), protein_check=_silent_ok,
+        reference=_REF,
+        edited=edited,
+        site_s=18,
+        cargo=_CARGO,
+        recode_span=(9, 18),
+        protein_check=_silent_ok,
         allowed_silent=[{"pos": 1}, {"pos": 7}],
     )
 
@@ -79,8 +98,12 @@ def test_inv0_rejects_third_endogenous_change():
     edited = "".join(exp)
     with pytest.raises(ValueError, match="outside recode_span"):
         assert_inv0(
-            reference=_REF, edited=edited, site_s=18, cargo=_CARGO,
-            recode_span=(9, 18), protein_check=_silent_ok,
+            reference=_REF,
+            edited=edited,
+            site_s=18,
+            cargo=_CARGO,
+            recode_span=(9, 18),
+            protein_check=_silent_ok,
             allowed_silent=[{"pos": 1}, {"pos": 7}],
         )
 
@@ -93,9 +116,15 @@ def test_inv0_locked_span_must_match_targeted_allele_exactly():
     edited = "".join(exp)
     with pytest.raises(ValueError, match="non-coding locked span"):
         assert_inv0(
-            reference=_REF, edited=edited, site_s=18, cargo=_CARGO,
-            recode_span=(3, 9), protein_check=_silent_ok, allowed_silent=None,
-            locked_span=(9, 18), locked_expected=_REF[9:18],
+            reference=_REF,
+            edited=edited,
+            site_s=18,
+            cargo=_CARGO,
+            recode_span=(3, 9),
+            protein_check=_silent_ok,
+            allowed_silent=None,
+            locked_span=(9, 18),
+            locked_expected=_REF[9:18],
         )
 
 
@@ -104,13 +133,20 @@ def test_inv0_locked_span_passes_when_exact():
     exp[5] = "G"  # change inside recode span [3,9) only
     edited = "".join(exp)
     assert_inv0(
-        reference=_REF, edited=edited, site_s=18, cargo=_CARGO,
-        recode_span=(3, 9), protein_check=_silent_ok, allowed_silent=None,
-        locked_span=(9, 18), locked_expected=_REF[9:18],
+        reference=_REF,
+        edited=edited,
+        site_s=18,
+        cargo=_CARGO,
+        recode_span=(3, 9),
+        protein_check=_silent_ok,
+        allowed_silent=None,
+        locked_span=(9, 18),
+        locked_expected=_REF[9:18],
     )
 
 
 # ---- legacy backward-compat (recode_span=None) ----
+
 
 def test_inv0_legacy_clean_insertion_passes():
     ref = "ATGAAACCCGGGTAA"
@@ -124,7 +160,10 @@ def test_inv0_legacy_single_silent_dict_still_allowed():
     cargo = "TTT"
     edited = "ATC" "AAACCC" "TTT" "GGGTAA"  # one change at pos 2
     assert_inv0(
-        reference=ref, edited=edited, site_s=9, cargo=cargo,
+        reference=ref,
+        edited=edited,
+        site_s=9,
+        cargo=cargo,
         allowed_silent={"pos": 2},
     )
 

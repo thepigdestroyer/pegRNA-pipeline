@@ -48,9 +48,7 @@ def build_restored_segment(
     """
     lo, hi = sorted((a_nick, b_nick))
     if lo < 0 or hi > len(genome):
-        raise ValueError(
-            f"A→B span [{lo},{hi}) out of bounds for genome length {len(genome)}"
-        )
+        raise ValueError(f"A→B span [{lo},{hi}) out of bounds for genome length {len(genome)}")
     span = genome[lo:hi]
     if pegrna_strand == "Fw":
         return span
@@ -83,7 +81,7 @@ def predict_edited_allele(
     if silent_pam_edit is not None:
         pos = silent_pam_edit["pos"]
         shifted = pos + len(cargo) if pos >= site_s else pos
-        edited = edited[:shifted] + silent_pam_edit["alt"] + edited[shifted + 1:]
+        edited = edited[:shifted] + silent_pam_edit["alt"] + edited[shifted + 1 :]
     return edited
 
 
@@ -134,9 +132,7 @@ def assert_inv0(
     else:
         silent_budget = len(allowed_silent)
     if silent_budget > 2:
-        raise ValueError(
-            f"INV-0: {silent_budget} silent PAM edits declared; hard cap is 2 (B2-ii)"
-        )
+        raise ValueError(f"INV-0: {silent_budget} silent PAM edits declared; hard cap is 2 (B2-ii)")
 
     # ---- legacy path (no recode span): preserve exact historical semantics ----
     if recode_span is None:
@@ -144,9 +140,7 @@ def assert_inv0(
             return
         diffs = [i for i, (a, b) in enumerate(zip(expected, edited)) if a != b]
         if silent_budget == 0:
-            raise ValueError(
-                f"INV-0: {len(diffs)} endogenous change(s) but no silent edit allowed"
-            )
+            raise ValueError(f"INV-0: {len(diffs)} endogenous change(s) but no silent edit allowed")
         if len(diffs) != silent_budget:
             raise ValueError(
                 f"INV-0: {len(diffs)} endogenous changes; at most {silent_budget} "
@@ -171,7 +165,7 @@ def assert_inv0(
     if ls is not None:
         if locked_expected is None:
             raise ValueError("INV-0: locked_span given without locked_expected")
-        observed = edited[ls[0]:ls[1]]
+        observed = edited[ls[0] : ls[1]]
         if observed != locked_expected:
             raise ValueError(
                 "INV-0: non-coding locked span altered — must be byte-exact to the "
@@ -227,8 +221,8 @@ def silent_pam_break(
             trial = ctx.copy()
             trial[pos] = alt
             cstart = ((pos - frame) // 3) * 3 + frame
-            before = "".join(ctx[cstart:cstart + 3])
-            after = "".join(trial[cstart:cstart + 3])
+            before = "".join(ctx[cstart : cstart + 3])
+            after = "".join(trial[cstart : cstart + 3])
             if len(before) < 3 or len(after) < 3:
                 continue
             aa_before = str(Seq(before).translate())

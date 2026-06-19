@@ -18,11 +18,11 @@ __all__ = ["enumerate_nick_sites", "screen_nick_candidates", "NickCandidate"]
 
 @dataclass(frozen=True)
 class NickCandidate:
-    protospacer: str       # 20 nt
-    pam: str               # 3 nt, NGG
-    nick_position: int     # 0-indexed on the sense genome
+    protospacer: str  # 20 nt
+    pam: str  # 3 nt, NGG
+    nick_position: int  # 0-indexed on the sense genome
     distance_to_edit: int  # |nick - S|
-    target_strand: str     # "Fw" or "Rv" (opposite the pegRNA)
+    target_strand: str  # "Fw" or "Rv" (opposite the pegRNA)
 
 
 def _opposite(strand: str) -> str:
@@ -30,8 +30,12 @@ def _opposite(strand: str) -> str:
 
 
 def enumerate_nick_sites(
-    genome: str, *, site_s: int, pegrna_strand: str,
-    distance_min: int, distance_max: int,
+    genome: str,
+    *,
+    site_s: int,
+    pegrna_strand: str,
+    distance_min: int,
+    distance_max: int,
 ) -> List[NickCandidate]:
     """Return PAM-anchored nick candidates within the distance window on the
     strand opposite ``pegrna_strand``.
@@ -48,7 +52,7 @@ def enumerate_nick_sites(
         for i in range(len(seq) - 2):
             if seq[i + 1 : i + 3] != "GG":  # NGG PAM (positions i+1, i+2)
                 continue
-            proto_end = i                  # protospacer is the 20 nt 5' of the PAM
+            proto_end = i  # protospacer is the 20 nt 5' of the PAM
             proto_start = proto_end - 20
             if proto_start < 0:
                 continue
@@ -76,7 +80,8 @@ def enumerate_nick_sites(
 
 
 def screen_nick_candidates(
-    candidates: List[NickCandidate], *,
+    candidates: List[NickCandidate],
+    *,
     scorer: Callable[[List[str]], Dict[str, Tuple[float, int, bool]]],
     min_ontarget: float = 0.5,
     max_offtargets: int = 0,

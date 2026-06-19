@@ -62,9 +62,7 @@ class SpliceAIScorer:
                 "and the model weights; run real splice scoring on CX3. "
                 f"Original error: {exc}"
             ) from exc
-        paths = [
-            resource_filename("spliceai", f"models/spliceai{i}.h5") for i in range(1, 6)
-        ]
+        paths = [resource_filename("spliceai", f"models/spliceai{i}.h5") for i in range(1, 6)]
         self._model = [load_model(p) for p in paths]
 
     def delta(self, ref_seq: str, alt_seq: str) -> float:  # pragma: no cover - CX3 only

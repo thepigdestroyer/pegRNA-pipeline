@@ -46,7 +46,10 @@ class PbsRttVariant:
 
 
 def enumerate_pbs_rtt_variants(
-    *, spacer: str, rtt_aa: str, pbs_lengths: Tuple[int, ...],
+    *,
+    spacer: str,
+    rtt_aa: str,
+    pbs_lengths: Tuple[int, ...],
     max_rtt_variants: int = 100,
 ) -> List[PbsRttVariant]:
     """Enumerate (synonymous RTT) × (PBS1 length); the spacer is FIXED by site S.
@@ -65,10 +68,15 @@ def enumerate_pbs_rtt_variants(
 
 
 def passes_pbs2_gate(
-    pbs2: str, *, repetitive: bool,
-    min_len: int = 11, max_len: int = 17,
-    gc_lo: float = 0.40, gc_hi: float = 0.70,
-    tm_lo: float = 37.0, tm_hi: float = 42.0,
+    pbs2: str,
+    *,
+    repetitive: bool,
+    min_len: int = 11,
+    max_len: int = 17,
+    gc_lo: float = 0.40,
+    gc_hi: float = 0.70,
+    tm_lo: float = 37.0,
+    tm_hi: float = 42.0,
 ) -> Tuple[bool, str]:
     """Joint PBS2 gate (decision 8): length 11-17, GC 40-70 %, Tm 37-42 C, not
     repetitive.
@@ -84,6 +92,7 @@ def passes_pbs2_gate(
     if not (gc_lo <= gc <= gc_hi):
         return False, f"GC {gc:.2f} outside [{gc_lo},{gc_hi}]"
     from Bio.SeqUtils import MeltingTemp as mt  # noqa: PLC0415
+
     tm = float(mt.Tm_NN(pbs2))
     if not (tm_lo <= tm <= tm_hi):
         return False, f"Tm {tm:.1f} outside [{tm_lo},{tm_hi}]"
@@ -159,13 +168,18 @@ def run_recoded_tjpe(
 
     # Nick candidates on the opposite strand, off-target screened (incl. other-allele).
     nicks = enumerate_nick_sites(
-        genome, site_s=site_s, pegrna_strand=pegrna_strand,
-        distance_min=ngrna_distance_min, distance_max=ngrna_distance_max,
+        genome,
+        site_s=site_s,
+        pegrna_strand=pegrna_strand,
+        distance_min=ngrna_distance_min,
+        distance_max=ngrna_distance_max,
     )
     nicks = screen_nick_candidates(nicks, scorer=offtarget_scorer)
 
     variants = enumerate_pbs_rtt_variants(
-        spacer=spacer, rtt_aa=rtt_aa, pbs_lengths=pbs_lengths,
+        spacer=spacer,
+        rtt_aa=rtt_aa,
+        pbs_lengths=pbs_lengths,
         max_rtt_variants=max_rtt_variants,
     )
 
@@ -190,8 +204,9 @@ def run_recoded_tjpe(
                 diagnostics.append(f"cand{tried}: recode changed arm length")
                 continue
             rtt = cargo + recode.recoded
-            pbs2 = _derive_pbs2(genome, nick_position=nick.nick_position,
-                                pbs_length=variant.pbs_length)
+            pbs2 = _derive_pbs2(
+                genome, nick_position=nick.nick_position, pbs_length=variant.pbs_length
+            )
             ok, why = passes_pbs2_gate(pbs2, repetitive=False)
             if not ok:
                 diagnostics.append(f"cand{tried}: PBS2 gate: {why}")
@@ -205,17 +220,25 @@ def run_recoded_tjpe(
             edited = genome[:site_s] + cargo + recode.recoded + genome[hi:]
             try:
                 assert_inv0(
-                    reference=reference, edited=edited, site_s=site_s, cargo=cargo,
+                    reference=reference,
+                    edited=edited,
+                    site_s=site_s,
+                    cargo=cargo,
                     recode_span=(lo, hi),
-                    protein_check=lambda _r, _e: True, allowed_silent=None,
+                    protein_check=lambda _r, _e: True,
+                    allowed_silent=None,
                 )
             except ValueError as exc:
                 diagnostics.append(f"cand{tried}: INV-0: {exc}")
                 continue
             # Assemble in the authoritative order.
-            pbs1 = spacer[:variant.pbs_length]  # placeholder PBS1 from spacer region
+            pbs1 = spacer[: variant.pbs_length]  # placeholder PBS1 from spacer region
             peg = assemble_tj_pegrna_v2(
-                spacer=spacer, pbs2=pbs2, rtt=rtt, pbs1=pbs1, polyu="UUU",
+                spacer=spacer,
+                pbs2=pbs2,
+                rtt=rtt,
+                pbs1=pbs1,
+                polyu="UUU",
                 scaffold=STANDARD_SGRNA_SCAFFOLD,
             )
             # --- expensive gates last ---
@@ -229,14 +252,19 @@ def run_recoded_tjpe(
                 continue
             regions = _regions_for(spacer, pbs2, rtt, pbs1)
             pairing = functional_region_pairing(
-                peg, regions=regions, scorer=full_structure_scorer,
+                peg,
+                regions=regions,
+                scorer=full_structure_scorer,
                 threshold=structure_threshold,
             )
             if pairing.cross_region_pairs > 0:
                 diagnostics.append(f"cand{tried}: RiNALMo cross-region pairing")
                 continue
             dock_ok, dock_why = passes_docking_gate(
-                peg, cas9, scorer=dock_scorer, max_drop=max_interface_drop,
+                peg,
+                cas9,
+                scorer=dock_scorer,
+                max_drop=max_interface_drop,
             )
             if not dock_ok:
                 diagnostics.append(f"cand{tried}: docking: {dock_why}")
@@ -246,11 +274,20 @@ def run_recoded_tjpe(
             if recode.max_run_after > max_run:
                 warnings.append("microhomology advisory: residual run above target")
             return RecodedTJPEResult(
-                pegRNA_sequence=peg, spacer=spacer, pbs2=pbs2, rtt=rtt, pbs1=pbs1,
-                polyu="UUU", ngrna_protospacer=nick.protospacer, site_s=site_s,
-                nick_position=nick.nick_position, deletion_size=0,
-                recode_edits=recode.n_edits, candidates_tried=tried,
-                warnings=warnings, allele_specific_options=allele_options,
+                pegRNA_sequence=peg,
+                spacer=spacer,
+                pbs2=pbs2,
+                rtt=rtt,
+                pbs1=pbs1,
+                polyu="UUU",
+                ngrna_protospacer=nick.protospacer,
+                site_s=site_s,
+                nick_position=nick.nick_position,
+                deletion_size=0,
+                recode_edits=recode.n_edits,
+                candidates_tried=tried,
+                warnings=warnings,
+                allele_specific_options=allele_options,
             )
 
     raise NoValidPegRNA(

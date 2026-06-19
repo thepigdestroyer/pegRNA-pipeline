@@ -26,31 +26,45 @@ def test_authoritative_order_spacer_scaffold_pbs2_rtt_pbs1_polyu():
         scaffold=STANDARD_SGRNA_SCAFFOLD,
     )
     expected = (
-        "ACGTACGTACGTACGTACGT" + STANDARD_SGRNA_SCAFFOLD
-        + "GCAGTCGATCG" + "ATGAAACCCGGGTTTAAATTT" + "CCCAGTAGCTAGC" + "UUU"
+        "ACGTACGTACGTACGTACGT"
+        + STANDARD_SGRNA_SCAFFOLD
+        + "GCAGTCGATCG"
+        + "ATGAAACCCGGGTTTAAATTT"
+        + "CCCAGTAGCTAGC"
+        + "UUU"
     )
     assert out == expected
-    assert out.index("GCAGTCGATCG") < out.index("ATGAAACCCGGGTTTAAATTT") < out.index("CCCAGTAGCTAGC")
+    assert (
+        out.index("GCAGTCGATCG") < out.index("ATGAAACCCGGGTTTAAATTT") < out.index("CCCAGTAGCTAGC")
+    )
     assert out.endswith("UUU")
 
 
 def test_polyu_must_be_only_uridines():
     with pytest.raises(ValueError, match="uridine"):
-        assemble_tj_pegrna_v2(spacer="ACGT" * 5, pbs2="GCAGTCGATCG",
-                              rtt="ATGAAA", pbs1="CCCAGTAGCTAGC", polyu="UUA")
+        assemble_tj_pegrna_v2(
+            spacer="ACGT" * 5, pbs2="GCAGTCGATCG", rtt="ATGAAA", pbs1="CCCAGTAGCTAGC", polyu="UUA"
+        )
 
 
 def test_polyu_length_2_to_3():
     # 2 U ok
-    out = assemble_tj_pegrna_v2(spacer="ACGT" * 5, pbs2="GCAGTCGATCG",
-                                rtt="ATGAAA", pbs1="CCCAGTAGCTAGC", polyu="UU")
+    out = assemble_tj_pegrna_v2(
+        spacer="ACGT" * 5, pbs2="GCAGTCGATCG", rtt="ATGAAA", pbs1="CCCAGTAGCTAGC", polyu="UU"
+    )
     assert out.endswith("UU")
     with pytest.raises(ValueError, match="2-3"):
-        assemble_tj_pegrna_v2(spacer="ACGT" * 5, pbs2="GCAGTCGATCG",
-                              rtt="ATGAAA", pbs1="CCCAGTAGCTAGC", polyu="UUUU")
+        assemble_tj_pegrna_v2(
+            spacer="ACGT" * 5, pbs2="GCAGTCGATCG", rtt="ATGAAA", pbs1="CCCAGTAGCTAGC", polyu="UUUU"
+        )
 
 
 def test_dna_components_reject_non_acgt():
     with pytest.raises(ValueError):
-        assemble_tj_pegrna_v2(spacer="ACGT" * 5, pbs2="GCAGTCGATCN",  # N
-                              rtt="ATGAAA", pbs1="CCCAGTAGCTAGC", polyu="UUU")
+        assemble_tj_pegrna_v2(
+            spacer="ACGT" * 5,
+            pbs2="GCAGTCGATCN",  # N
+            rtt="ATGAAA",
+            pbs1="CCCAGTAGCTAGC",
+            polyu="UUU",
+        )

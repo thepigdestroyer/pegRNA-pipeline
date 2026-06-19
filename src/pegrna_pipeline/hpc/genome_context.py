@@ -59,9 +59,7 @@ class GenomicContext:
         raise NotImplementedError("real KOLF<->GRCh38 chain mapping is a follow-on plan")
 
 
-def mrna_to_genomic(
-    ctx: Optional[GenomicContext], m_pos: int, *, haplotype: int = 0
-) -> int:
+def mrna_to_genomic(ctx: Optional[GenomicContext], m_pos: int, *, haplotype: int = 0) -> int:
     """Map an mRNA position to a genomic coordinate on the given haplotype.
 
     Raises :class:`MissingGenomicContextError` if ``ctx`` is ``None`` (fail-loud:

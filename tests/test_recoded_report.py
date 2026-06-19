@@ -37,9 +37,18 @@ def _manifest():
 def test_report_includes_design_gates_and_provenance():
     text = render_recoded_report(_result(), manifest=_manifest())
     for token in [
-        "T2T-KOLF2.1Jv1.1", "deletion", "0", "recode", "PBS2", "PolyU",
-        "pegRNA", "ngRNA", "candidates_tried", "dnachisel_version",
-        "git_commit", "microhomology",
+        "T2T-KOLF2.1Jv1.1",
+        "deletion",
+        "0",
+        "recode",
+        "PBS2",
+        "PolyU",
+        "pegRNA",
+        "ngRNA",
+        "candidates_tried",
+        "dnachisel_version",
+        "git_commit",
+        "microhomology",
     ]:
         assert token in text, f"missing {token!r} in report"
 
@@ -55,8 +64,12 @@ def test_report_lists_allele_specific_options_when_present():
     res = _result()
     res.allele_specific_options = [
         AlleleSpecificOption(
-            allele_specific=True, side="pegrna", position_class="pam",
-            strength=1.0, haplotype=1, note="pegRNA-side: clean single-allele edit",
+            allele_specific=True,
+            side="pegrna",
+            position_class="pam",
+            strength=1.0,
+            haplotype=1,
+            note="pegRNA-side: clean single-allele edit",
         )
     ]
     text = render_recoded_report(res, manifest=_manifest())

@@ -60,8 +60,7 @@ def recode_min_edits(
     for _ in range(n_codons + 1):
         cur = assembled(best)
         if longest_common_run(cur, genome) <= max_run:
-            return RecodeResult(cur, _edit_distance(cur, cds_span),
-                                longest_common_run(cur, genome))
+            return RecodeResult(cur, _edit_distance(cur, cds_span), longest_common_run(cur, genome))
         cur_run = longest_common_run(cur, genome)
         improved = False
         for ci, codon in enumerate(best):
@@ -137,9 +136,7 @@ def recode_min_edits_dnachisel(
     return RecodeResult(recoded, _edit_distance(recoded, cds_span), run)
 
 
-def recode_arm(
-    cds_span: str, *, genome: str, frame: int, max_run: int
-) -> Optional[RecodeResult]:
+def recode_arm(cds_span: str, *, genome: str, frame: int, max_run: int) -> Optional[RecodeResult]:
     """Dispatch to the DnaChisel optimiser when importable, else the pure greedy.
 
     Both backends honour the same contract: protein-identical, longest common run

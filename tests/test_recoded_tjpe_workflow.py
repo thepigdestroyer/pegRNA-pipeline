@@ -16,10 +16,17 @@ def _all_pass_importance():
     class _S:
         def metrics(self, i):  # never blocks
             from pegrna_pipeline.hpc.structure_importance import ResidueMetrics
+
             return ResidueMetrics(
-                plddt=50.0, rsa=0.5, contact_number=4, is_catalytic=False,
-                is_disulfide=False, is_positive_phi_gly=False, is_structural_pro=False,
+                plddt=50.0,
+                rsa=0.5,
+                contact_number=4,
+                is_catalytic=False,
+                is_disulfide=False,
+                is_positive_phi_gly=False,
+                is_structural_pro=False,
             )
+
     return _S()
 
 

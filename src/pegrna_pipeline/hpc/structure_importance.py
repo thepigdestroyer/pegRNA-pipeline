@@ -46,8 +46,11 @@ class ResidueMetrics:
 
 
 def residue_blocked(
-    m: ResidueMetrics, *, plddt_min: float = 70.0,
-    rsa_buried: float = 0.15, contact_max: int = 18,
+    m: ResidueMetrics,
+    *,
+    plddt_min: float = 70.0,
+    rsa_buried: float = 0.15,
+    contact_max: int = 18,
 ) -> bool:
     """Return True if a MISSENSE at this residue should block the editing pair.
 

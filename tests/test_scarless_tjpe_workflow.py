@@ -1,4 +1,5 @@
 """Tests for scarless tjPE workflow wiring (assembly, distance, ranking, gates)."""
+
 from __future__ import annotations
 
 import pytest
@@ -126,18 +127,35 @@ def test_scarless_success_path_zero_deletion_and_warnings():
     seq = "".join(random.choice("ACGT") for _ in range(200))
     gene = _gene(seq=seq, stop=100)
     peg = PegRNADesign(
-        "v1", "ACGTACGTACGTACGTACGT", "CCCAGTAGCTAGCTAGC", "RT",
-        13, 20, "Fw", 0, 60.0, 55.0, "full",
+        "v1",
+        "ACGTACGTACGTACGTACGT",
+        "CCCAGTAGCTAGCTAGC",
+        "RT",
+        13,
+        20,
+        "Fw",
+        0,
+        60.0,
+        55.0,
+        "full",
     )
     ng = NgRNADesign(
-        spacer="GCAGTCGATCGATCGATCGA", distance_to_edit=40, target_strand="Rv",
-        deepcas9_score=70.0, pe3b=False, pam_disrupt=False,
+        spacer="GCAGTCGATCGATCGATCGA",
+        distance_to_edit=40,
+        target_strand="Rv",
+        deepcas9_score=70.0,
+        pe3b=False,
+        pam_disrupt=False,
     )
     vs = VariantScore("v1", "ATGAAACCCGGG", [peg], [ng])
     cargo = "ATGAAACCCGGGTTTAAA"
     res = run_tjpe_workflow(
-        gene=gene, insert_full_dna=cargo, variant_scores=[vs],
-        ngrna_distance_min=36, ngrna_distance_max=44, scarless=True,
+        gene=gene,
+        insert_full_dna=cargo,
+        variant_scores=[vs],
+        ngrna_distance_min=36,
+        ngrna_distance_max=44,
+        scarless=True,
     )
     assert res.scarless is True
     assert res.deletion_size == 0

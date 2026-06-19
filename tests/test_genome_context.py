@@ -17,7 +17,9 @@ def _ctx():
     hap1 = Haplotype(name="hap1", genomic_sequence=None, exons=exons)
     hap2 = Haplotype(name="hap2", genomic_sequence=None, exons=exons)
     return GenomicContext(
-        genome_build="T2T-KOLF2.1Jv1.1", chrom="chr1", strand=1,
+        genome_build="T2T-KOLF2.1Jv1.1",
+        chrom="chr1",
+        strand=1,
         haplotypes=(hap1, hap2),
         het_snps=({"pos": 105, "ref": "A", "alt": "G", "phased": True},),
     )

@@ -68,7 +68,7 @@ def discrimination_strength(position_class: str, side: str) -> float:
 @dataclass(frozen=True)
 class AlleleSpecificOption:
     allele_specific: bool
-    side: str            # "pegrna" | "ngrna"
+    side: str  # "pegrna" | "ngrna"
     position_class: str
     strength: float
     haplotype: int
@@ -99,8 +99,12 @@ def find_allele_specific(het_snps: Sequence[dict]) -> List[AlleleSpecificOption]
             note = "pegRNA-side: only allele A is nicked -> clean single-allele edit"
         opts.append(
             AlleleSpecificOption(
-                allele_specific=True, side=side, position_class=pos,
-                strength=strength, haplotype=int(snp["haplotype"]), note=note,
+                allele_specific=True,
+                side=side,
+                position_class=pos,
+                strength=strength,
+                haplotype=int(snp["haplotype"]),
+                note=note,
             )
         )
     opts.sort(key=lambda o: -o.strength)
@@ -109,20 +113,24 @@ def find_allele_specific(het_snps: Sequence[dict]) -> List[AlleleSpecificOption]
 
 @dataclass(frozen=True)
 class NickMovement:
-    shift: int                                  # signed nt shift of the nick (S fixed)
+    shift: int  # signed nt shift of the nick (S fixed)
     shift_abs: int
-    direction: str                              # "5prime" | "3prime"
+    direction: str  # "5prime" | "3prime"
     captured_snp: Optional[dict]
     position_class: Optional[str]
     strength: float
-    recode_span: Optional[Tuple[int, int]]      # CDS portion of S<->nick (recodable)
-    locked_span: Optional[Tuple[int, int]]      # non-coding portion (byte-exact)
-    microhomology_advisory: bool                # True if a non-coding locked span exists
+    recode_span: Optional[Tuple[int, int]]  # CDS portion of S<->nick (recodable)
+    locked_span: Optional[Tuple[int, int]]  # non-coding portion (byte-exact)
+    microhomology_advisory: bool  # True if a non-coding locked span exists
 
 
 def enumerate_nick_movements(
-    *, s_site: int, genome: str, cds_mask: Sequence[bool],
-    max_shift: int, het_snps: Sequence[dict],
+    *,
+    s_site: int,
+    genome: str,
+    cds_mask: Sequence[bool],
+    max_shift: int,
+    het_snps: Sequence[dict],
 ) -> List[NickMovement]:
     """Allele-hunt only: yield candidate pegRNA-nick shifts (S never moves).
 
