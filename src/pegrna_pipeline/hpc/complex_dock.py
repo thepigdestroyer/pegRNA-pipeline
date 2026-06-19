@@ -82,7 +82,7 @@ def passes_docking_gate(
     apo = scorer.apo_interface_iptm(cas9)
     cand = scorer.interface_iptm(pegrna, cas9)
     drop = apo - cand
-    if drop > max_drop:
+    if drop > max_drop + 1e-9:  # epsilon guards float artefacts at the exact boundary
         return False, (
             f"scaffold-Cas9 interface ipTM dropped {drop:.2f} "
             f"(apo {apo:.2f} -> {cand:.2f} > {max_drop})"
