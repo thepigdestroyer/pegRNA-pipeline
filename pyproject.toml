@@ -40,6 +40,15 @@ splice = [
     "spliceai>=1.3",
     "tensorflow>=2.6",
 ]
+importance = [
+    "biotite>=0.40",
+]
+fullstructure = [
+    "torch>=2.0",
+]
+complex = [
+    "boltz>=2.0",
+]
 
 [project.scripts]
 pegrna = "pegrna_pipeline.agent.cli:cli"
