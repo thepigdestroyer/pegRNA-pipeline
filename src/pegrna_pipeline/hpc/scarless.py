@@ -20,7 +20,7 @@ microhomology condition Zheng 2023 (Fah) engineered away. Callers should surface
 
 from __future__ import annotations
 
-from typing import Optional
+from typing import Callable, List, Optional, Tuple, Union
 
 from Bio.Seq import Seq
 
@@ -93,34 +93,110 @@ def assert_inv0(
     edited: str,
     site_s: int,
     cargo: str,
-    allowed_silent: Optional[dict],
+    allowed_silent: Union[dict, List[dict], None],
+    recode_span: Optional[Tuple[int, int]] = None,
+    protein_check: Optional[Callable[[str, str], bool]] = None,
+    locked_span: Optional[Tuple[int, int]] = None,
+    locked_expected: Optional[str] = None,
 ) -> None:
-    """HARD GATE — raise ``ValueError`` unless ``edited`` equals the reference
-    with ``cargo`` inserted at ``site_s`` and **at most one** allowed silent base
-    change.
+    """HARD GATE — zero endogenous deletion + bounded, justified changes.
 
-    No endogenous insertion/deletion is tolerated (length must match exactly),
-    and at most a single substitution — which must correspond to the declared
-    ``allowed_silent`` PAM edit — is permitted.
+    ``edited`` must equal ``reference`` with ``cargo`` inserted at ``site_s``,
+    except for changes that are explicitly permitted:
+
+    * Inside ``recode_span`` (CDS): any number of changes, provided they are
+      protein-silent (verified by the injected ``protein_check(ref, edited)``).
+    * Inside ``locked_span`` (non-coding; decision 15): **zero** changes — the
+      slice must equal ``locked_expected`` (the targeted allele's bytes) byte for
+      byte. No silent edits allowed in non-coding.
+    * Outside both spans: at most ``len(allowed_silent)`` single-base silent PAM
+      edits (B2-ii: ≤2). A 3rd outside change ⇒ fail.
+
+    No endogenous insertion/deletion is tolerated (length must match exactly).
+
+    **Backward compatibility:** with ``recode_span=None`` and ``allowed_silent``
+    either ``None`` or a single ``dict``, the legacy ≤1-silent-base behaviour is
+    preserved byte-for-byte. ``allowed_silent`` may be a ``dict`` (legacy) or a
+    ``list[dict]`` (B2-ii).
     """
     expected = reference[:site_s] + cargo + reference[site_s:]
-    if edited == expected:
-        return
     if len(expected) != len(edited):
         raise ValueError(
             "INV-0: length mismatch — endogenous insertion/deletion detected "
             f"(expected {len(expected)} nt, got {len(edited)} nt)"
         )
-    diffs = [(i, a, b) for i, (a, b) in enumerate(zip(expected, edited)) if a != b]
+
+    # Normalise allowed_silent to a list and count the budget.
     if allowed_silent is None:
+        silent_budget = 0
+    elif isinstance(allowed_silent, dict):
+        silent_budget = 1
+    else:
+        silent_budget = len(allowed_silent)
+    if silent_budget > 2:
         raise ValueError(
-            f"INV-0: {len(diffs)} endogenous change(s) but no silent edit allowed"
+            f"INV-0: {silent_budget} silent PAM edits declared; hard cap is 2 (B2-ii)"
         )
-    if len(diffs) != 1:
+
+    # ---- legacy path (no recode span): preserve exact historical semantics ----
+    if recode_span is None:
+        if edited == expected:
+            return
+        diffs = [i for i, (a, b) in enumerate(zip(expected, edited)) if a != b]
+        if silent_budget == 0:
+            raise ValueError(
+                f"INV-0: {len(diffs)} endogenous change(s) but no silent edit allowed"
+            )
+        if len(diffs) != silent_budget:
+            raise ValueError(
+                f"INV-0: {len(diffs)} endogenous changes; at most {silent_budget} "
+                "silent PAM base(s) allowed"
+            )
+        return
+
+    # ---- span-aware path ----
+    # A span coordinate is in *reference* space; cargo is inserted at site_s.
+    # The span's start shifts only if strictly past S; the (exclusive) end shifts
+    # only if strictly past S, so a span ending exactly at S keeps the cargo OUT.
+    def _shift_lo(pos: int) -> int:
+        return pos + len(cargo) if pos >= site_s else pos
+
+    def _shift_hi(pos: int) -> int:
+        return pos + len(cargo) if pos > site_s else pos
+
+    rs = (_shift_lo(recode_span[0]), _shift_hi(recode_span[1]))
+    ls = (_shift_lo(locked_span[0]), _shift_hi(locked_span[1])) if locked_span else None
+
+    # Locked (non-coding) span must be byte-exact to the targeted allele.
+    if ls is not None:
+        if locked_expected is None:
+            raise ValueError("INV-0: locked_span given without locked_expected")
+        observed = edited[ls[0]:ls[1]]
+        if observed != locked_expected:
+            raise ValueError(
+                "INV-0: non-coding locked span altered — must be byte-exact to the "
+                f"targeted allele (expected {locked_expected!r}, got {observed!r})"
+            )
+
+    diffs = [i for i, (a, b) in enumerate(zip(expected, edited)) if a != b]
+    outside = []
+    for i in diffs:
+        if rs[0] <= i < rs[1]:
+            continue  # inside recode span — allowed if protein-silent (checked below)
+        if ls is not None and ls[0] <= i < ls[1]:
+            continue  # handled by the byte-exact check above
+        outside.append(i)
+
+    if len(outside) > silent_budget:
         raise ValueError(
-            f"INV-0: {len(diffs)} endogenous changes; at most one silent PAM base allowed"
+            f"INV-0: {len(outside)} change(s) outside recode_span/cargo/locked_span "
+            f"(max {silent_budget} silent PAM base(s) allowed)"
         )
-    # The single diff is accepted as the declared silent PAM edit.
+
+    # Recode-span changes must be protein-silent.
+    if any(rs[0] <= i < rs[1] for i in diffs):
+        if protein_check is not None and not protein_check(reference, edited):
+            raise ValueError("INV-0: recode_span changes are not protein-silent")
     return
 
 
