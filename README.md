@@ -44,3 +44,51 @@ pip install -e '.[scarless]'      # or: conda install -c bioconda viennarna
 > and the implementation plan in
 > `docs/superpowers/plans/2026-06-09-scarless-tjpe.md`. Wet-lab validation is
 > required before relying on this mode.
+
+## Recoded TJ-pegRNA pipeline (design-logic layer)
+
+The recoded pipeline (`pegrna_pipeline.hpc.recoded_tjpe_workflow.run_recoded_tjpe`)
+re-templates the deleted span with **synonymous codons** (CDS) to break
+microhomology while preserving the protein, and runs a stacked gate set on a
+**ranked-pool walk** (build the pool once; cheap gates prune early; expensive
+models run last; the first candidate passing every gate wins; exhausting the
+pool fails loud).
+
+Authoritative pegRNA structure (5'→3'):
+
+```
+Spacer · Scaffold · PBS2 · RTT(Insert + Deletion-Replacement-Arm) · PBS1 · PolyU(2-3 U)
+```
+
+(PBS2 occupies the homology-arm slot; PolyU is the La/PE7 3' tail.)
+
+**Gate stack:** INV-0 (≤2 silent PAM edits + non-coding `locked_span` byte-exact)
+· splice (SpliceAI/Pangolin) · AlphaFold structural importance · RiNALMo 2D
+self-pairing (RNAformer CPU fallback; ViennaRNA cheap pre-screen) · Boltz-2
+scaffold–nCas9 docking. Genome source: the **T2T diploid KOLF2.1J assembly**
+(both haplotypes), mapped to GRCh38 for the GRCh38-trained gates. An opt-in
+`allele_hunt` mode may move the *nick* (never the insert site S) to capture a
+discriminating het SNP; non-coding bases in the re-templated span are
+re-templated byte-exact.
+
+Optional dependency extras:
+
+```bash
+pip install -e '.[recode]'        # DnaChisel constrained recoder
+pip install -e '.[splice]'        # SpliceAI + TensorFlow            (HPC/GPU)
+pip install -e '.[importance]'    # biotite (+ a DSSP binary)        for AlphaFold metrics
+pip install -e '.[fullstructure]' # torch (RiNALMo / RNAformer)      (RiNALMo: Ampere+ GPU)
+pip install -e '.[complex]'       # Boltz-2                          (large GPU + MSA)
+```
+
+> **STATUS — design-logic layer is implemented and unit-tested; real model
+> execution is NOT yet wired and runs only on GPU/HPC.** Each heavy gate
+> (SpliceAI, AlphaFold, RiNALMo, Boltz-2) ships a Protocol + an in-repo fake +
+> a real adapter whose inference body is staged for Imperial CX3 (this dev box
+> lacks an Ampere+ GPU). Stage-0 genome ingest (real T2T-KOLF diploid fetch +
+> KOLF↔GRCh38 chain) is fixture-backed here. The microhomology threshold L,
+> RiNALMo/Boltz-2 cutoffs, and the sub-70 bp nick distance are **calibration
+> parameters requiring wet-lab validation**. See
+> `docs/superpowers/plans/2026-06-18-recoded-tjpe-pegrna-redesign.md`.
+> **Not production-ready: do not deploy to end users until the heavy-model
+> follow-on plan is executed and validated on CX3.**
