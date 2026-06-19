@@ -671,3 +671,54 @@ def write_reports(
     write_all_variants_csv_gz(all_evaluated_variants, av_path, score_cell_line=score_cell_line)
     paths.update(txt=txt, csv=csv_p, offtarget=ot_path, all_variants=av_path)
     return paths
+
+
+def render_recoded_report(result, manifest: dict) -> str:
+    """Render a human-readable text report for a recoded TJ-PE design.
+
+    Includes the design (pegRNA in authoritative order, ngRNA), coordinates,
+    asserted zero deletion, recode edit count, advisory warnings, het-SNP /
+    allele-specific options, and a provenance manifest. ``result`` is a
+    :class:`RecodedTJPEResult`; ``manifest`` is a dict of versioned inputs.
+    """
+    lines: List[str] = []
+    lines.append("=== Recoded TJ-PE pegRNA design ===")
+    lines.append("")
+    lines.append("Design (pegRNA, 5'->3' = Spacer.Scaffold.PBS2.RTT.PBS1.PolyU):")
+    lines.append(f"  spacer : {result.spacer}")
+    lines.append(f"  PBS2   : {result.pbs2}")
+    lines.append(f"  RTT    : {result.rtt}")
+    lines.append(f"  PBS1   : {result.pbs1}")
+    lines.append(f"  PolyU  : {result.polyu}")
+    lines.append(f"  full pegRNA : {result.pegRNA_sequence}")
+    lines.append(f"  ngRNA protospacer : {result.ngrna_protospacer}")
+    lines.append("")
+    lines.append("Coordinates & invariants:")
+    lines.append(f"  insert site S      : {result.site_s}")
+    lines.append(f"  nick position      : {result.nick_position}")
+    lines.append(f"  deletion size      : {result.deletion_size} (INV-0 asserted zero)")
+    lines.append(f"  recode edits       : {result.recode_edits}")
+    lines.append(f"  candidates_tried   : {result.candidates_tried}")
+    lines.append("")
+    lines.append("Advisory warnings:")
+    if result.warnings:
+        for w in result.warnings:
+            lines.append(f"  - {w}")
+    else:
+        lines.append("  (none)")
+    lines.append("")
+    lines.append("Allele-specific options:")
+    if result.allele_specific_options:
+        for opt in result.allele_specific_options:
+            lines.append(
+                f"  - side={opt.side} position={opt.position_class} "
+                f"strength={opt.strength:.2f} haplotype={opt.haplotype}"
+            )
+            lines.append(f"    note: {opt.note}")
+    else:
+        lines.append("  no allele-specific option available at this locus")
+    lines.append("")
+    lines.append("Provenance manifest:")
+    for key in sorted(manifest):
+        lines.append(f"  {key}: {manifest[key]}")
+    return "\n".join(lines)
