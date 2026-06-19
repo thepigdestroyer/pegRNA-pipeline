@@ -33,6 +33,9 @@ dev = [
 scarless = [
     "ViennaRNA>=2.6",
 ]
+recode = [
+    "dnachisel>=3.2",
+]
 
 [project.scripts]
 pegrna = "pegrna_pipeline.agent.cli:cli"

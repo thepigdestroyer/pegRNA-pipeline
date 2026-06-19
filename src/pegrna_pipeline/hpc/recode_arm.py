@@ -18,7 +18,7 @@ from Bio.Seq import Seq
 from pegrna_pipeline.hpc.codon_expander import codons_for_aa
 from pegrna_pipeline.hpc.microhomology import longest_common_run
 
-__all__ = ["recode_min_edits", "RecodeResult"]
+__all__ = ["recode_min_edits", "recode_min_edits_dnachisel", "recode_arm", "RecodeResult"]
 
 
 @dataclass(frozen=True)
@@ -89,3 +89,68 @@ def recode_min_edits(
     if run <= max_run:
         return RecodeResult(final, _edit_distance(final, cds_span), run)
     return None
+
+
+def recode_min_edits_dnachisel(
+    cds_span: str, *, genome: str, frame: int, max_run: int
+) -> Optional[RecodeResult]:
+    """Constrained-optimisation recode using DnaChisel (optional dep ``[recode]``).
+
+    Constraints: ``EnforceTranslation`` (protein identity) + an ``AvoidPattern``
+    for every ``(max_run + 1)``-mer of ``genome`` (so no contiguous identity run
+    can exceed ``max_run``). Objective: ``AvoidChanges`` (minimise edits).
+    Returns a :class:`RecodeResult` or ``None`` if infeasible / not below run.
+    """
+    if frame != 0:
+        raise ValueError("recode_min_edits_dnachisel requires frame=0 (codon-aligned)")
+    try:
+        from dnachisel import (  # noqa: PLC0415
+            AvoidChanges,
+            AvoidPattern,
+            DnaOptimizationProblem,
+            EnforceTranslation,
+        )
+    except Exception as exc:  # pragma: no cover - exercised only without dnachisel
+        raise RuntimeError("DnaChisel not available; install '.[recode]'") from exc
+
+    genome = genome.upper()
+    k = max_run + 1
+    kmers = {genome[i : i + k] for i in range(len(genome) - max_run)}
+    kmers = {km for km in kmers if len(km) == k}
+    constraints = [EnforceTranslation()]
+    constraints.extend(AvoidPattern(km) for km in kmers)
+    try:
+        problem = DnaOptimizationProblem(
+            sequence=cds_span.upper(),
+            constraints=constraints,
+            objectives=[AvoidChanges()],
+            logger=None,
+        )
+        problem.resolve_constraints()
+        problem.optimize()
+    except Exception:
+        return None
+    recoded = problem.sequence
+    run = longest_common_run(recoded, genome)
+    if run > max_run:
+        return None
+    return RecodeResult(recoded, _edit_distance(recoded, cds_span), run)
+
+
+def recode_arm(
+    cds_span: str, *, genome: str, frame: int, max_run: int
+) -> Optional[RecodeResult]:
+    """Dispatch to the DnaChisel optimiser when importable, else the pure greedy.
+
+    Both backends honour the same contract: protein-identical, longest common run
+    with ``genome`` ``<= max_run``, minimised edits, or ``None`` if infeasible.
+    """
+    try:
+        import dnachisel  # noqa: F401, PLC0415
+    except Exception:
+        return recode_min_edits(cds_span, genome=genome, frame=frame, max_run=max_run)
+    result = recode_min_edits_dnachisel(cds_span, genome=genome, frame=frame, max_run=max_run)
+    if result is not None:
+        return result
+    # Fall back to greedy if the optimiser failed to find a solution.
+    return recode_min_edits(cds_span, genome=genome, frame=frame, max_run=max_run)
