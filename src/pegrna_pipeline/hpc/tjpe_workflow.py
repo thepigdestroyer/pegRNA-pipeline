@@ -268,6 +268,48 @@ def assemble_tj_pegrna(
     return spacer + scaffold + insert_dna + restored_segment + pbs1 + rc_pbs2
 
 
+def assemble_tj_pegrna_v2(
+    *,
+    spacer: str,
+    pbs2: str,
+    rtt: str,
+    pbs1: str,
+    polyu: str = "UUU",
+    scaffold: str = STANDARD_SGRNA_SCAFFOLD,
+) -> str:
+    """Assemble the full tjPE pegRNA in the AUTHORITATIVE 5'->3' order (decision 0).
+
+    Layout::
+
+        spacer + scaffold + PBS2 + RTT + PBS1 + PolyU
+
+    * ``pbs2`` occupies the Homology-Arm slot (HA is REPLACED by PBS2 in tjPE),
+      immediately 3' of the scaffold and 5' of the RTT. Its RT copy becomes the
+      3' jumping end that hybridises to the second nick (template jump).
+    * ``rtt`` = insert + deletion-replacement-arm (recoded; passed pre-assembled).
+    * ``pbs1`` primes first-strand synthesis; it is INTERNAL (5' of PolyU).
+    * ``polyu`` = 2-3 uridines, the 3' free tail bound by the La protein of the
+      PE7 editor. Only ``U`` permitted.
+
+    DNA components (spacer/pbs2/rtt/pbs1/scaffold) must be uppercase ACGT; the
+    PolyU tail must be 2-3 ``U``. This is a SEPARATE function from the legacy
+    :func:`assemble_tj_pegrna` so the old scarless workflow + its tests are
+    unaffected (see Task 11b deviation note).
+
+    .. note:: The ``pbs2`` orientation (literal vs reverse-complement) at this 5'
+       slot is asserted against the predicted product by the recoded workflow
+       (Task 13), not here.
+    """
+    for label, value in (("spacer", spacer), ("scaffold", scaffold),
+                         ("pbs2", pbs2), ("rtt", rtt), ("pbs1", pbs1)):
+        _check_acgt(label, value)
+    if not polyu or set(polyu.upper()) - {"U"}:
+        raise ValueError(f"polyu must be 2-3 uridines (U only); got {polyu!r}")
+    if not (2 <= len(polyu) <= 3):
+        raise ValueError(f"polyu length must be 2-3; got {len(polyu)}")
+    return spacer + scaffold + pbs2 + rtt + pbs1 + polyu
+
+
 # ------------------------------------------------------------------ T10
 
 
