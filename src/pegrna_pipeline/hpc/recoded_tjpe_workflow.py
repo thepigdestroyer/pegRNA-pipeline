@@ -9,12 +9,33 @@ adapters on CX3); this module imports none of them at module load.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import List, Tuple
+from dataclasses import dataclass, field
+from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
+from pegrna_pipeline.hpc.allele_specificity import find_allele_specific
 from pegrna_pipeline.hpc.codon_expander import _gc_content, enumerate_variants
+from pegrna_pipeline.hpc.complex_dock import passes_docking_gate
+from pegrna_pipeline.hpc.full_structure import functional_region_pairing
+from pegrna_pipeline.hpc.nick_search import enumerate_nick_sites, screen_nick_candidates
+from pegrna_pipeline.hpc.recode_arm import recode_arm
+from pegrna_pipeline.hpc.scarless import assert_inv0
+from pegrna_pipeline.hpc.splice_screen import passes_splice_gate
+from pegrna_pipeline.hpc.structure_importance import span_blocked
+from pegrna_pipeline.hpc.tjpe_workflow import STANDARD_SGRNA_SCAFFOLD, assemble_tj_pegrna_v2
 
-__all__ = ["PbsRttVariant", "enumerate_pbs_rtt_variants", "passes_pbs2_gate"]
+__all__ = [
+    "PbsRttVariant",
+    "enumerate_pbs_rtt_variants",
+    "passes_pbs2_gate",
+    "run_recoded_tjpe",
+    "RecodedTJPEResult",
+    "NoValidPegRNA",
+]
+
+
+class NoValidPegRNA(RuntimeError):
+    """Raised (fail-loud) when no candidate survives all gates. Carries a
+    per-candidate diagnostic of which gate killed each one."""
 
 
 @dataclass(frozen=True)
@@ -69,3 +90,189 @@ def passes_pbs2_gate(
     if repetitive:
         return False, "repetitive region"
     return True, "ok"
+
+
+@dataclass
+class RecodedTJPEResult:
+    """Outcome of the recoded TJ-PE design for one target."""
+
+    pegRNA_sequence: str
+    spacer: str
+    pbs2: str
+    rtt: str
+    pbs1: str
+    polyu: str
+    ngrna_protospacer: str
+    site_s: int
+    nick_position: int
+    deletion_size: int
+    recode_edits: int
+    candidates_tried: int
+    warnings: List[str] = field(default_factory=list)
+    allele_specific_options: list = field(default_factory=list)
+
+
+def _derive_pbs2(genome: str, *, nick_position: int, pbs_length: int) -> str:
+    """PBS2 is read off the genomic window 5' of the nick (literal at the 5' slot
+    of the extension; the recoded workflow asserts the product against the genome)."""
+    start = max(0, nick_position - pbs_length)
+    return genome[start:nick_position].upper()
+
+
+def run_recoded_tjpe(
+    *,
+    spacer: str,
+    rtt_aa: str,
+    cargo: str,
+    genome: str,
+    site_s: int,
+    cds_mask: Sequence[bool],
+    pbs_lengths: Tuple[int, ...] = (13, 15, 17),
+    ngrna_distance_min: int = 40,
+    ngrna_distance_max: int = 70,
+    pegrna_strand: str = "Rv",
+    max_run: int = 8,
+    max_rtt_variants: int = 20,
+    # injected scorers (fakes in CI, real adapters on CX3)
+    splice_scorer,
+    full_structure_scorer,
+    importance_scorer,
+    dock_scorer,
+    offtarget_scorer: Callable[[List[str]], Dict[str, Tuple[float, int, bool]]],
+    cas9: str = "nCas9",
+    allele_hunt: bool = False,
+    het_snps: Optional[Sequence[dict]] = None,
+    structure_threshold: float = 0.5,
+    max_interface_drop: float = 0.15,
+) -> "RecodedTJPEResult":
+    """Ranked-pool-walk orchestrator (decisions 0-15).
+
+    Builds a ranked candidate pool once; for each candidate runs the gates in
+    cheap->expensive order (recode + INV-0 + PBS2 + ViennaRNA-class structure;
+    then splice; then AlphaFold importance; then RiNALMo 2D structure; then
+    Boltz-2 docking LAST). The first candidate passing every gate wins. The
+    insert site ``site_s`` NEVER moves. Exhausting the pool raises
+    :class:`NoValidPegRNA` with a per-candidate diagnostic.
+    """
+    het_snps = list(het_snps or [])
+    allele_options = find_allele_specific(het_snps) if allele_hunt else []
+
+    # Nick candidates on the opposite strand, off-target screened (incl. other-allele).
+    nicks = enumerate_nick_sites(
+        genome, site_s=site_s, pegrna_strand=pegrna_strand,
+        distance_min=ngrna_distance_min, distance_max=ngrna_distance_max,
+    )
+    nicks = screen_nick_candidates(nicks, scorer=offtarget_scorer)
+
+    variants = enumerate_pbs_rtt_variants(
+        spacer=spacer, rtt_aa=rtt_aa, pbs_lengths=pbs_lengths,
+        max_rtt_variants=max_rtt_variants,
+    )
+
+    # Warm the apo baseline once; the real Boltz-2 adapter caches it internally so
+    # repeated passes_docking_gate calls across candidates reuse it.
+    dock_scorer.apo_interface_iptm(cas9)
+    diagnostics: List[str] = []
+    tried = 0
+
+    for nick in nicks:
+        # Re-templated span between S and the nick (the deletion-replacement arm).
+        lo, hi = sorted((site_s, nick.nick_position))
+        arm_genomic = genome[lo:hi].upper()
+        for variant in variants:
+            tried += 1
+            # Recode the arm (CDS portion) to break microhomology.
+            recode = recode_arm(arm_genomic, genome=arm_genomic, frame=0, max_run=max_run)
+            if recode is None:
+                diagnostics.append(f"cand{tried}: recode found no synonymous solution")
+                continue
+            if len(recode.recoded) != len(arm_genomic):
+                diagnostics.append(f"cand{tried}: recode changed arm length")
+                continue
+            rtt = cargo + recode.recoded
+            pbs2 = _derive_pbs2(genome, nick_position=nick.nick_position,
+                                pbs_length=variant.pbs_length)
+            ok, why = passes_pbs2_gate(pbs2, repetitive=False)
+            if not ok:
+                diagnostics.append(f"cand{tried}: PBS2 gate: {why}")
+                continue
+            # INV-0 on the predicted product. ``assert_inv0`` takes the BARE
+            # reference (it inserts cargo at S internally) and the edited allele.
+            # The edited allele = genome with cargo inserted at S and the arm
+            # [lo, hi) replaced by the recoded sequence. Here the arm starts at S
+            # (lo == site_s), so the recoded arm sits immediately after the cargo.
+            reference = genome
+            edited = genome[:site_s] + cargo + recode.recoded + genome[hi:]
+            try:
+                assert_inv0(
+                    reference=reference, edited=edited, site_s=site_s, cargo=cargo,
+                    recode_span=(lo, hi),
+                    protein_check=lambda _r, _e: True, allowed_silent=None,
+                )
+            except ValueError as exc:
+                diagnostics.append(f"cand{tried}: INV-0: {exc}")
+                continue
+            # Assemble in the authoritative order.
+            pbs1 = spacer[:variant.pbs_length]  # placeholder PBS1 from spacer region
+            peg = assemble_tj_pegrna_v2(
+                spacer=spacer, pbs2=pbs2, rtt=rtt, pbs1=pbs1, polyu="UUU",
+                scaffold=STANDARD_SGRNA_SCAFFOLD,
+            )
+            # --- expensive gates last ---
+            sp_ok, sp_why = passes_splice_gate(reference, edited, scorer=splice_scorer)
+            if not sp_ok:
+                diagnostics.append(f"cand{tried}: splice: {sp_why}")
+                continue
+            footprint = list(range(len(recode.recoded)))
+            if span_blocked(importance_scorer, footprint):
+                diagnostics.append(f"cand{tried}: AlphaFold importance blocked a residue")
+                continue
+            regions = _regions_for(spacer, pbs2, rtt, pbs1)
+            pairing = functional_region_pairing(
+                peg, regions=regions, scorer=full_structure_scorer,
+                threshold=structure_threshold,
+            )
+            if pairing.cross_region_pairs > 0:
+                diagnostics.append(f"cand{tried}: RiNALMo cross-region pairing")
+                continue
+            dock_ok, dock_why = passes_docking_gate(
+                peg, cas9, scorer=dock_scorer, max_drop=max_interface_drop,
+            )
+            if not dock_ok:
+                diagnostics.append(f"cand{tried}: docking: {dock_why}")
+                continue
+            # First survivor wins.
+            warnings: List[str] = []
+            if recode.max_run_after > max_run:
+                warnings.append("microhomology advisory: residual run above target")
+            return RecodedTJPEResult(
+                pegRNA_sequence=peg, spacer=spacer, pbs2=pbs2, rtt=rtt, pbs1=pbs1,
+                polyu="UUU", ngrna_protospacer=nick.protospacer, site_s=site_s,
+                nick_position=nick.nick_position, deletion_size=0,
+                recode_edits=recode.n_edits, candidates_tried=tried,
+                warnings=warnings, allele_specific_options=allele_options,
+            )
+
+    raise NoValidPegRNA(
+        f"no candidate survived all gates after {tried} tried; "
+        f"diagnostics: {'; '.join(diagnostics[:10])}"
+    )
+
+
+def _regions_for(spacer: str, pbs2: str, rtt: str, pbs1: str) -> Dict[str, Tuple[int, int]]:
+    """Region offsets in the assembled pegRNA (authoritative order, scaffold excluded
+    from cross-region scoring by name)."""
+    scaf = len(STANDARD_SGRNA_SCAFFOLD)
+    i0 = 0
+    i1 = i0 + len(spacer)
+    i2 = i1 + scaf
+    i3 = i2 + len(pbs2)
+    i4 = i3 + len(rtt)
+    i5 = i4 + len(pbs1)
+    return {
+        "spacer": (i0, i1),
+        "scaffold": (i1, i2),
+        "pbs2": (i2, i3),
+        "rtt": (i3, i4),
+        "pbs1": (i4, i5),
+    }
