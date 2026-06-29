@@ -376,5 +376,34 @@ def setup_cmd() -> None:
     click.echo(f"Wrote {config_path}")
 
 
+@cli.command("design-recoded")
+@click.option("--config", "config_path", required=True, type=click.Path(exists=True))
+@click.option("--mode", type=click.Choice(["fake", "real"]), default="fake")
+@click.option("--output-dir", default="results", type=click.Path())
+def design_recoded_cmd(config_path: str, mode: str, output_dir: str) -> None:
+    """Run the recoded TJ-PE design pipeline from a JSON config.
+
+    The config supplies the design inputs (spacer, rtt_aa, cargo, genome,
+    site_s, cds_mask, pegrna_strand, pbs_lengths, het_snps, manifest, ...).
+    ``--mode fake`` runs the full design logic with stand-in scorers (dry-run /
+    smoke); ``--mode real`` uses the real models (CX3, GPU, staged weights).
+    """
+    import json
+    from pathlib import Path
+
+    from pegrna_pipeline.hpc.recoded_driver import design_recoded
+
+    cfg = json.loads(Path(config_path).read_text())
+    cfg.setdefault("pegrna_strand", "Rv")
+    try:
+        out = design_recoded(mode=mode, output_dir=output_dir, **cfg)
+    except Exception as exc:  # fail loud with a clear message
+        click.echo(f"design-recoded failed: {type(exc).__name__}: {exc}", err=True)
+        sys.exit(1)
+    click.echo(out.report_text)
+    if out.report_path:
+        click.echo(f"\nReport written to {out.report_path}")
+
+
 if __name__ == "__main__":  # pragma: no cover
     cli()
