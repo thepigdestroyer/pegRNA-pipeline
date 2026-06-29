@@ -58,3 +58,29 @@ def test_per_haplotype_mapping_uses_specific_exons():
     ctx = _ctx()
     assert mrna_to_genomic(ctx, 5, haplotype=0) == 105
     assert mrna_to_genomic(ctx, 5, haplotype=1) == 105
+
+
+def test_minus_strand_maps_from_g_end_downward():
+    # strand=-1: mRNA 5' end -> highest genomic coord; increasing m_pos -> lower.
+    exons = (ExonBlock(200, 209, 0, 10),)  # 10-nt exon, g 200..209 inclusive
+    hap = Haplotype(name="h1", genomic_sequence=None, exons=exons)
+    hap2 = Haplotype(name="h2", genomic_sequence=None, exons=exons)
+    ctx = GenomicContext(
+        genome_build="GRCh38",
+        chrom="chr1",
+        strand=-1,
+        haplotypes=(hap, hap2),
+        het_snps=(),
+    )
+    assert mrna_to_genomic(ctx, 0) == 209  # first mRNA base -> g_end
+    assert mrna_to_genomic(ctx, 9) == 200  # last mRNA base -> g_start
+    # plus-strand sanity: same exon as plus reads upward from g_start
+    ctxp = GenomicContext(
+        genome_build="GRCh38",
+        chrom="chr1",
+        strand=1,
+        haplotypes=(hap, hap2),
+        het_snps=(),
+    )
+    assert mrna_to_genomic(ctxp, 0) == 200
+    assert mrna_to_genomic(ctxp, 9) == 209

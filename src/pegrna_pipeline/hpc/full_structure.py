@@ -164,10 +164,14 @@ class RiNALMoScorer:
             probs = torch.sigmoid(logits)[0, :, :, 0].cpu().numpy()
         n = len(seq)
         out: Dict[Tuple[int, int], float] = {}
+        # Return the FULL probability map (above a tiny numerical floor), NOT a
+        # pre-thresholded subset: region_accessibility needs the total paired
+        # probability mass, and each gate applies its own cutoff. Pre-filtering
+        # here would under-count pairing and over-estimate accessibility.
         for i in range(n):
             for j in range(i + 1, n):
                 p = float(probs[i, j])
-                if p >= self.threshold:
+                if p >= 0.01:
                     out[(i, j)] = p
         return out
 

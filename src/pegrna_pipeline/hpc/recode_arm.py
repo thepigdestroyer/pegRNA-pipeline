@@ -43,16 +43,21 @@ def recode_min_edits(
     (codon-aligned) spans are accepted — the caller is responsible for passing a
     span that starts on a codon boundary.
     """
-    if frame != 0:
-        raise ValueError("recode_min_edits requires a codon-aligned span (frame=0)")
-
-    n_codons = len(cds_span) // 3
-    codons = [cds_span[i * 3 : i * 3 + 3] for i in range(n_codons)]
-    tail = cds_span[n_codons * 3 :]
+    if frame not in (0, 1, 2):
+        raise ValueError(f"frame must be 0/1/2; got {frame}")
+    # ``frame`` is the reading-frame offset of cds_span[0]. Only whole codons are
+    # eligible to change; the partial-codon prefix (pad bases) and any trailing
+    # partial codon stay byte-exact so we NEVER introduce a non-synonymous change.
+    pad = (3 - frame) % 3
+    prefix = cds_span[:pad]
+    body = cds_span[pad:]
+    n_codons = len(body) // 3
+    codons = [body[i * 3 : i * 3 + 3] for i in range(n_codons)]
+    trailing = body[n_codons * 3 :]
     best: List[str] = list(codons)
 
     def assembled(cs: List[str]) -> str:
-        return "".join(cs) + tail
+        return prefix + "".join(cs) + trailing
 
     # Greedy: while the longest run is too long, pick the single codon swap that
     # most reduces the run (ties broken by fewest base changes), repeat. Bounded
@@ -100,8 +105,23 @@ def recode_min_edits_dnachisel(
     can exceed ``max_run``). Objective: ``AvoidChanges`` (minimise edits).
     Returns a :class:`RecodeResult` or ``None`` if infeasible / not below run.
     """
-    if frame != 0:
-        raise ValueError("recode_min_edits_dnachisel requires frame=0 (codon-aligned)")
+    if frame not in (0, 1, 2):
+        raise ValueError(f"frame must be 0/1/2; got {frame}")
+    # Recode only the codon-aligned interior; keep partial-codon edges byte-exact.
+    pad = (3 - frame) % 3
+    if pad or (len(cds_span) - pad) % 3:
+        interior_len = ((len(cds_span) - pad) // 3) * 3
+        prefix = cds_span[:pad]
+        interior = cds_span[pad : pad + interior_len]
+        suffix = cds_span[pad + interior_len :]
+        inner = recode_min_edits_dnachisel(interior, genome=genome, frame=0, max_run=max_run)
+        if inner is None:
+            return None
+        recoded = prefix + inner.recoded + suffix
+        run = longest_common_run(recoded, genome)
+        if run > max_run:
+            return None
+        return RecodeResult(recoded, _edit_distance(recoded, cds_span), run)
     try:
         from dnachisel import (  # noqa: PLC0415
             AvoidChanges,

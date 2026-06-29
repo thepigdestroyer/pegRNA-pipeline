@@ -43,8 +43,18 @@ def test_recode_result_fields():
     assert str(Seq(res.recoded).translate()) == "EEEE"
 
 
-def test_recode_rejects_non_codon_aligned_frame():
+def test_recode_honors_nonzero_frame_keeping_partial_codons_exact():
+    # frame=1 => pad=(3-1)%3=2 partial-codon prefix kept byte-exact; only whole
+    # codons in the interior may be (synonymously) recoded.
+    span = "TT" + "GAAGAAGAA"  # 2-base prefix + 3 Glu codons
+    res = recode_min_edits(span, genome=span, frame=1, max_run=4)
+    assert res is not None
+    assert res.recoded[:2] == "TT"  # partial-codon prefix unchanged
+    assert str(Seq(res.recoded[2:]).translate()) == "EEE"  # interior still Glu x3
+
+
+def test_recode_rejects_invalid_frame():
     import pytest
 
-    with pytest.raises(ValueError, match="codon-aligned"):
-        recode_min_edits("GAAGAA", genome="GAAGAA", frame=1, max_run=3)
+    with pytest.raises(ValueError, match="frame"):
+        recode_min_edits("GAAGAA", genome="GAAGAA", frame=3, max_run=3)

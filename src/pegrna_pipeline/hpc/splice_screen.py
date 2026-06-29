@@ -98,11 +98,27 @@ class SpliceAIScorer:
         """
         import numpy as np  # noqa: PLC0415
 
+        # FAIL-LOUD, not fail-open: a safety gate must never return Δ=0 (pass)
+        # because the windows were too short or mismatched. SpliceAI needs the
+        # genomic context with >=5 kb flanks each side (the model receptive
+        # field), and REF/ALT must be length-matched for the position-wise delta.
+        if len(ref_seq) != len(alt_seq):
+            raise ValueError(
+                "SpliceAIScorer.delta requires length-matched REF/ALT windows "
+                f"(got {len(ref_seq)} vs {len(alt_seq)}); align around the variant"
+            )
+        if len(ref_seq) < 2 * self._context:
+            raise ValueError(
+                f"SpliceAIScorer.delta requires >= {2 * self._context} nt of context "
+                f"(>= {self._context} each side); got {len(ref_seq)} nt"
+            )
         a_ref, d_ref = self._tracks(ref_seq)
         a_alt, d_alt = self._tracks(alt_seq)
         n = min(len(a_ref), len(a_alt))
-        da = np.abs(a_alt[:n] - a_ref[:n]).max() if n else 0.0
-        dd = np.abs(d_alt[:n] - d_ref[:n]).max() if n else 0.0
+        if n == 0:
+            raise ValueError("SpliceAIScorer produced empty score tracks (context too short)")
+        da = np.abs(a_alt[:n] - a_ref[:n]).max()
+        dd = np.abs(d_alt[:n] - d_ref[:n]).max()
         return float(max(da, dd))
 
 

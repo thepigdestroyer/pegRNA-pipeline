@@ -188,14 +188,18 @@ class AFDBImportanceScorer:
         sasa_atom = struc.sasa(atoms, vdw_radii="Single")
         res_sasa = float(np.nansum(sasa_atom[mask]))
         rsa = res_sasa / self._MAX_ASA.get(res_name, 200.0)
-        # contact number: heavy atoms of OTHER residues within 5 A of any atom here
+        # Contact number = count of HEAVY ATOMS of OTHER residues within 5 A of any
+        # atom of this residue (matches the Yeh/Shih heavy-atom-contact definition
+        # that the >18 threshold is calibrated to — NOT a count of distinct
+        # neighbour residues, which would rarely exceed 18 and under-block).
         cell = struc.CellList(atoms, cell_size=5.0)
-        contacts = set()
+        is_heavy = atoms.element != "H"
+        seen_atoms = set()
         for atom_i in np.where(mask)[0]:
             for j in cell.get_atoms(atoms.coord[atom_i], radius=5.0):
-                if atoms.res_id[j] != rid:
-                    contacts.add(int(atoms.res_id[j]))
-        contact_number = len(contacts)
+                if atoms.res_id[j] != rid and is_heavy[j]:
+                    seen_atoms.add(int(j))
+        contact_number = len(seen_atoms)
         # disulfide: this CYS SG within 2.5 A of another CYS SG
         is_disulfide = False
         if res_name == "CYS":

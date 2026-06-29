@@ -27,9 +27,9 @@ def test_dnachisel_noop_when_already_clean():
     assert res.n_edits == 0
 
 
-def test_dnachisel_rejects_non_codon_aligned():
-    with pytest.raises(ValueError, match="frame=0"):
-        recode_min_edits_dnachisel("GAAGAA", genome="GAAGAA", frame=1, max_run=3)
+def test_dnachisel_rejects_invalid_frame():
+    with pytest.raises(ValueError, match="frame"):
+        recode_min_edits_dnachisel("GAAGAA", genome="GAAGAA", frame=3, max_run=3)
 
 
 def test_recode_arm_dispatch_prefers_dnachisel_when_available():

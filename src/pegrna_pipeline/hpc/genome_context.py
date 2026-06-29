@@ -73,5 +73,12 @@ def mrna_to_genomic(ctx: Optional[GenomicContext], m_pos: int, *, haplotype: int
     hap = ctx.haplotypes[haplotype]
     for ex in hap.exons:
         if ex.m_start <= m_pos < ex.m_end:
-            return ex.g_start + (m_pos - ex.m_start)  # + strand
+            off = m_pos - ex.m_start
+            # Minus-strand: the 5' end of the mRNA maps to the exon's HIGHEST
+            # genomic coordinate and increasing m_pos moves toward LOWER genomic
+            # coordinates. Plus-strand counts up from g_start. (g_start/g_end are
+            # 1-based inclusive Ensembl coordinates.)
+            if ctx.strand < 0:
+                return ex.g_end - off
+            return ex.g_start + off
     raise ValueError(f"mRNA position {m_pos} not within any exon block")

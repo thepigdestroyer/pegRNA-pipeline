@@ -45,9 +45,25 @@ class Boltz2DockScorer:
     the orchestrator (Task 13) and reused across candidates.
     """
 
-    def __init__(self, *, cache_dir: str | None = None, use_msa_server: bool = False) -> None:
+    def __init__(
+        self,
+        *,
+        cache_dir: str | None = None,
+        use_msa_server: bool = False,
+        apo_scaffold: str | None = None,
+    ) -> None:
         self.cache_dir = cache_dir
         self.use_msa_server = use_msa_server
+        # The apo baseline is the STANDARD scaffold + Cas9 complex (an RNA chain
+        # must be present or ipTM is undefined). Defaults to the SpCas9 sgRNA
+        # scaffold so the baseline is a real two-chain interface.
+        if apo_scaffold is None:
+            from pegrna_pipeline.hpc.tjpe_workflow import (  # noqa: PLC0415
+                STANDARD_SGRNA_SCAFFOLD,
+            )
+
+            apo_scaffold = STANDARD_SGRNA_SCAFFOLD
+        self.apo_scaffold = apo_scaffold
         self._apo_cache: dict = {}
 
     def _predict(self, components):  # pragma: no cover - exercised only on big GPU
@@ -102,7 +118,11 @@ class Boltz2DockScorer:
     def apo_interface_iptm(self, cas9: str) -> float:  # pragma: no cover - CX3 only
         if cas9 in self._apo_cache:
             return self._apo_cache[cas9]
-        return self._predict({"cas9": cas9})
+        # Baseline = scaffold-only pegRNA (no extension) + Cas9 — a real two-chain
+        # interface, so the candidate's interface drop is meaningful.
+        val = self._predict({"pegrna": self.apo_scaffold, "cas9": cas9})
+        self._apo_cache[cas9] = val
+        return val
 
     def interface_iptm(self, pegrna: str, cas9: str) -> float:  # pragma: no cover - CX3
         return self._predict({"pegrna": pegrna, "cas9": cas9})

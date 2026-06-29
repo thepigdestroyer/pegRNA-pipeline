@@ -108,6 +108,25 @@ def test_fail_loud_has_diagnostic():
         assert "splice" in str(exc).lower()
 
 
+class _RaisingSplice:
+    def delta(self, ref, alt):
+        raise RuntimeError("scorer exploded")
+
+
+def test_raising_scorer_does_not_crash_the_walk():
+    # A gate scorer that throws must be caught -> diagnostic -> NoValidPegRNA,
+    # NOT propagate a raw exception that aborts the whole run.
+    with pytest.raises(NoValidPegRNA):
+        run_recoded_tjpe(
+            **_inputs(),
+            splice_scorer=_RaisingSplice(),
+            full_structure_scorer=FullStructureFake(pairs={}),
+            importance_scorer=_all_pass_importance(),
+            dock_scorer=DockFake(apo_iptm=0.85, candidate_iptm=0.82),
+            offtarget_scorer=_clean_offtarget,
+        )
+
+
 def test_allele_hunt_surfaces_options_without_moving_s():
     het = [{"element": "pegrna_pam", "offset": 1, "haplotype": 1, "phased": True}]
     res = run_recoded_tjpe(

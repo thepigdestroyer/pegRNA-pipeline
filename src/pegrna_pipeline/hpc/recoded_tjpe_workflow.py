@@ -130,6 +130,46 @@ def _captured_window(genome: str, *, nick_position: int, pbs_length: int) -> str
     return genome[start:nick_position].upper()
 
 
+def _frame_at(cds_mask: Sequence[bool], pos: int) -> int:
+    """Reading-frame offset of genomic ``pos`` = (# CDS bases from CDS start to
+    pos) % 3. Assumes a contiguous CDS in the local window (no intron between the
+    CDS start and ``pos``), which holds for the short re-templated arm."""
+    try:
+        cds_start = list(cds_mask).index(True)
+    except ValueError:
+        return 0
+    return max(0, pos - cds_start) % 3
+
+
+def _derive_pbs1(genome: str, *, site_s: int, pbs_length: int, pegrna_strand: str) -> str:
+    """PBS1 primes off the 3'-OH the pegRNA nick creates (the pegRNA nick is at S,
+    decision 1). It base-pairs antiparallel to the L genomic bases ending at the
+    nick, so PBS1 = reverse_complement(genome[S-L:S]) for a reverse-targeting
+    pegRNA (literal window for forward). This is the mechanistically-correct
+    derivation from the genome — NOT a slice of the spacer. In production the exact
+    PBS comes from PRIDICT; this is the fallback when designing from genome.
+    """
+    from Bio.Seq import Seq  # noqa: PLC0415
+
+    window = genome[max(0, site_s - pbs_length) : site_s].upper()
+    if pegrna_strand == "Rv":
+        return str(Seq(window).reverse_complement())
+    return window
+
+
+def _arm_protein_equal(original_arm: str, recoded_arm: str, frame: int) -> bool:
+    """True iff the recoded arm encodes the SAME protein as the original over its
+    codon-aligned interior (independent synonymity check for INV-0)."""
+    from Bio.Seq import Seq  # noqa: PLC0415
+
+    pad = (3 - frame) % 3
+    a = original_arm[pad:]
+    b = recoded_arm[pad:]
+    a = a[: (len(a) // 3) * 3]
+    b = b[: (len(b) // 3) * 3]
+    return str(Seq(a).translate()) == str(Seq(b).translate())
+
+
 def run_recoded_tjpe(
     *,
     spacer: str,
@@ -166,7 +206,11 @@ def run_recoded_tjpe(
     :class:`NoValidPegRNA` with a per-candidate diagnostic.
     """
     het_snps = list(het_snps or [])
-    allele_options = find_allele_specific(het_snps) if allele_hunt else []
+    # Advisory only — must never crash the design run on a malformed SNP record.
+    try:
+        allele_options = find_allele_specific(het_snps) if allele_hunt else []
+    except Exception:  # noqa: BLE001
+        allele_options = []
 
     # Nick candidates on the opposite strand, off-target screened (incl. other-allele).
     nicks = enumerate_nick_sites(
@@ -186,31 +230,45 @@ def run_recoded_tjpe(
     )
 
     # Warm the apo baseline once; the real Boltz-2 adapter caches it internally so
-    # repeated passes_docking_gate calls across candidates reuse it.
-    dock_scorer.apo_interface_iptm(cas9)
+    # repeated passes_docking_gate calls across candidates reuse it. Guard it: a
+    # scorer that cannot run must not crash the whole walk before any candidate.
     diagnostics: List[str] = []
+    try:
+        dock_scorer.apo_interface_iptm(cas9)
+    except Exception as exc:  # noqa: BLE001 - scorer/runtime failures are diagnostics
+        raise NoValidPegRNA(f"docking apo baseline failed to compute: {exc}") from exc
     tried = 0
 
     for nick in nicks:
         # Re-templated span between S and the nick (the deletion-replacement arm).
         lo, hi = sorted((site_s, nick.nick_position))
+        if lo != site_s:
+            # Arm-placement contract: the pegRNA nick is at S, so the arm starts
+            # at S. A nick 5' of S is not yet supported (would duplicate the arm).
+            diagnostics.append(f"nick {nick.nick_position}: 5'-of-S placement unsupported")
+            continue
         arm_genomic = genome[lo:hi].upper()
+        frame = _frame_at(cds_mask, lo)
+        # Recode the arm ONCE per nick (independent of the PBS-length variants).
+        recode = recode_arm(arm_genomic, genome=arm_genomic, frame=frame, max_run=max_run)
+        if recode is None:
+            diagnostics.append(f"nick {nick.nick_position}: recode found no synonymous solution")
+            continue
+        if len(recode.recoded) != len(arm_genomic):
+            diagnostics.append(f"nick {nick.nick_position}: recode changed arm length")
+            continue
+        # Independent synonymity check (feeds INV-0): recoded arm == same protein.
+        if not _arm_protein_equal(arm_genomic, recode.recoded, frame):
+            diagnostics.append(f"nick {nick.nick_position}: recode not protein-silent")
+            continue
+
         for variant in variants:
             tried += 1
-            # Recode the arm (CDS portion) to break microhomology.
-            recode = recode_arm(arm_genomic, genome=arm_genomic, frame=0, max_run=max_run)
-            if recode is None:
-                diagnostics.append(f"cand{tried}: recode found no synonymous solution")
-                continue
-            if len(recode.recoded) != len(arm_genomic):
-                diagnostics.append(f"cand{tried}: recode changed arm length")
-                continue
             # RTT tail = cargo + recoded arm, in the SENSE frame; orient it onto
             # the pegRNA per strand (Rv -> reverse_complement, Fw -> literal).
             sense_flap = cargo + recode.recoded
             rtt = orient_rtt_tail(sense_flap, pegrna_strand=pegrna_strand)
-            # PBS2 = the captured-strand window 5' of the nick, oriented per strand
-            # (Rv -> literal/identity to captured strand, Fw -> reverse_complement).
+            # PBS2 = the captured-strand window 5' of the nick, oriented per strand.
             captured = _captured_window(
                 genome, nick_position=nick.nick_position, pbs_length=variant.pbs_length
             )
@@ -219,13 +277,14 @@ def run_recoded_tjpe(
             if not ok:
                 diagnostics.append(f"cand{tried}: PBS2 gate: {why}")
                 continue
-            # INV-0 on the predicted product. ``assert_inv0`` takes the BARE
-            # reference (it inserts cargo at S internally) and the edited allele.
-            # The edited allele = genome with cargo inserted at S and the arm
-            # [lo, hi) replaced by the recoded sequence. Here the arm starts at S
-            # (lo == site_s), so the recoded arm sits immediately after the cargo.
+            # INV-0 on the predicted product, with a REAL protein-silence check
+            # (recoded arm must translate to the same protein in-frame).
             reference = genome
             edited = genome[:site_s] + cargo + recode.recoded + genome[hi:]
+
+            def _protein_check(_r, _e, _arm=arm_genomic, _rec=recode.recoded, _f=frame):
+                return _arm_protein_equal(_arm, _rec, _f)
+
             try:
                 assert_inv0(
                     reference=reference,
@@ -233,7 +292,7 @@ def run_recoded_tjpe(
                     site_s=site_s,
                     cargo=cargo,
                     recode_span=(lo, hi),
-                    protein_check=lambda _r, _e: True,
+                    protein_check=_protein_check,
                     allowed_silent=None,
                 )
             except ValueError as exc:
@@ -254,8 +313,11 @@ def run_recoded_tjpe(
             except TPRTMismatch as exc:
                 diagnostics.append(f"cand{tried}: TPRT strand mismatch: {exc}")
                 continue
-            # Assemble in the authoritative order.
-            pbs1 = spacer[: variant.pbs_length]  # placeholder PBS1 from spacer region
+            # PBS1 derived from the genome at the pegRNA nick (RC of the nicked
+            # 3' end) — NOT a slice of the spacer.
+            pbs1 = _derive_pbs1(
+                genome, site_s=site_s, pbs_length=variant.pbs_length, pegrna_strand=pegrna_strand
+            )
             peg = assemble_tj_pegrna_v2(
                 spacer=spacer,
                 pbs2=pbs2,
@@ -264,31 +326,52 @@ def run_recoded_tjpe(
                 polyu="UUU",
                 scaffold=STANDARD_SGRNA_SCAFFOLD,
             )
-            # --- expensive gates last ---
-            sp_ok, sp_why = passes_splice_gate(reference, edited, scorer=splice_scorer)
+            # --- expensive gates last; each is GUARDED so a scorer crash skips the
+            # candidate (with a diagnostic) instead of aborting the whole walk. ---
+            try:
+                sp_ok, sp_why = passes_splice_gate(reference, edited, scorer=splice_scorer)
+            except Exception as exc:  # noqa: BLE001
+                diagnostics.append(f"cand{tried}: splice scorer error: {exc}")
+                continue
             if not sp_ok:
                 diagnostics.append(f"cand{tried}: splice: {sp_why}")
                 continue
-            footprint = list(range(len(recode.recoded)))
-            if span_blocked(importance_scorer, footprint):
+
+            # AlphaFold importance: map the recoded NT footprint to RESIDUE indices.
+            res_lo = (lo - (list(cds_mask).index(True) if any(cds_mask) else 0)) // 3
+            n_res = (len(recode.recoded) + 2) // 3
+            footprint = list(range(res_lo, res_lo + max(1, n_res)))
+            try:
+                blocked = span_blocked(importance_scorer, footprint)
+            except Exception as exc:  # noqa: BLE001
+                diagnostics.append(f"cand{tried}: importance scorer error: {exc}")
+                continue
+            if blocked:
                 diagnostics.append(f"cand{tried}: AlphaFold importance blocked a residue")
                 continue
+
             regions = _regions_for(spacer, pbs2, rtt, pbs1)
-            pairing = functional_region_pairing(
-                peg,
-                regions=regions,
-                scorer=full_structure_scorer,
-                threshold=structure_threshold,
-            )
+            try:
+                pairing = functional_region_pairing(
+                    peg,
+                    regions=regions,
+                    scorer=full_structure_scorer,
+                    threshold=structure_threshold,
+                )
+            except Exception as exc:  # noqa: BLE001
+                diagnostics.append(f"cand{tried}: structure scorer error: {exc}")
+                continue
             if pairing.cross_region_pairs > 0:
                 diagnostics.append(f"cand{tried}: RiNALMo cross-region pairing")
                 continue
-            dock_ok, dock_why = passes_docking_gate(
-                peg,
-                cas9,
-                scorer=dock_scorer,
-                max_drop=max_interface_drop,
-            )
+
+            try:
+                dock_ok, dock_why = passes_docking_gate(
+                    peg, cas9, scorer=dock_scorer, max_drop=max_interface_drop
+                )
+            except Exception as exc:  # noqa: BLE001
+                diagnostics.append(f"cand{tried}: docking scorer error: {exc}")
+                continue
             if not dock_ok:
                 diagnostics.append(f"cand{tried}: docking: {dock_why}")
                 continue
