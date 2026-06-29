@@ -81,14 +81,49 @@ pip install -e '.[fullstructure]' # torch (RiNALMo / RNAformer)      (RiNALMo: A
 pip install -e '.[complex]'       # Boltz-2                          (large GPU + MSA)
 ```
 
+### Strand convention (locked)
+
+Everything is stored **5′→3′**; antiparallel/template relationships are
+`reverse_complement`. The manually-designed RTT tail in the emitted oligo is the
+reverse complement of the desired sense flap; PBS2 equals the captured-strand
+segment (complement-of-complement). `complement`, `reverse`, and
+`reverse_complement` are three distinct operations — `tprt_sim.simulate_tprt`
+reconstructs the integrated **sense** allele from the designed extension and
+fails loudly on any wrong operation (its tests prove it rejects plain
+`complement` and plain `reverse`).
+
+### Insertable cargo elements: T7 / T7-rev
+
+`insert_elements.assemble_insert` builds the cargo from named segments, including
+two directional T7 promoters for linear RNA amplification:
+
+- `T7` (`TAATACGACTCACTATAGGG`) transcribes the segments **downstream** (3′).
+- `T7_rev` (reverse complement) transcribes the segments **upstream** (5′).
+
+e.g. `FLAG-GGGGS-T7-P2A-ZeoR` → T7 transcribes `P2A-ZeoR`; swap in `T7_rev` →
+transcribes `GGGGS-FLAG`.
+
+### Running it
+
+```bash
+# Dry-run anywhere (full design logic, stand-in scorers, no GPU):
+pegrna design-recoded --config design_config.json --mode fake --output-dir results/dry
+
+# Real end-to-end with all gate models on Imperial CX3:
+#   see scripts/hpc/README.md  (env, model staging, smoke validation, PBS submit)
+```
+
 > **STATUS — design-logic layer is implemented and unit-tested; real model
-> execution is NOT yet wired and runs only on GPU/HPC.** Each heavy gate
-> (SpliceAI, AlphaFold, RiNALMo, Boltz-2) ships a Protocol + an in-repo fake +
-> a real adapter whose inference body is staged for Imperial CX3 (this dev box
-> lacks an Ampere+ GPU). Stage-0 genome ingest (real T2T-KOLF diploid fetch +
-> KOLF↔GRCh38 chain) is fixture-backed here. The microhomology threshold L,
-> RiNALMo/Boltz-2 cutoffs, and the sub-70 bp nick distance are **calibration
-> parameters requiring wet-lab validation**. See
-> `docs/superpowers/plans/2026-06-18-recoded-tjpe-pegrna-redesign.md`.
-> **Not production-ready: do not deploy to end users until the heavy-model
-> follow-on plan is executed and validated on CX3.**
+> execution runs only on GPU/HPC.** Each heavy gate (SpliceAI, AlphaFold,
+> RiNALMo, RNAformer, Boltz-2) ships a Protocol + in-repo fake + a real adapter
+> written against the tool's documented API. The real bodies were **not
+> executable on the dev box** (no Ampere GPU / no weights) — `scripts/hpc/
+> smoke_models.py` is the gate that proves each runs on CX3 before a production
+> design. Stage-0 genome ingest (real T2T-KOLF diploid + KOLF↔GRCh38 chain) is
+> fixture-backed here. The microhomology threshold L, RiNALMo/Boltz-2 cutoffs,
+> and the sub-70 bp nick distance are **calibration parameters requiring wet-lab
+> validation**. See `docs/superpowers/plans/2026-06-18-recoded-tjpe-pegrna-redesign.md`
+> and `scripts/hpc/README.md`.
+> **Production-ready only after `smoke_models.py` passes 5/5 on CX3, Stage-0 real
+> genome is wired, and thresholds are wet-lab calibrated. Until then, outputs are
+> engineering previews, not bench-ready designs.**
