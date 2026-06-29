@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+#PBS -N pegrna_recoded
+#PBS -l select=1:ncpus=8:mem=64gb:ngpus=1:gpu_type=A100
+#PBS -l walltime=08:00:00
+#PBS -o pegrna_recoded.log
+#PBS -j oe
+#
+# Full end-to-end recoded TJ-PE design run with ALL real gate models active.
+# Submit from a CX3 login node after staging:
+#
+#   export PEGRNA_DATA=$EPHEMERAL/pegrna-data
+#   bash scripts/hpc/stage_models.sh                 # once, on login node
+#   python scripts/hpc/smoke_models.py               # confirm every model runs
+#   qsub -v CONFIG=/path/to/design_config.json scripts/hpc/run_recoded_pipeline.pbs
+#
+# Requires an Ampere+ GPU (RiNALMo FlashAttention; Boltz-2 AF3-class). The A100
+# request matches CX3's GPU nodes; adjust gpu_type to availability.
+set -euo pipefail
+
+cd "${PBS_O_WORKDIR:-$PWD}"
+module load anaconda3/personal cuda/12.2 || true
+source activate pegrna-recoded
+
+: "${PEGRNA_DATA:?stage models first (scripts/hpc/stage_models.sh)}"
+: "${CONFIG:?pass -v CONFIG=/path/to/design_config.json}"
+export BOLTZ_CACHE="${BOLTZ_CACHE:-$PEGRNA_DATA/boltz_cache}"
+OUT="${OUT:-results/recoded_$(date -u +%Y%m%dT%H%M%SZ)}"
+mkdir -p "$OUT"
+
+echo "[$(date -u +%FT%TZ)] gate self-check (every real model must pass before the run)"
+python scripts/hpc/smoke_models.py --data "$PEGRNA_DATA"
+
+echo "[$(date -u +%FT%TZ)] running recoded TJ-PE design (mode=real) -> $OUT"
+pegrna design-recoded --config "$CONFIG" --mode real --output-dir "$OUT"
+
+echo "[$(date -u +%FT%TZ)] done. Report + manifest in $OUT"
