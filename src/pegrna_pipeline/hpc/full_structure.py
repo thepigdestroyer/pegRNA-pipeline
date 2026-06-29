@@ -116,40 +116,52 @@ class RiNALMoScorer:
             return
         try:
             import torch  # noqa: PLC0415
-            from rinalmo.config import model_config  # noqa: PLC0415
-            from rinalmo.model.model import RiNALMo  # noqa: PLC0415
+            from rinalmo.model.downstream import SecStructPredictionHead  # noqa: PLC0415
+            from rinalmo.pretrained import get_pretrained_model  # noqa: PLC0415
         except Exception as exc:
             raise ImportError(
                 "RiNALMoScorer requires the '[fullstructure]' extra (torch + rinalmo) "
                 "and an Ampere/Ada/Hopper GPU with FlashAttention; run on CX3. "
                 f"Original error: {exc}"
             ) from exc
-        cfg = model_config("giga")
-        model = RiNALMo(cfg)
+        # Real RiNALMo SS API (verified against lbcb-sci/RiNALMo
+        # train_sec_struct_prediction.py): the giga LM + a SecStructPredictionHead.
+        lm, alphabet = get_pretrained_model(model_name="giga-v1")
+        head = SecStructPredictionHead(lm.config["model"]["transformer"].embed_dim, num_blocks=2)
         if self.weights:
-            model.load_state_dict(torch.load(self.weights, map_location="cuda"))
-        model = model.cuda().eval()
-        self._model = model
+            # SS fine-tuned checkpoint (e.g. Zenodo 15043668
+            # rinalmo_giga_ss_archiveII-*_ft.pt) holds the combined lm+head weights.
+            state = torch.load(self.weights, map_location="cuda")
+            sd = state.get("state_dict", state)
+            lm.load_state_dict(
+                {k[3:]: v for k, v in sd.items() if k.startswith("lm.")}, strict=False
+            )
+            head.load_state_dict(
+                {k[10:]: v for k, v in sd.items() if k.startswith("pred_head.")}, strict=False
+            )
+        self._model = (lm.cuda().eval(), head.cuda().eval(), alphabet)
 
     def pair_probs(self, seq: str) -> Dict[Tuple[int, int], float]:  # pragma: no cover
         """L x L base-pair probabilities from RiNALMo's fine-tuned SS head.
 
-        Loads the giga model + the SS-prediction head weights, tokenises the
-        sequence, runs the head to get a symmetric probability matrix, and
-        sparsifies to ``{(i, j): p}`` for i < j with p above ``self.threshold``.
-        VALIDATE ON CX3: confirm the SS-head checkpoint path + that the head
-        returns sigmoid probabilities (RiNALMo's downstream.SecStructPredictionHead
-        symmetrises logits; apply sigmoid here).
+        Runs the giga LM + SecStructPredictionHead, sigmoids the symmetric logits,
+        and sparsifies to ``{(i, j): p}`` for i < j with p above ``self.threshold``.
+
+        VALIDATE ON CX3: the RiNALMo SS head is fine-tuned PER RNA FAMILY
+        (archiveII 5s/16s/23s/srp/grp1/telomerase on Zenodo 15043668). An
+        engineered pegRNA belongs to no family, so the choice of SS checkpoint is
+        itself a validation question (start with the broadest, e.g. 23s/srp, and
+        cross-check against RNAformer + ViennaRNA). ``self.weights`` selects it.
         """
         import torch
-        from rinalmo.data.alphabet import Alphabet
 
         self._load()
-        alphabet = Alphabet()
-        tokens = torch.tensor([alphabet.encode(seq)], device="cuda")
+        lm, head, alphabet = self._model
+        tokens = torch.tensor([alphabet.batch_tokenize([seq])[0]], device="cuda")
         with torch.no_grad():
-            logits = self._model.predict_secondary_structure(tokens)
-            probs = torch.sigmoid(logits)[0].cpu().numpy()
+            embedding = lm(tokens)["representation"]
+            logits = head(embedding)
+            probs = torch.sigmoid(logits)[0, :, :, 0].cpu().numpy()
         n = len(seq)
         out: Dict[Tuple[int, int], float] = {}
         for i in range(n):
