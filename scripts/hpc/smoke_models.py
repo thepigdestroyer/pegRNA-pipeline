@@ -55,16 +55,21 @@ def smoke_importance(data):
 
 
 def smoke_rinalmo():
+    import os
+
     from pegrna_pipeline.hpc.full_structure import RiNALMoScorer
 
-    pp = RiNALMoScorer().pair_probs(_SEQ)
+    pp = RiNALMoScorer(weights=os.environ.get("RINALMO_SS_WEIGHTS")).pair_probs(_SEQ)
     return (isinstance(pp, dict), f"{len(pp)} pairs >= threshold")
 
 
 def smoke_rnaformer():
+    import os
+
     from pegrna_pipeline.hpc.full_structure import RNAformerScorer
 
-    pp = RNAformerScorer().pair_probs(_SEQ)
+    model_dir = os.path.dirname(os.environ.get("RNAFORMER_CKPT", "")) or None
+    pp = RNAformerScorer(model_dir=model_dir).pair_probs(_SEQ)
     return (isinstance(pp, dict), f"{len(pp)} pairs >= 0.5")
 
 

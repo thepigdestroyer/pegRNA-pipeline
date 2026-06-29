@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+#PBS -N pegrna_setup_smoke
+#PBS -l select=1:ncpus=8:mem=64gb:ngpus=1
+#PBS -l walltime=06:00:00
+#PBS -o pegrna_setup_smoke.log
+#PBS -j oe
+#
+# One-shot GPU-node job: install the heavy gate deps + stage all model weights +
+# run smoke_models.py. Target: 5/5 gates passing. Submit from a CX3 login node:
+#
+#   export PEGRNA_DATA=$EPHEMERAL/pegrna-data
+#   qsub -v PEGRNA_DATA=$PEGRNA_DATA scripts/hpc/setup_and_smoke.pbs
+#
+# Idempotent: re-running skips already-installed deps / staged weights. The two
+# CPU gates (ViennaRNA, AlphaFold-importance) already pass; this job brings up
+# SpliceAI, RiNALMo, RNAformer, and Boltz-2.
+set -uo pipefail
+
+cd "${PBS_O_WORKDIR:-$HOME/pegRNA-pipeline}"
+: "${PEGRNA_DATA:?set PEGRNA_DATA (e.g. \$EPHEMERAL/pegrna-data)}"
+export BOLTZ_CACHE="${BOLTZ_CACHE:-$PEGRNA_DATA/boltz_cache}"
+MF="$HOME/miniforge3"
+ENV=pegrna-recoded
+RUN() { "$MF/bin/mamba" run -n "$ENV" "$@"; }
+log() { echo "[$(date -u +%FT%TZ)] $*"; }
+
+log "GPU check"; nvidia-smi -L || log "WARN: no GPU visible"
+
+log "Heavy deps (spliceai+tf, torch, boltz) into $ENV"
+RUN pip install --quiet \
+    "spliceai>=1.3" "tensorflow-cpu" \
+    "torch" "boltz>=2.0" requests || log "WARN: some pip installs failed (see above)"
+
+log "Stage model weights"
+bash scripts/hpc/stage_models.sh || log "WARN: staging had warnings (see MANIFEST)"
+
+log "Point the adapters at staged weights via env (read by a thin wrapper config)"
+export RINALMO_SS_WEIGHTS="$PEGRNA_DATA/rinalmo_weights/rinalmo_giga_ss_archiveII-23s_ft.pt"
+export RNAFORMER_CKPT="$PEGRNA_DATA/rnaformer_weights/RNAformer_32M_state_dict_biophysical.pth"
+
+log "Run smoke validation (target 5/5)"
+PYTHONPATH=src RUN python scripts/hpc/smoke_models.py --data "$PEGRNA_DATA"
+rc=$?
+log "smoke_models.py exit code: $rc (0 = all gates passed)"
+exit $rc

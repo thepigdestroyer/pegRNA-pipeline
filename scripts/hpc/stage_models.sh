@@ -37,22 +37,36 @@ if [ ! -f "$PEGRNA_DATA/GRCh38.primary_assembly.genome.fa" ]; then
   gunzip -f "$PEGRNA_DATA/GRCh38.fa.gz"
 fi
 
-# --- 3. RiNALMo (giga) + SS-head weights ---
+# --- 3. RiNALMo (giga) + SS-head weights (Zenodo 15043668, resolved) ---
 if [ ! -d "$PEGRNA_DATA/RiNALMo" ]; then
-  log "Cloning RiNALMo (lbcb-sci/RiNALMo) + downloading giga + SS-head weights"
+  log "Cloning RiNALMo (lbcb-sci/RiNALMo) + installing"
   git clone --depth 1 https://github.com/lbcb-sci/RiNALMo "$PEGRNA_DATA/RiNALMo"
-  pip install -e "$PEGRNA_DATA/RiNALMo"
-  # Pretrained + fine-tuned SS weights are linked from the repo README (HF / Zenodo).
-  log "TODO: download rinalmo_giga_pretrained.pt + rinalmo_giga_ss_*_ft.pt per README"
+  pip install -e "$PEGRNA_DATA/RiNALMo" flash-attn --no-build-isolation || \
+    pip install -e "$PEGRNA_DATA/RiNALMo"
 fi
+mkdir -p "$PEGRNA_DATA/rinalmo_weights"
+ZEN_R=https://zenodo.org/records/15043668/files
+for w in rinalmo_giga_pretrained.pt rinalmo_giga_ss_archiveII-23s_ft.pt \
+         rinalmo_giga_ss_archiveII-srp_ft.pt; do
+  [ -f "$PEGRNA_DATA/rinalmo_weights/$w" ] || { log "Fetching $w"; \
+    wget -q -O "$PEGRNA_DATA/rinalmo_weights/$w" "$ZEN_R/$w?download=1"; }
+done
+log "RiNALMo SS checkpoint default: rinalmo_giga_ss_archiveII-23s_ft.pt (broad family; \
+validate choice for engineered pegRNA against RNAformer + ViennaRNA)"
 
-# --- 4. RNAformer (CPU fallback) ---
+# --- 4. RNAformer (CPU-capable fallback; Freiburg artifacts, resolved) ---
 if [ ! -d "$PEGRNA_DATA/RNAformer" ]; then
-  log "Cloning RNAformer (automl/RNAformer) + checkpoint"
+  log "Cloning RNAformer (automl/RNAformer) + installing"
   git clone --depth 1 https://github.com/automl/RNAformer "$PEGRNA_DATA/RNAformer"
   pip install -e "$PEGRNA_DATA/RNAformer"
-  log "TODO: download RNAformer.ckpt per repo (conda-forge rnaformer also available)"
 fi
+mkdir -p "$PEGRNA_DATA/rnaformer_weights"
+RF=https://ml.informatik.uni-freiburg.de/research-artifacts/RNAformer/models
+for w in RNAformer_32M_state_dict_biophysical.pth \
+         RNAformer_32M_state_dict_inter_family_finetuned.pth; do
+  [ -f "$PEGRNA_DATA/rnaformer_weights/$w" ] || { log "Fetching $w"; \
+    wget -q -O "$PEGRNA_DATA/rnaformer_weights/$w" "$RF/$w"; }
+done
 
 # --- 5. Boltz-2 (MIT, pip) — weights auto-download on first run (needs internet) ---
 log "Installing boltz (pip) — pre-fetch weights on the login node:"
