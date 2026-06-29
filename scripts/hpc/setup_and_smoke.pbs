@@ -27,19 +27,35 @@ log() { echo "[$(date -u +%FT%TZ)] $*"; }
 log "GPU check"; nvidia-smi -L || log "WARN: no GPU visible"
 
 log "Heavy deps (spliceai+tf, torch, boltz) into $ENV"
-RUN pip install --quiet \
-    "spliceai>=1.3" "tensorflow-cpu" \
-    "torch" "boltz>=2.0" requests || log "WARN: some pip installs failed (see above)"
+module load cuda/12.2 || log "WARN: cuda module not loaded (flash-attn build may fail)"
 
-log "Stage model weights"
-bash scripts/hpc/stage_models.sh || log "WARN: staging had warnings (see MANIFEST)"
+log "Heavy deps (assumed pre-staged on login node; idempotent here)"
+RUN pip install --quiet "spliceai>=1.3" "tensorflow-cpu" "torch" "boltz>=2.0" requests \
+    || log "WARN: some pip installs failed"
 
-log "Point the adapters at staged weights via env (read by a thin wrapper config)"
+# RiNALMo hard-imports flash_attn, which can only build on a GPU node with CUDA.
+# Try a prebuilt wheel first; fall back to a source build (slow but has 6h walltime).
+log "Installing flash-attn on the GPU node (RiNALMo dependency)"
+RUN pip install --quiet flash-attn --no-build-isolation \
+    || log "WARN: flash-attn install failed — RiNALMo gate will not load"
+
+# Ensure RiNALMo package itself is installed into the env from the staged clone.
+[ -d "$PEGRNA_DATA/RiNALMo" ] && RUN pip install --quiet -e "$PEGRNA_DATA/RiNALMo" || true
+
+log "Point adapters at staged weights"
 export RINALMO_SS_WEIGHTS="$PEGRNA_DATA/rinalmo_weights/rinalmo_giga_ss_archiveII-23s_ft.pt"
 export RNAFORMER_CKPT="$PEGRNA_DATA/rnaformer_weights/RNAformer_32M_state_dict_biophysical.pth"
 
+# Prime Boltz weights with the env's boltz binary (GPU node; downloads if online).
+log "Priming Boltz-2 weights"
+printf 'version: 1\nsequences:\n  - protein:\n      id: A\n      sequence: MKTAYIAKQR\n' \
+    > "$PEGRNA_DATA/_prime.yaml"
+RUN boltz predict "$PEGRNA_DATA/_prime.yaml" --out_dir "$BOLTZ_CACHE" --override 2>&1 | tail -3 \
+    || log "WARN: boltz prime failed"
+
 log "Run smoke validation (target 5/5)"
-PYTHONPATH=src RUN python scripts/hpc/smoke_models.py --data "$PEGRNA_DATA"
+PYTHONPATH=src RINALMO_SS_WEIGHTS="$RINALMO_SS_WEIGHTS" RNAFORMER_CKPT="$RNAFORMER_CKPT" \
+    RUN python scripts/hpc/smoke_models.py --data "$PEGRNA_DATA"
 rc=$?
 log "smoke_models.py exit code: $rc (0 = all gates passed)"
 exit $rc
