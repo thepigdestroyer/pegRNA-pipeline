@@ -51,19 +51,53 @@ class Boltz2DockScorer:
         self._apo_cache: dict = {}
 
     def _predict(self, components):  # pragma: no cover - exercised only on big GPU
-        try:
-            import boltz  # noqa: F401, PLC0415
-            import torch  # noqa: F401, PLC0415
-        except Exception as exc:
+        """Run Boltz-2 on a pegRNA(+Cas9) complex via the documented ``boltz
+        predict`` CLI and return the scaffold<->Cas9 interface ipTM.
+
+        Faithful to the public Boltz interface: write a YAML describing the
+        chains (RNA pegRNA + protein nCas9), invoke ``boltz predict``, then parse
+        the emitted ``confidence_*.json`` (Boltz writes ``iptm`` / ``complex_iptm``
+        and per-chain-pair ipTM). VALIDATE ON CX3 — exact JSON key names and the
+        chain-pair index for the scaffold<->Cas9 interface must be confirmed
+        against the installed Boltz version before a production run (see the
+        on-CX3 smoke harness, scripts/hpc/smoke_models.py).
+        """
+        import json
+        import shutil
+        import subprocess
+        import tempfile
+        from pathlib import Path
+
+        if shutil.which("boltz") is None:
             raise ImportError(
                 "Boltz2DockScorer requires the '[complex]' extra (boltz + torch) and "
-                "a large GPU + MSA; run on CX3. "
-                f"Original error: {exc}"
-            ) from exc
-        raise NotImplementedError(
-            "Boltz-2 complex prediction + interface-ipTM extraction is wired in the "
-            "follow-on plan"
-        )
+                "a large GPU + MSA; the 'boltz' CLI was not found. Run on CX3."
+            )
+        rna = components.get("pegrna")
+        protein = components.get("cas9", "")
+        with tempfile.TemporaryDirectory(dir=self.cache_dir) as tmp:
+            tmp_path = Path(tmp)
+            yaml_path = tmp_path / "complex.yaml"
+            seqs = []
+            if rna:
+                seqs.append(f"  - rna:\n      id: P\n      sequence: {rna}")
+            seqs.append(f"  - protein:\n      id: C\n      sequence: {protein}")
+            yaml_path.write_text("version: 1\nsequences:\n" + "\n".join(seqs) + "\n")
+            cmd = ["boltz", "predict", str(yaml_path), "--out_dir", str(tmp_path)]
+            if self.use_msa_server:
+                cmd.append("--use_msa_server")
+            subprocess.run(cmd, check=True, capture_output=True)
+            conf_files = list(tmp_path.rglob("confidence_*.json"))
+            if not conf_files:
+                raise RuntimeError("Boltz produced no confidence JSON")
+            data = json.loads(conf_files[0].read_text())
+            # Prefer the chain-pair ipTM for the RNA<->protein interface; fall
+            # back to the global complex ipTM. (Key names: confirm on CX3.)
+            pair = data.get("pair_chains_iptm", {})
+            try:
+                return float(pair["P"]["C"])
+            except (KeyError, TypeError):
+                return float(data.get("iptm", data.get("complex_iptm", 0.0)))
 
     def apo_interface_iptm(self, cas9: str) -> float:  # pragma: no cover - CX3 only
         if cas9 in self._apo_cache:

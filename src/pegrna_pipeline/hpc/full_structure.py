@@ -115,21 +115,49 @@ class RiNALMoScorer:
         if self._model is not None:
             return
         try:
-            import torch  # noqa: F401, PLC0415
-            from rinalmo.pretrained import get_pretrained_model  # noqa: F401, PLC0415
+            import torch  # noqa: PLC0415
+            from rinalmo.config import model_config  # noqa: PLC0415
+            from rinalmo.model.model import RiNALMo  # noqa: PLC0415
         except Exception as exc:
             raise ImportError(
                 "RiNALMoScorer requires the '[fullstructure]' extra (torch + rinalmo) "
                 "and an Ampere/Ada/Hopper GPU with FlashAttention; run on CX3. "
                 f"Original error: {exc}"
             ) from exc
-        raise NotImplementedError(
-            "RiNALMo SS-head inference + bpp sparsification is wired in the follow-on plan"
-        )
+        cfg = model_config("giga")
+        model = RiNALMo(cfg)
+        if self.weights:
+            model.load_state_dict(torch.load(self.weights, map_location="cuda"))
+        model = model.cuda().eval()
+        self._model = model
 
     def pair_probs(self, seq: str) -> Dict[Tuple[int, int], float]:  # pragma: no cover
+        """L x L base-pair probabilities from RiNALMo's fine-tuned SS head.
+
+        Loads the giga model + the SS-prediction head weights, tokenises the
+        sequence, runs the head to get a symmetric probability matrix, and
+        sparsifies to ``{(i, j): p}`` for i < j with p above ``self.threshold``.
+        VALIDATE ON CX3: confirm the SS-head checkpoint path + that the head
+        returns sigmoid probabilities (RiNALMo's downstream.SecStructPredictionHead
+        symmetrises logits; apply sigmoid here).
+        """
+        import torch
+        from rinalmo.data.alphabet import Alphabet
+
         self._load()
-        raise NotImplementedError
+        alphabet = Alphabet()
+        tokens = torch.tensor([alphabet.encode(seq)], device="cuda")
+        with torch.no_grad():
+            logits = self._model.predict_secondary_structure(tokens)
+            probs = torch.sigmoid(logits)[0].cpu().numpy()
+        n = len(seq)
+        out: Dict[Tuple[int, int], float] = {}
+        for i in range(n):
+            for j in range(i + 1, n):
+                p = float(probs[i, j])
+                if p >= self.threshold:
+                    out[(i, j)] = p
+        return out
 
 
 class RNAformerScorer:
@@ -148,16 +176,43 @@ class RNAformerScorer:
         if self._model is not None:
             return
         try:
-            import RNAformer  # noqa: F401, PLC0415
+            import torch  # noqa: PLC0415
+            from RNAformer.model.RNAformer import RiboFormer  # noqa: PLC0415
+            from RNAformer.utils.configuration import Config  # noqa: PLC0415
         except Exception as exc:
             raise ImportError(
                 "RNAformerScorer requires the '[fullstructure]' extra (rnaformer). "
                 f"Original error: {exc}"
             ) from exc
-        raise NotImplementedError(
-            "RNAformer inference + bpp extraction is wired in the follow-on plan"
-        )
+        import os
+
+        ckpt = os.path.join(self.model_dir or ".", "RNAformer.ckpt")
+        state = torch.load(ckpt, map_location="cpu")
+        model = RiboFormer(Config(state.get("config", {})))
+        model.load_state_dict(state["state_dict"], strict=False)
+        self._model = model.eval()
 
     def pair_probs(self, seq: str) -> Dict[Tuple[int, int], float]:  # pragma: no cover
+        """L x L base-pair probabilities from RNAformer (CPU-capable, CI fallback).
+
+        Encodes the sequence, runs the model to get the pairwise logits, applies
+        sigmoid, and sparsifies. VALIDATE ON CX3 / locally with the staged
+        checkpoint: confirm the encoder token map + output head returns a
+        symmetric L x L pairing-probability map.
+        """
+        import torch
+
         self._load()
-        raise NotImplementedError
+        token_map = {"A": 0, "C": 1, "G": 2, "U": 3, "T": 3, "N": 4}
+        ids = torch.tensor([[token_map.get(b, 4) for b in seq.upper()]])
+        with torch.no_grad():
+            logits = self._model(ids)
+            probs = torch.sigmoid(logits)[0].cpu().numpy()
+        n = len(seq)
+        out: Dict[Tuple[int, int], float] = {}
+        for i in range(n):
+            for j in range(i + 1, n):
+                p = float(probs[i, j])
+                if p >= 0.5:
+                    out[(i, j)] = p
+        return out

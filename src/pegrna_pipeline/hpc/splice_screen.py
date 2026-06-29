@@ -55,7 +55,6 @@ class SpliceAIScorer:
         try:
             from keras.models import load_model  # noqa: PLC0415
             from pkg_resources import resource_filename  # noqa: PLC0415
-            from spliceai.utils import Annotator  # noqa: F401, PLC0415
         except Exception as exc:
             raise ImportError(
                 "SpliceAI requires the '[splice]' extra (tensorflow/keras + spliceai) "
@@ -65,14 +64,46 @@ class SpliceAIScorer:
         paths = [resource_filename("spliceai", f"models/spliceai{i}.h5") for i in range(1, 6)]
         self._model = [load_model(p) for p in paths]
 
-    def delta(self, ref_seq: str, alt_seq: str) -> float:  # pragma: no cover - CX3 only
+    @staticmethod
+    def _one_hot(seq: str):  # pragma: no cover - CX3 only
+        import numpy as np  # noqa: PLC0415
+
+        mapping = {"N": 0, "A": 1, "C": 2, "G": 3, "T": 4}
+        idx = np.array([mapping.get(b, 0) for b in seq.upper()])
+        # SpliceAI uses a 4-channel one-hot with N -> all zeros.
+        onehot = np.zeros((len(seq), 4), dtype=np.float32)
+        for i, code in enumerate(idx):
+            if code > 0:
+                onehot[i, code - 1] = 1.0
+        return onehot[None, :, :]
+
+    def _tracks(self, seq: str):  # pragma: no cover - CX3 only
+        import numpy as np  # noqa: PLC0415
+
         self._load()
-        # Real implementation scores ref/alt windows through the 5-model ensemble
-        # and returns max(|acceptor_gain|, |acceptor_loss|, |donor_gain|,
-        # |donor_loss|). Kept behind _load() so import-time never pulls TF.
-        raise NotImplementedError(
-            "SpliceAIScorer.delta runs on CX3 with staged weights (see follow-on plan)"
-        )
+        x = self._one_hot(seq)
+        preds = [m.predict(x, verbose=0) for m in self._model]
+        # ensemble mean; output channels [null, acceptor, donor]
+        mean = np.mean(preds, axis=0)[0]
+        return mean[:, 1], mean[:, 2]  # acceptor, donor probability tracks
+
+    def delta(self, ref_seq: str, alt_seq: str) -> float:  # pragma: no cover - CX3 only
+        """Max |Δ| across acceptor/donor tracks between REF and ALT.
+
+        Faithful to the SpliceAI delta-score definition (max of acceptor/donor
+        gain & loss). Requires ref/alt windows padded with >=5 kb genomic context
+        each side (the model's receptive field) — the caller supplies the genomic
+        window via genome_context.to_grch38. VALIDATE ON CX3: confirm context
+        length + that ref/alt are length-matched before a production run.
+        """
+        import numpy as np  # noqa: PLC0415
+
+        a_ref, d_ref = self._tracks(ref_seq)
+        a_alt, d_alt = self._tracks(alt_seq)
+        n = min(len(a_ref), len(a_alt))
+        da = np.abs(a_alt[:n] - a_ref[:n]).max() if n else 0.0
+        dd = np.abs(d_alt[:n] - d_ref[:n]).max() if n else 0.0
+        return float(max(da, dd))
 
 
 def passes_splice_gate(
