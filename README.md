@@ -113,17 +113,40 @@ pegrna design-recoded --config design_config.json --mode fake --output-dir resul
 #   see scripts/hpc/README.md  (env, model staging, smoke validation, PBS submit)
 ```
 
+### Gate thresholds (literature-derived defaults)
+
+Defaults now come from published cutoffs (`hpc/gate_thresholds.py`, each with a
+citation), not arbitrary placeholders. A wet-lab calibration library can still
+override them, but they are rationally defensible out of the box:
+
+| Gate | Default | Basis |
+|---|---|---|
+| splice Δ | **0.2** | SpliceAI high-recall cutoff (Jaganathan 2019 Cell); safety gate maximises detection |
+| AlphaFold pLDDT | **≥70** | "confident" band (Jumper 2021; AFDB) — gate-enabler for burial calls |
+| AlphaFold RSA buried | **<0.25** | interior/core rASA (Levy 2010); Tien 2013 max-ASA normalisation |
+| AlphaFold contact no. | **>18** | densely-packed core; CN ~ mutational sensitivity (Yeh 2014) |
+| docking ipTM floor | **0.6** | AF-Multimer/AF3 "likely incorrect" below 0.6 (Evans 2022; Abramson 2024) |
+| docking ipTM drop | **0.2** | one full confidence band vs apo scaffold–Cas9 baseline |
+| microhomology max-run | **8 bp** | RecA MEPS ~8 bp / MMEJ onset ~6–8 bp; recoder minimises below this |
+| RiNALMo pair prob | **0.5** | sigmoid pair-call boundary (RiNALMo val-tunes 0.01–0.30 for F1) |
+| nick distance | **40–70 bp** | experimental design; smaller preferred (NOT auto-calibrated) |
+
+These are *rational priors*; final tuning still benefits from a wet-lab
+calibration set, but the pipeline no longer ships unjustified numbers.
+
 > **STATUS — design-logic layer is implemented and unit-tested; real model
 > execution runs only on GPU/HPC.** Each heavy gate (SpliceAI, AlphaFold,
 > RiNALMo, RNAformer, Boltz-2) ships a Protocol + in-repo fake + a real adapter
-> written against the tool's documented API. The real bodies were **not
-> executable on the dev box** (no Ampere GPU / no weights) — `scripts/hpc/
-> smoke_models.py` is the gate that proves each runs on CX3 before a production
-> design. Stage-0 genome ingest (real T2T-KOLF diploid + KOLF↔GRCh38 chain) is
-> fixture-backed here. The microhomology threshold L, RiNALMo/Boltz-2 cutoffs,
-> and the sub-70 bp nick distance are **calibration parameters requiring wet-lab
-> validation**. See `docs/superpowers/plans/2026-06-18-recoded-tjpe-pegrna-redesign.md`
-> and `scripts/hpc/README.md`.
-> **Production-ready only after `smoke_models.py` passes 5/5 on CX3, Stage-0 real
-> genome is wired, and thresholds are wet-lab calibrated. Until then, outputs are
-> engineering previews, not bench-ready designs.**
+> written against the tool's documented API. Validated on Imperial CX3: the full
+> suite runs, the end-to-end pipeline runs (fake mode), and the **ViennaRNA and
+> AlphaFold-importance gates run live**; `scripts/hpc/setup_and_smoke.pbs` brings
+> up the GPU gates (SpliceAI, RiNALMo, RNAformer, Boltz-2) and `smoke_models.py`
+> must pass 5/5 before a production design. Genome ingest is real Ensembl-GRCh38
+> + KOLF variant overlay (`hpc/genome_ingest.py`); the full T2T-KOLF diploid
+> FASTA swaps in later behind the same interface. Gate thresholds are now
+> literature-derived (above); the sub-70 bp nick distance and final threshold
+> tuning still benefit from wet-lab calibration. See
+> `docs/superpowers/plans/2026-06-18-recoded-tjpe-pegrna-redesign.md` and
+> `scripts/hpc/README.md`.
+> **Production-ready only after `smoke_models.py` passes 5/5 on CX3. Until then,
+> outputs are engineering previews, not bench-ready designs.**

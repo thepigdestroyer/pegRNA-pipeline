@@ -109,13 +109,29 @@ class Boltz2DockScorer:
 
 
 def passes_docking_gate(
-    pegrna: str, cas9: str, *, scorer: ComplexDockScorer, max_drop: float = 0.15
+    pegrna: str,
+    cas9: str,
+    *,
+    scorer: ComplexDockScorer,
+    max_drop: float = 0.2,
+    min_iptm: float = 0.6,
 ) -> Tuple[bool, str]:
-    """HARD GATE: reject if the scaffold-Cas9 interface ipTM drops by > ``max_drop``
-    relative to the apo baseline."""
+    """HARD GATE on scaffold-Cas9 docking (interface ipTM).
+
+    Rejects if the candidate interface ipTM either (a) falls below ``min_iptm``
+    (AlphaFold-Multimer/AF3 "likely incorrect" floor, 0.6) or (b) drops by more
+    than ``max_drop`` (one full confidence band, 0.2) relative to the apo
+    scaffold-Cas9 baseline. Defaults are literature-derived (see
+    gate_thresholds.THRESHOLDS: Evans 2022, Abramson 2024).
+    """
     apo = scorer.apo_interface_iptm(cas9)
     cand = scorer.interface_iptm(pegrna, cas9)
     drop = apo - cand
+    if cand < min_iptm - 1e-9:
+        return False, (
+            f"scaffold-Cas9 interface ipTM {cand:.2f} < {min_iptm} "
+            "(AF-multimer 'likely incorrect' floor)"
+        )
     if drop > max_drop + 1e-9:  # epsilon guards float artefacts at the exact boundary
         return False, (
             f"scaffold-Cas9 interface ipTM dropped {drop:.2f} "
