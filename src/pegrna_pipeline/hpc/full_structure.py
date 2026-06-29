@@ -184,8 +184,9 @@ class RNAformerScorer:
     unavailable.
     """
 
-    def __init__(self, *, model_dir: str | None = None) -> None:
+    def __init__(self, *, model_dir: str | None = None, ckpt: str | None = None) -> None:
         self.model_dir = model_dir
+        self.ckpt = ckpt
         self._model = None
 
     def _load(self):  # pragma: no cover - exercised only with rnaformer installed
@@ -200,9 +201,24 @@ class RNAformerScorer:
                 "RNAformerScorer requires the '[fullstructure]' extra (rnaformer). "
                 f"Original error: {exc}"
             ) from exc
+        import glob
         import os
 
-        ckpt = os.path.join(self.model_dir or ".", "RNAformer.ckpt")
+        # Accept an explicit checkpoint, else the RNAFORMER_CKPT env, else the
+        # first state-dict (.pth/.ckpt) in model_dir (staged files are named e.g.
+        # RNAformer_32M_state_dict_biophysical.pth — not a fixed "RNAformer.ckpt").
+        ckpt = self.ckpt or os.environ.get("RNAFORMER_CKPT")
+        if not ckpt:
+            cands = sorted(
+                glob.glob(os.path.join(self.model_dir or ".", "*.pth"))
+                + glob.glob(os.path.join(self.model_dir or ".", "*.ckpt"))
+            )
+            if not cands:
+                raise FileNotFoundError(
+                    f"no RNAformer checkpoint (*.pth/*.ckpt) found in {self.model_dir!r}; "
+                    "set RNAFORMER_CKPT or pass ckpt="
+                )
+            ckpt = cands[0]
         state = torch.load(ckpt, map_location="cpu")
         model = RiboFormer(Config(state.get("config", {})))
         model.load_state_dict(state["state_dict"], strict=False)
