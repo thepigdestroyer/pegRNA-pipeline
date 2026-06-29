@@ -136,15 +136,21 @@ class AFDBImportanceScorer:
                 "and an AFDB model; run on CX3 or a configured host. "
                 f"Original error: {exc}"
             ) from exc
+        import json
         import os
         import urllib.request
 
         acc = self.uniprot_acc
-        fname = f"AF-{acc}-F1-model_v4.cif"
+        # Resolve the current model URL via the AFDB API rather than hardcoding a
+        # version (the file suffix moved v4 -> v6; the API always points at the
+        # latest). Verified on CX3 2026-06-19.
+        api = f"https://alphafold.ebi.ac.uk/api/prediction/{acc}"
+        meta = json.load(urllib.request.urlopen(api, timeout=60))  # noqa: S310 - trusted AFDB
+        cif_url = meta[0]["cifUrl"]
+        fname = os.path.basename(cif_url)
         path = os.path.join(self.afdb_dir or ".", fname) if self.afdb_dir else fname
         if not os.path.exists(path):
-            url = f"https://alphafold.ebi.ac.uk/files/{fname}"
-            urllib.request.urlretrieve(url, path)  # noqa: S310 - trusted AFDB host
+            urllib.request.urlretrieve(cif_url, path)  # noqa: S310 - trusted AFDB host
         cif = pdbx.CIFFile.read(path)
         self._struct = pdbx.get_structure(cif, model=1)
 
