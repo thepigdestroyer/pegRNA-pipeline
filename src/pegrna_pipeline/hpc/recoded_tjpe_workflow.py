@@ -20,8 +20,10 @@ from pegrna_pipeline.hpc.nick_search import enumerate_nick_sites, screen_nick_ca
 from pegrna_pipeline.hpc.recode_arm import recode_arm
 from pegrna_pipeline.hpc.scarless import assert_inv0
 from pegrna_pipeline.hpc.splice_screen import passes_splice_gate
+from pegrna_pipeline.hpc.strand_orientation import orient_pbs2, orient_rtt_tail
 from pegrna_pipeline.hpc.structure_importance import span_blocked
 from pegrna_pipeline.hpc.tjpe_workflow import STANDARD_SGRNA_SCAFFOLD, assemble_tj_pegrna_v2
+from pegrna_pipeline.hpc.tprt_sim import TPRTMismatch, simulate_tprt
 
 __all__ = [
     "PbsRttVariant",
@@ -121,9 +123,9 @@ class RecodedTJPEResult:
     allele_specific_options: list = field(default_factory=list)
 
 
-def _derive_pbs2(genome: str, *, nick_position: int, pbs_length: int) -> str:
-    """PBS2 is read off the genomic window 5' of the nick (literal at the 5' slot
-    of the extension; the recoded workflow asserts the product against the genome)."""
+def _captured_window(genome: str, *, nick_position: int, pbs_length: int) -> str:
+    """Return the genomic window (5'->3', sense) immediately 5' of the nick that
+    the new flap must capture. ``orient_pbs2`` then orients it per pegRNA strand."""
     start = max(0, nick_position - pbs_length)
     return genome[start:nick_position].upper()
 
@@ -203,10 +205,16 @@ def run_recoded_tjpe(
             if len(recode.recoded) != len(arm_genomic):
                 diagnostics.append(f"cand{tried}: recode changed arm length")
                 continue
-            rtt = cargo + recode.recoded
-            pbs2 = _derive_pbs2(
+            # RTT tail = cargo + recoded arm, in the SENSE frame; orient it onto
+            # the pegRNA per strand (Rv -> reverse_complement, Fw -> literal).
+            sense_flap = cargo + recode.recoded
+            rtt = orient_rtt_tail(sense_flap, pegrna_strand=pegrna_strand)
+            # PBS2 = the captured-strand window 5' of the nick, oriented per strand
+            # (Rv -> literal/identity to captured strand, Fw -> reverse_complement).
+            captured = _captured_window(
                 genome, nick_position=nick.nick_position, pbs_length=variant.pbs_length
             )
+            pbs2 = orient_pbs2(captured, pegrna_strand=pegrna_strand)
             ok, why = passes_pbs2_gate(pbs2, repetitive=False)
             if not ok:
                 diagnostics.append(f"cand{tried}: PBS2 gate: {why}")
@@ -230,6 +238,21 @@ def run_recoded_tjpe(
                 )
             except ValueError as exc:
                 diagnostics.append(f"cand{tried}: INV-0: {exc}")
+                continue
+            # Strand-correctness: simulate TPRT from the ORIENTED RTT tail and
+            # assert it reconstructs the intended sense allele. Catches any
+            # complement/reverse/reverse_complement error loudly.
+            try:
+                simulate_tprt(
+                    genome=genome,
+                    site_s=site_s,
+                    hi=hi,
+                    rtt_tail_on_peg=rtt,
+                    pegrna_strand=pegrna_strand,
+                    expected_allele=edited,
+                )
+            except TPRTMismatch as exc:
+                diagnostics.append(f"cand{tried}: TPRT strand mismatch: {exc}")
                 continue
             # Assemble in the authoritative order.
             pbs1 = spacer[: variant.pbs_length]  # placeholder PBS1 from spacer region
