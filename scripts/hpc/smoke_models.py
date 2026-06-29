@@ -46,11 +46,15 @@ def smoke_splice():
 
 
 def smoke_importance(data):
-    # Use a small well-characterised UniProt (ubiquitin P0CG48 fragment) if online,
-    # else a locally staged AFDB cif under $PEGRNA_DATA/afdb.
+    # Calmodulin P0DP23: small, single-fragment, verified on CX3 login node.
+    # The cif must be pre-staged into $PEGRNA_DATA/afdb (compute nodes are offline);
+    # stage_models.sh fetches it. Override accession via $PEGRNA_SMOKE_UNIPROT.
+    import os
+
     from pegrna_pipeline.hpc.structure_importance import AFDBImportanceScorer
 
-    m = AFDBImportanceScorer("P0DTC2", afdb_dir=f"{data}/afdb").metrics(0)
+    acc = os.environ.get("PEGRNA_SMOKE_UNIPROT", "P0DP23")
+    m = AFDBImportanceScorer(acc, afdb_dir=f"{data}/afdb").metrics(10)
     return (0.0 <= m.rsa <= 2.0 and 0.0 <= m.plddt <= 100.0, f"plddt={m.plddt:.1f} rsa={m.rsa:.2f}")
 
 

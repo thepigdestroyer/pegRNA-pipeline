@@ -11,6 +11,12 @@
 set -euo pipefail
 
 : "${PEGRNA_DATA:?set PEGRNA_DATA to a staging dir on \$EPHEMERAL or \$RDS}"
+# Use the pegrna-recoded env's pip, NOT whatever pip is first on PATH (the GPU
+# smoke run revealed RiNALMo/RNAformer landing in the wrong site-packages).
+PIP="${PEGRNA_PIP:-$HOME/miniforge3/envs/pegrna-recoded/bin/pip}"
+pip() { "$PIP" "$@"; }
+# MUST run on a LOGIN NODE (internet). CX3 compute nodes are offline, so every
+# download below has to happen here; the GPU smoke job then runs fully offline.
 mkdir -p "$PEGRNA_DATA"
 MANIFEST="$PEGRNA_DATA/MANIFEST.txt"
 : > "$MANIFEST"
@@ -80,9 +86,17 @@ printf 'version: 1\nsequences:\n  - protein:\n      id: A\n      sequence: M\n' 
 boltz predict "$PEGRNA_DATA/_prime.yaml" --out_dir "$BOLTZ_CACHE" || \
   log "WARN: prime Boltz cache manually before a compute-node run"
 
-# --- 6. AlphaFold-DB models: fetched per-UniProt at design time (cache dir) ---
+# --- 6. AlphaFold-DB models: pre-fetch on the login node (compute is offline) ---
 mkdir -p "$PEGRNA_DATA/afdb"
-log "AFDB models fetched per target UniProt accession into $PEGRNA_DATA/afdb at design time"
+# Smoke test protein (calmodulin) + any design targets in $PEGRNA_AFDB_ACCS.
+for acc in P0DP23 ${PEGRNA_AFDB_ACCS:-}; do
+  if ! ls "$PEGRNA_DATA/afdb/AF-$acc-F1-model_v"*.cif >/dev/null 2>&1; then
+    url=$(curl -s "https://alphafold.ebi.ac.uk/api/prediction/$acc" \
+      | python3 -c "import sys,json;d=json.load(sys.stdin);print(next((m['cifUrl'] for m in d if '-F1-' in m['cifUrl']), d[0]['cifUrl']))" 2>/dev/null)
+    [ -n "$url" ] && { log "Fetching AFDB $acc"; wget -q -P "$PEGRNA_DATA/afdb" "$url"; }
+  fi
+done
+log "AFDB models for the smoke protein + \$PEGRNA_AFDB_ACCS staged to $PEGRNA_DATA/afdb"
 
 log "Staging complete. Manifest: $MANIFEST"
 echo "Set these for the run: PEGRNA_DATA=$PEGRNA_DATA BOLTZ_CACHE=$BOLTZ_CACHE"

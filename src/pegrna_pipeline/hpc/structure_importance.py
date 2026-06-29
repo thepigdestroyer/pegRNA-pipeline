@@ -136,24 +136,31 @@ class AFDBImportanceScorer:
                 "and an AFDB model; run on CX3 or a configured host. "
                 f"Original error: {exc}"
             ) from exc
+        import glob
         import json
         import os
         import urllib.request
 
         acc = self.uniprot_acc
-        # Resolve the current model URL via the AFDB API rather than hardcoding a
-        # version (the file suffix moved v4 -> v6; the API always points at the
-        # latest). Verified on CX3 2026-06-19.
-        api = f"https://alphafold.ebi.ac.uk/api/prediction/{acc}"
-        meta = json.load(urllib.request.urlopen(api, timeout=60))  # noqa: S310 - trusted AFDB
-        cif_url = meta[0]["cifUrl"]
-        fname = os.path.basename(cif_url)
-        path = os.path.join(self.afdb_dir or ".", fname) if self.afdb_dir else fname
-        if not os.path.exists(path):
+        afdb_dir = self.afdb_dir or "."
+        # OFFLINE-FIRST: prefer a pre-staged local model (CX3 compute nodes have
+        # no internet, so staging must download on the login node). Match the F1
+        # fragment for this accession if already present.
+        local = sorted(glob.glob(os.path.join(afdb_dir, f"AF-{acc}-F1-model_v*.cif")))
+        if local:
+            path = local[-1]  # highest version
+        else:
+            # Resolve the current model URL via the AFDB API (version moved v4->v6;
+            # the API always points at the latest). For multi-fragment entries
+            # (large proteins) pick the F1 fragment, not meta[0] blindly.
+            api = f"https://alphafold.ebi.ac.uk/api/prediction/{acc}"
+            meta = json.load(urllib.request.urlopen(api, timeout=60))  # noqa: S310 - trusted AFDB
+            entry = next((m for m in meta if "-F1-" in str(m.get("cifUrl", ""))), meta[0])
+            cif_url = entry["cifUrl"]
+            path = os.path.join(afdb_dir, os.path.basename(cif_url))
+            os.makedirs(afdb_dir, exist_ok=True)
             urllib.request.urlretrieve(cif_url, path)  # noqa: S310 - trusted AFDB host
         cif = pdbx.CIFFile.read(path)
-        # AFDB stores per-residue pLDDT in the atom_site B-factor column; biotite
-        # only exposes it when explicitly requested as an extra field.
         self._struct = pdbx.get_structure(cif, model=1, extra_fields=["b_factor"])
 
     def metrics(self, residue_index: int) -> ResidueMetrics:  # pragma: no cover - CX3
