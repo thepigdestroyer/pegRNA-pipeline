@@ -152,7 +152,9 @@ class AFDBImportanceScorer:
         if not os.path.exists(path):
             urllib.request.urlretrieve(cif_url, path)  # noqa: S310 - trusted AFDB host
         cif = pdbx.CIFFile.read(path)
-        self._struct = pdbx.get_structure(cif, model=1)
+        # AFDB stores per-residue pLDDT in the atom_site B-factor column; biotite
+        # only exposes it when explicitly requested as an extra field.
+        self._struct = pdbx.get_structure(cif, model=1, extra_fields=["b_factor"])
 
     def metrics(self, residue_index: int) -> ResidueMetrics:  # pragma: no cover - CX3
         """Per-residue structural metrics from the AFDB model.
