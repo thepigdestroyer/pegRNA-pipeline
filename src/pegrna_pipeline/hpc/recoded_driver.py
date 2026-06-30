@@ -13,11 +13,21 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, Sequence, Tuple, Union
 
-from pegrna_pipeline.hpc.recoded_tjpe_workflow import RecodedTJPEResult, run_recoded_tjpe
+from pegrna_pipeline.hpc.allele_specificity import find_allele_specific
+from pegrna_pipeline.hpc.recoded_tjpe_workflow import (
+    NoValidPegRNA,
+    RecodedTJPEResult,
+    run_recoded_tjpe,
+)
 from pegrna_pipeline.hpc.report_writer import render_recoded_report
 from pegrna_pipeline.hpc.scorer_factory import make_scorers
 
-__all__ = ["design_recoded", "RecodedDesignOutput"]
+__all__ = [
+    "design_recoded",
+    "RecodedDesignOutput",
+    "design_recoded_with_het_edit",
+    "RecodedPairOutput",
+]
 
 
 @dataclass
@@ -39,6 +49,7 @@ def design_recoded(
     ngrna_distance_min: int = 40,
     ngrna_distance_max: int = 70,
     pegrna_strand: str = "Rv",
+    arm_side: str = "3prime",
     max_run: int = 8,
     cas9: str = "nCas9",
     allele_hunt: bool = False,
@@ -69,6 +80,7 @@ def design_recoded(
         ngrna_distance_min=ngrna_distance_min,
         ngrna_distance_max=ngrna_distance_max,
         pegrna_strand=pegrna_strand,
+        arm_side=arm_side,
         max_run=max_run,
         cas9=cas9,
         allele_hunt=allele_hunt,
@@ -93,3 +105,80 @@ def design_recoded(
         report_path = str(path)
 
     return RecodedDesignOutput(result=result, report_text=report_text, report_path=report_path)
+
+
+@dataclass
+class RecodedPairOutput:
+    """Primary (antisense recode-into-CDS) pair plus an optional sense-window
+    het-edit pair, with a note explaining why the het-edit pair is or is not
+    present."""
+
+    primary: RecodedDesignOutput
+    het_edit: Optional[RecodedDesignOutput]
+    het_edit_note: str
+
+
+def design_recoded_with_het_edit(
+    *,
+    primary: dict,
+    het_edit_window: Optional[dict] = None,
+    het_snps: Optional[Sequence[dict]] = None,
+    mode: str = "fake",
+    output_dir: Optional[Union[str, Path]] = None,
+) -> RecodedPairOutput:
+    """Run the antisense primary pass and, when a discriminating phased het is
+    present and a sense-window config is supplied, a second het-edit pass.
+
+    ``primary`` and ``het_edit_window`` are kwarg dicts for :func:`design_recoded`;
+    each carries its own ``genome``/``cds_mask``/``pegrna_strand``/``cargo`` frame.
+    No implicit reverse complement is derived here -- the caller controls strand,
+    so a frame error fails loudly in the per-pass TPRT/INV-0 checks rather than
+    silently flipping. The het-edit pass uses the byte-exact non-coding
+    replacement path (Decision 15) and is allele-specific only because of a
+    pre-existing phased het (specificity is capped by natural heterozygosity and
+    is never manufactured). Returns both outputs and a note.
+    """
+    het_snps = list(het_snps or [])
+    prim = design_recoded(
+        **primary,
+        het_snps=het_snps,
+        mode=mode,
+        output_dir=(Path(output_dir) / "primary") if output_dir else None,
+    )
+    if het_edit_window is None:
+        return RecodedPairOutput(primary=prim, het_edit=None, het_edit_note="no het-edit requested")
+    opts = find_allele_specific(het_snps)
+    if not opts:
+        return RecodedPairOutput(
+            primary=prim,
+            het_edit=None,
+            het_edit_note=(
+                "no discriminating phased het -> no allele-specific sense-window pair "
+                "(allele specificity is capped by natural heterozygosity, never manufactured)"
+            ),
+        )
+    # The het-edit pass is advisory: a fail-loud here (no surviving sense-window
+    # candidate) must NOT kill the successful primary -- report it as a note.
+    o = opts[0]
+    try:
+        het = design_recoded(
+            **het_edit_window,
+            het_snps=het_snps,
+            allele_hunt=True,
+            mode=mode,
+            output_dir=(Path(output_dir) / "het_edit") if output_dir else None,
+        )
+    except NoValidPegRNA as exc:
+        return RecodedPairOutput(
+            primary=prim,
+            het_edit=None,
+            het_edit_note=(
+                f"discriminating {o.side}-side {o.position_class} het present, but no "
+                f"sense-window candidate survived the gates: {exc}"
+            ),
+        )
+    note = (
+        f"het-edit sense-window pair via {o.side}-side {o.position_class} het "
+        f"(discrimination strength {o.strength:.2f}); non-coding re-templated byte-exact"
+    )
+    return RecodedPairOutput(primary=prim, het_edit=het, het_edit_note=note)

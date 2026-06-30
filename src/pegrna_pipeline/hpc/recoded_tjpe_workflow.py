@@ -157,6 +157,31 @@ def _derive_pbs1(genome: str, *, site_s: int, pbs_length: int, pegrna_strand: st
     return window
 
 
+def _assemble_edit(
+    *, genome: str, site_s: int, nick_position: int, arm_sense: str, cargo: str
+) -> Tuple[str, str, int, int]:
+    """Build the sense flap + predicted edited allele for a cargo-at-S insert.
+
+    The cargo is ALWAYS inserted at ``site_s``. The recode/deletion-replacement
+    arm sits between S and the nick:
+
+    * nick 3' of S  -> flap = ``cargo + arm`` ; arm replaces ``genome[S:nick]``.
+    * nick 5' of S  -> flap = ``arm + cargo`` ; arm replaces ``genome[nick:S]``
+      (C-terminal recode-into-CDS: the last codons, 5' of S, are recoded).
+
+    Returns ``(sense_flap, edited, tprt_site, tprt_hi)`` where ``tprt_site``/
+    ``tprt_hi`` are the boundaries handed to :func:`simulate_tprt` so the flap
+    replaces ``genome[tprt_site:tprt_hi]``.
+    """
+    if nick_position > site_s:
+        sense_flap = cargo + arm_sense
+        edited = genome[:site_s] + cargo + arm_sense + genome[nick_position:]
+        return sense_flap, edited, site_s, nick_position
+    sense_flap = arm_sense + cargo
+    edited = genome[:nick_position] + arm_sense + cargo + genome[site_s:]
+    return sense_flap, edited, nick_position, site_s
+
+
 def _arm_protein_equal(original_arm: str, recoded_arm: str, frame: int) -> bool:
     """True iff the recoded arm encodes the SAME protein as the original over its
     codon-aligned interior (independent synonymity check for INV-0)."""
@@ -168,6 +193,90 @@ def _arm_protein_equal(original_arm: str, recoded_arm: str, frame: int) -> bool:
     a = a[: (len(a) // 3) * 3]
     b = b[: (len(b) // 3) * 3]
     return str(Seq(a).translate()) == str(Seq(b).translate())
+
+
+@dataclass(frozen=True)
+class ArmBuild:
+    """Result of partitioning the re-templated arm ``genome[lo:hi)`` by cds_mask.
+
+    CDS runs are synonymously recoded; non-coding runs are kept byte-exact
+    (Decision 15). ``sense_arm`` is the rebuilt arm (5'->3', sense/window frame).
+    ``recode_span`` / ``locked_span`` are genome-coordinate spans handed to
+    :func:`assert_inv0`; a non-coding (locked) run sets ``microhomology_flag``.
+    """
+
+    sense_arm: str
+    recode_span: Optional[Tuple[int, int]]
+    locked_span: Optional[Tuple[int, int]]
+    locked_expected: Optional[str]
+    n_edits: int
+    max_run_after: int
+    microhomology_flag: bool
+    protein_ok: bool
+
+
+def _partition_arm(
+    genome: str, *, lo: int, hi: int, cds_mask: Sequence[bool], max_run: int
+) -> Optional[ArmBuild]:
+    """Partition ``genome[lo:hi)`` into maximal CDS / non-coding runs and build the
+    re-templated arm: recode CDS runs (synonymous, microhomology ``<= max_run``),
+    keep non-coding runs byte-exact. Returns ``None`` (fail-loud upstream) if a CDS
+    run has no synonymous solution or the arm crosses more than one coding boundary
+    (> 2 runs; not a C-terminal geometry)."""
+
+    def _is_cds(p: int) -> bool:
+        return bool(cds_mask[p]) if p < len(cds_mask) else False
+
+    runs: List[Tuple[bool, int, int]] = []
+    i = lo
+    while i < hi:
+        cls = _is_cds(i)
+        j = i + 1
+        while j < hi and _is_cds(j) == cls:
+            j += 1
+        runs.append((cls, i, j))
+        i = j
+    if len(runs) > 2:
+        return None  # non-monotone arm (CDS<->UTR<->CDS) unsupported
+
+    parts: List[str] = []
+    n_edits = 0
+    max_run_after = 0
+    recode_span: Optional[Tuple[int, int]] = None
+    locked_span: Optional[Tuple[int, int]] = None
+    microhomology = False
+    for cls, a, b in runs:
+        seg = genome[a:b].upper()
+        if cls:
+            frame = _frame_at(cds_mask, a)
+            rec = recode_arm(seg, genome=seg, frame=frame, max_run=max_run)
+            if rec is None or len(rec.recoded) != len(seg):
+                return None
+            if not _arm_protein_equal(seg, rec.recoded, frame):
+                return None
+            parts.append(rec.recoded)
+            n_edits += rec.n_edits
+            max_run_after = max(max_run_after, rec.max_run_after)
+            recode_span = (
+                (a, b) if recode_span is None else (min(recode_span[0], a), max(recode_span[1], b))
+            )
+        else:
+            parts.append(seg)
+            locked_span = (
+                (a, b) if locked_span is None else (min(locked_span[0], a), max(locked_span[1], b))
+            )
+            microhomology = True
+    locked_expected = genome[locked_span[0] : locked_span[1]].upper() if locked_span else None
+    return ArmBuild(
+        sense_arm="".join(parts),
+        recode_span=recode_span,
+        locked_span=locked_span,
+        locked_expected=locked_expected,
+        n_edits=n_edits,
+        max_run_after=max_run_after,
+        microhomology_flag=microhomology,
+        protein_ok=True,
+    )
 
 
 def run_recoded_tjpe(
@@ -182,6 +291,7 @@ def run_recoded_tjpe(
     ngrna_distance_min: int = 40,
     ngrna_distance_max: int = 70,
     pegrna_strand: str = "Rv",
+    arm_side: str = "3prime",
     max_run: int = 8,
     max_rtt_variants: int = 20,
     # injected scorers (fakes in CI, real adapters on CX3)
@@ -205,6 +315,8 @@ def run_recoded_tjpe(
     insert site ``site_s`` NEVER moves. Exhausting the pool raises
     :class:`NoValidPegRNA` with a per-candidate diagnostic.
     """
+    if arm_side not in ("3prime", "5prime", "auto"):
+        raise ValueError(f"arm_side must be '3prime'/'5prime'/'auto'; got {arm_side!r}")
     het_snps = list(het_snps or [])
     # Advisory only — must never crash the design run on a malformed SNP record.
     try:
@@ -240,50 +352,57 @@ def run_recoded_tjpe(
     tried = 0
 
     for nick in nicks:
+        pos = nick.nick_position
+        if pos == site_s:
+            diagnostics.append(f"nick {pos}: coincides with S")
+            continue
+        # arm_side selects which side of S the recode/replacement arm sits on.
+        # "3prime" (default) preserves the historical contract (arm 3' of S);
+        # "5prime" puts the arm into the CDS 5' of S (C-terminal recode-into-CDS).
+        if arm_side == "3prime" and pos < site_s:
+            diagnostics.append(f"nick {pos}: 5'-of-S excluded (arm_side=3prime)")
+            continue
+        if arm_side == "5prime" and pos > site_s:
+            diagnostics.append(f"nick {pos}: 3'-of-S excluded (arm_side=5prime)")
+            continue
         # Re-templated span between S and the nick (the deletion-replacement arm).
-        lo, hi = sorted((site_s, nick.nick_position))
-        if lo != site_s:
-            # Arm-placement contract: the pegRNA nick is at S, so the arm starts
-            # at S. A nick 5' of S is not yet supported (would duplicate the arm).
-            diagnostics.append(f"nick {nick.nick_position}: 5'-of-S placement unsupported")
-            continue
-        arm_genomic = genome[lo:hi].upper()
-        frame = _frame_at(cds_mask, lo)
-        # Recode the arm ONCE per nick (independent of the PBS-length variants).
-        recode = recode_arm(arm_genomic, genome=arm_genomic, frame=frame, max_run=max_run)
-        if recode is None:
-            diagnostics.append(f"nick {nick.nick_position}: recode found no synonymous solution")
-            continue
-        if len(recode.recoded) != len(arm_genomic):
-            diagnostics.append(f"nick {nick.nick_position}: recode changed arm length")
-            continue
-        # Independent synonymity check (feeds INV-0): recoded arm == same protein.
-        if not _arm_protein_equal(arm_genomic, recode.recoded, frame):
-            diagnostics.append(f"nick {nick.nick_position}: recode not protein-silent")
+        lo, hi = sorted((site_s, pos))
+        # Partition the arm by cds_mask: recode CDS runs, keep non-coding runs
+        # byte-exact (Decision 15). Replaces the unconditional whole-arm recode.
+        arm = _partition_arm(genome, lo=lo, hi=hi, cds_mask=cds_mask, max_run=max_run)
+        if arm is None:
+            diagnostics.append(
+                f"nick {nick.nick_position}: arm partition failed "
+                "(no synonymous CDS solution or non-monotone arm)"
+            )
             continue
 
         for variant in variants:
             tried += 1
-            # RTT tail = cargo + recoded arm, in the SENSE frame; orient it onto
-            # the pegRNA per strand (Rv -> reverse_complement, Fw -> literal).
-            sense_flap = cargo + recode.recoded
+            # Sense flap + predicted allele, ordered by which side of S the arm
+            # sits (cargo always at S). Then orient per strand (Rv -> rev-comp).
+            sense_flap, edited, tprt_site, tprt_hi = _assemble_edit(
+                genome=genome,
+                site_s=site_s,
+                nick_position=pos,
+                arm_sense=arm.sense_arm,
+                cargo=cargo,
+            )
             rtt = orient_rtt_tail(sense_flap, pegrna_strand=pegrna_strand)
             # PBS2 = the captured-strand window 5' of the nick, oriented per strand.
-            captured = _captured_window(
-                genome, nick_position=nick.nick_position, pbs_length=variant.pbs_length
-            )
+            captured = _captured_window(genome, nick_position=pos, pbs_length=variant.pbs_length)
             pbs2 = orient_pbs2(captured, pegrna_strand=pegrna_strand)
             ok, why = passes_pbs2_gate(pbs2, repetitive=False)
             if not ok:
                 diagnostics.append(f"cand{tried}: PBS2 gate: {why}")
                 continue
-            # INV-0 on the predicted product, with a REAL protein-silence check
-            # (recoded arm must translate to the same protein in-frame).
+            # INV-0 on the predicted product. recode_span (CDS) changes must be
+            # protein-silent (verified in _partition_arm); locked_span (non-coding)
+            # must be byte-exact to the targeted allele (Decision 15).
             reference = genome
-            edited = genome[:site_s] + cargo + recode.recoded + genome[hi:]
 
-            def _protein_check(_r, _e, _arm=arm_genomic, _rec=recode.recoded, _f=frame):
-                return _arm_protein_equal(_arm, _rec, _f)
+            def _protein_check(_r, _e, _ok=arm.protein_ok):
+                return _ok
 
             try:
                 assert_inv0(
@@ -291,9 +410,11 @@ def run_recoded_tjpe(
                     edited=edited,
                     site_s=site_s,
                     cargo=cargo,
-                    recode_span=(lo, hi),
+                    recode_span=arm.recode_span if arm.recode_span is not None else (lo, lo),
                     protein_check=_protein_check,
                     allowed_silent=None,
+                    locked_span=arm.locked_span,
+                    locked_expected=arm.locked_expected,
                 )
             except ValueError as exc:
                 diagnostics.append(f"cand{tried}: INV-0: {exc}")
@@ -304,8 +425,8 @@ def run_recoded_tjpe(
             try:
                 simulate_tprt(
                     genome=genome,
-                    site_s=site_s,
-                    hi=hi,
+                    site_s=tprt_site,
+                    hi=tprt_hi,
                     rtt_tail_on_peg=rtt,
                     pegrna_strand=pegrna_strand,
                     expected_allele=edited,
@@ -337,18 +458,22 @@ def run_recoded_tjpe(
                 diagnostics.append(f"cand{tried}: splice: {sp_why}")
                 continue
 
-            # AlphaFold importance: map the recoded NT footprint to RESIDUE indices.
-            res_lo = (lo - (list(cds_mask).index(True) if any(cds_mask) else 0)) // 3
-            n_res = (len(recode.recoded) + 2) // 3
-            footprint = list(range(res_lo, res_lo + max(1, n_res)))
-            try:
-                blocked = span_blocked(importance_scorer, footprint)
-            except Exception as exc:  # noqa: BLE001
-                diagnostics.append(f"cand{tried}: importance scorer error: {exc}")
-                continue
-            if blocked:
-                diagnostics.append(f"cand{tried}: AlphaFold importance blocked a residue")
-                continue
+            # AlphaFold importance: only the recoded CDS footprint maps to residues.
+            # A purely non-coding (byte-exact) arm changes no residue -> skip.
+            if arm.recode_span is not None:
+                cds0 = list(cds_mask).index(True) if any(cds_mask) else 0
+                rlo, rhi = arm.recode_span
+                res_lo = (rlo - cds0) // 3
+                n_res = ((rhi - rlo) + 2) // 3
+                footprint = list(range(res_lo, res_lo + max(1, n_res)))
+                try:
+                    blocked = span_blocked(importance_scorer, footprint)
+                except Exception as exc:  # noqa: BLE001
+                    diagnostics.append(f"cand{tried}: importance scorer error: {exc}")
+                    continue
+                if blocked:
+                    diagnostics.append(f"cand{tried}: AlphaFold importance blocked a residue")
+                    continue
 
             regions = _regions_for(spacer, pbs2, rtt, pbs1)
             try:
@@ -377,8 +502,13 @@ def run_recoded_tjpe(
                 continue
             # First survivor wins.
             warnings: List[str] = []
-            if recode.max_run_after > max_run:
+            if arm.max_run_after > max_run:
                 warnings.append("microhomology advisory: residual run above target")
+            if arm.microhomology_flag:
+                warnings.append(
+                    "microhomology advisory: non-coding locked span re-templated "
+                    "byte-exact (cannot recode; Decision 15)"
+                )
             return RecodedTJPEResult(
                 pegRNA_sequence=peg,
                 spacer=spacer,
@@ -390,7 +520,7 @@ def run_recoded_tjpe(
                 site_s=site_s,
                 nick_position=nick.nick_position,
                 deletion_size=0,
-                recode_edits=recode.n_edits,
+                recode_edits=arm.n_edits,
                 candidates_tried=tried,
                 warnings=warnings,
                 allele_specific_options=allele_options,
