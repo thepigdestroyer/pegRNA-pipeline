@@ -2,6 +2,13 @@
 
 Automated pegRNA design pipeline for prime editing C-terminal protein tagging.
 
+> **New here? Read [`docs/DESIGN_HISTORY.md`](docs/DESIGN_HISTORY.md) first.** It is
+> the canonical, self-contained explanation of the recoded TJ-PE designer: what it
+> does, why each gate exists, how it is implemented, the full locked-decision /
+> rationale history, the adversarial-review fixes, the HPC deployment, and the
+> current status and limitations. The ADRs under [`docs/decisions/`](docs/decisions/)
+> are the primary sources it synthesises.
+
 ## Modes
 
 The `pegrna run --mode <mode>` command supports three pipeline modes, picked
