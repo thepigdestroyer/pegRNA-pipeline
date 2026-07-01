@@ -48,6 +48,17 @@ class GateThresholds:
     rinalmo_pair_prob: float = 0.5
     rinalmo_min_accessibility: float = 0.5
 
+    # --- PBS2 (second-strand primer-binding site) selection ---
+    # PBS2 is genome-determined at the ngRNA nick, so its LENGTH is scanned to hit
+    # a Tm target (Biopython nearest-neighbour, default salt/conc) rather than
+    # fixed and then rejected. Band + length range below.
+    pbs2_tm_lo: float = 37.0
+    pbs2_tm_hi: float = 42.0
+    pbs2_gc_lo: float = 0.40
+    pbs2_gc_hi: float = 0.70
+    pbs2_len_min: int = 10
+    pbs2_len_max: int = 18
+
     citations: Dict[str, str] = field(
         default_factory=lambda: {
             "splice_max_delta": (

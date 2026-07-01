@@ -16,6 +16,7 @@ from pegrna_pipeline.hpc.allele_specificity import find_allele_specific
 from pegrna_pipeline.hpc.codon_expander import _gc_content, enumerate_variants
 from pegrna_pipeline.hpc.complex_dock import passes_docking_gate
 from pegrna_pipeline.hpc.full_structure import functional_region_pairing
+from pegrna_pipeline.hpc.gate_thresholds import THRESHOLDS
 from pegrna_pipeline.hpc.nick_search import enumerate_nick_sites, screen_nick_candidates
 from pegrna_pipeline.hpc.recode_arm import recode_arm
 from pegrna_pipeline.hpc.scarless import assert_inv0
@@ -80,12 +81,15 @@ def passes_pbs2_gate(
     tm_lo: float = 37.0,
     tm_hi: float = 42.0,
 ) -> Tuple[bool, str]:
-    """Joint PBS2 gate (decision 8): length 11-17, GC 40-70 %, Tm 37-42 C, not
+    """Joint PBS2 validation (decision 8): length, GC 40-70 %, Tm 37-42 C, not
     repetitive.
 
-    Length and Tm are coupled — a short PBS2 rarely reaches 37 C unless GC-rich —
-    so the feasible set tends to collapse to ~14-17 nt; that is expected. Tm uses
-    Biopython's nearest-neighbour model (imported lazily so the core import stays
+    This VALIDATES a chosen PBS2. The length is selected upstream by
+    :func:`_select_pbs2`, which scans the length range to hit the Tm band, so this
+    gate should pass by construction for a selected PBS2 (it also guards a
+    caller-supplied PBS2). ``min_len``/``max_len`` default to the classic 11-17;
+    :func:`_select_pbs2` uses the wider 10-18 scan from THRESHOLDS. Tm uses
+    Biopython's nearest-neighbour model (imported lazily to keep the core import
     light).
     """
     if not (min_len <= len(pbs2) <= max_len):
@@ -101,6 +105,75 @@ def passes_pbs2_gate(
     if repetitive:
         return False, "repetitive region"
     return True, "ok"
+
+
+def _is_repetitive(seq: str) -> bool:
+    """Cheap repetitiveness screen: a homopolymer run >= 5, or <= 2 distinct bases
+    (e.g. pure AT/GC microsatellite-like), makes a poor, mis-priming PBS."""
+    if len(set(seq)) <= 2:
+        return True
+    run = 1
+    for a, b in zip(seq, seq[1:]):
+        run = run + 1 if a == b else 1
+        if run >= 5:
+            return True
+    return False
+
+
+def _select_pbs2(
+    genome: str,
+    *,
+    nick_position: int,
+    pegrna_strand: str,
+    tm_lo: float,
+    tm_hi: float,
+    gc_lo: float,
+    gc_hi: float,
+    len_min: int,
+    len_max: int,
+) -> Tuple[Optional[str], str]:
+    """Choose PBS2 by SCANNING its length to hit the Tm band, decoupled from PBS1.
+
+    PBS2 is the second-strand primer-binding site: it equals the captured genomic
+    window immediately 5' of the ngRNA nick, oriented per strand. Its sequence is
+    fixed by the genome, so the only free parameter is LENGTH. Fixing length (to
+    PBS1's lengths) and then rejecting on Tm made the whole candidate pool collapse
+    (all share ~one nick's window). Instead scan ``len_min..len_max`` and return the
+    valid PBS2 whose Tm is closest to the band centre; ``(None, why)`` if none fit
+    (that nick simply yields no priming-competent PBS2 — a per-nick miss, not a
+    whole-run failure).
+    """
+    from Bio.SeqUtils import MeltingTemp as mt  # noqa: PLC0415
+
+    center = (tm_lo + tm_hi) / 2.0
+    best: Optional[Tuple[float, str, float]] = None  # (dist_to_center, pbs2, tm)
+    considered = 0
+    for length in range(len_min, len_max + 1):
+        start = nick_position - length
+        if start < 0:
+            continue
+        captured = genome[start:nick_position].upper()
+        if len(captured) < length:
+            continue
+        pbs2 = orient_pbs2(captured, pegrna_strand=pegrna_strand)
+        gc = _gc_content(pbs2)
+        if not (gc_lo <= gc <= gc_hi):
+            continue
+        if _is_repetitive(pbs2):
+            continue
+        tm = float(mt.Tm_NN(pbs2))
+        considered += 1
+        if tm_lo <= tm <= tm_hi:
+            d = abs(tm - center)
+            if best is None or d < best[0]:
+                best = (d, pbs2, tm)
+    if best is None:
+        return None, (
+            f"no PBS2 length in [{len_min},{len_max}] hit Tm [{tm_lo},{tm_hi}] "
+            f"with GC [{gc_lo},{gc_hi}] at nick {nick_position} "
+            f"({considered} GC/repeat-valid lengths, none in Tm band)"
+        )
+    return best[1], f"Tm {best[2]:.1f} (len {len(best[1])})"
 
 
 @dataclass
@@ -121,13 +194,6 @@ class RecodedTJPEResult:
     candidates_tried: int
     warnings: List[str] = field(default_factory=list)
     allele_specific_options: list = field(default_factory=list)
-
-
-def _captured_window(genome: str, *, nick_position: int, pbs_length: int) -> str:
-    """Return the genomic window (5'->3', sense) immediately 5' of the nick that
-    the new flap must capture. ``orient_pbs2`` then orients it per pegRNA strand."""
-    start = max(0, nick_position - pbs_length)
-    return genome[start:nick_position].upper()
 
 
 def _frame_at(cds_mask: Sequence[bool], pos: int) -> int:
@@ -377,6 +443,24 @@ def run_recoded_tjpe(
             )
             continue
 
+        # PBS2 depends only on the nick (not the RTT variant): choose its LENGTH
+        # once per nick to hit the Tm band (decision 8), decoupled from PBS1's
+        # length. A per-nick miss here skips this nick, not the whole run.
+        pbs2, pbs2_why = _select_pbs2(
+            genome,
+            nick_position=pos,
+            pegrna_strand=pegrna_strand,
+            tm_lo=THRESHOLDS.pbs2_tm_lo,
+            tm_hi=THRESHOLDS.pbs2_tm_hi,
+            gc_lo=THRESHOLDS.pbs2_gc_lo,
+            gc_hi=THRESHOLDS.pbs2_gc_hi,
+            len_min=THRESHOLDS.pbs2_len_min,
+            len_max=THRESHOLDS.pbs2_len_max,
+        )
+        if pbs2 is None:
+            diagnostics.append(f"nick {pos}: PBS2 select: {pbs2_why}")
+            continue
+
         for variant in variants:
             tried += 1
             # Sense flap + predicted allele, ordered by which side of S the arm
@@ -389,13 +473,7 @@ def run_recoded_tjpe(
                 cargo=cargo,
             )
             rtt = orient_rtt_tail(sense_flap, pegrna_strand=pegrna_strand)
-            # PBS2 = the captured-strand window 5' of the nick, oriented per strand.
-            captured = _captured_window(genome, nick_position=pos, pbs_length=variant.pbs_length)
-            pbs2 = orient_pbs2(captured, pegrna_strand=pegrna_strand)
-            ok, why = passes_pbs2_gate(pbs2, repetitive=False)
-            if not ok:
-                diagnostics.append(f"cand{tried}: PBS2 gate: {why}")
-                continue
+            # PBS2 already selected per-nick above (length scanned to hit Tm band).
             # INV-0 on the predicted product. recode_span (CDS) changes must be
             # protein-silent (verified in _partition_arm); locked_span (non-coding)
             # must be byte-exact to the targeted allele (Decision 15).
