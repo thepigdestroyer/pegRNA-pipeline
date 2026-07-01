@@ -228,6 +228,8 @@ no weights. Coverage by area:
 
 | Doc | What |
 |---|---|
+| [`docs/USER_GUIDE.docx`](docs/USER_GUIDE.docx) | **Non-technical manual for biologists** — what it does, what you provide, how to run it, how to read the output. |
+| [`docs/FEATURES.md`](docs/FEATURES.md) | Technical capability + roadmap reference (ML-biology audience): models, gate stack, algorithm, planned features. |
 | [`docs/DESIGN_HISTORY.md`](docs/DESIGN_HISTORY.md) | **How it works + full decision/rationale history**: architecture, the gate stack, algorithm, genome model, every locked decision, adversarial-review fixes. |
 | [`docs/decisions/`](docs/decisions/) | ADRs (0001-0007) — the primary sources DESIGN_HISTORY synthesises. |
 | [`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.md) | Install/run failure modes on CX3 and their fixes. |
