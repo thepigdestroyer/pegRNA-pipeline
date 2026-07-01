@@ -23,7 +23,11 @@ where the RTT is decomposed into the **insert** (cargo) and the **replacement gD
 - **Recode, don't delete.** The genomic window between `S` and the ngRNA nick is
   re-templated with a **synonymously recoded** copy of itself (same protein) chosen
   to break the perfect microhomology run that otherwise drives MMEJ/SSA deletion of
-  the insert. Length-preserving (`deletion_size == 0`).
+  the insert. Length-preserving (`deletion_size == 0`). Among the minimum-edit
+  microhomology-breaking options, each **changed** codon is set to the most frequent
+  human synonymous codon that still keeps the run below threshold, so the forced
+  edits stay translation-competent while unchanged positions remain byte-exact
+  (human Codon Adaptation Index tiebreak, ADR 0009).
 - **Ranked-pool-walk orchestrator.** A deterministic candidate pool
   (synonymous RTT variants × PBS lengths × screened nicks) is walked
   cheap→expensive; the first candidate passing every gate wins. Exhaustion is

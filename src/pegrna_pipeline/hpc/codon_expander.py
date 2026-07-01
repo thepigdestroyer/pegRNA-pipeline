@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import heapq
 import itertools
+import math
 import re
 from dataclasses import dataclass
 from functools import lru_cache
@@ -60,6 +61,67 @@ def _build_flat_frequency_table() -> Dict[str, float]:
 
 
 HUMAN_CODON_FREQUENCIES: Dict[str, float] = _build_flat_frequency_table()
+
+
+# ------------------------------------------------------------- CAI (ADR 0009)
+
+# ``w = f(codon) / max_{c in family} f(c)`` -- the codon's relative adaptiveness
+# against the human genome-wide table. Single-codon families (Met, Trp) and stop
+# codons carry no discriminating signal and are excluded from the CAI geometric
+# mean (they are identical across every variant of one aa sequence).
+_CAI_ZERO_FLOOR = 0.01  # rounded table can read 0.00; floor keeps log finite
+
+
+def _build_cai_tables() -> Tuple[Dict[str, float], frozenset]:
+    table = _load_human_codon_table()
+    rel: Dict[str, float] = {}
+    excluded: set = set()
+    for aa, codon_map in table.items():
+        fmax = max(codon_map.values()) or 1.0
+        single = len(codon_map) == 1
+        for codon, freq in codon_map.items():
+            cu = codon.upper()
+            rel[cu] = (float(freq) / fmax) if fmax else 0.0
+            if single or aa == "*":
+                excluded.add(cu)
+    return rel, frozenset(excluded)
+
+
+_CAI_REL_ADAPT, _CAI_EXCLUDED = _build_cai_tables()
+
+
+def human_cai(dna: str, frame: int = 0) -> float:
+    """Codon Adaptation Index of ``dna`` against the human genome-wide table.
+
+    Geometric mean of per-codon relative adaptiveness ``w = f / f_max_in_family``
+    over the in-frame codons, excluding single-codon families (Met ``ATG``, Trp
+    ``TGG``) and stop codons. ``w`` is floored at :data:`_CAI_ZERO_FLOOR` so a
+    codon that the 2-decimal table rounds to ``0.00`` degrades smoothly instead of
+    raising ``math domain error``.
+
+    Empty input returns ``0.0``; a non-empty sequence of only excluded codons
+    returns ``1.0`` (trivially maximal, no discriminating signal). Case-insensitive.
+    Raises :class:`ValueError` on a ragged (non-multiple-of-3) length at the given
+    frame, or on an unknown codon. The caller is responsible for frame-correctness.
+    """
+    if not dna:
+        return 0.0
+    seq = dna.upper()
+    if frame:
+        seq = seq[frame:]
+    if len(seq) % 3 != 0:
+        raise ValueError(f"human_cai: length {len(seq)} not a multiple of 3 at frame {frame}")
+    logs: List[float] = []
+    for i in range(0, len(seq), 3):
+        codon = seq[i : i + 3]
+        if codon not in _CAI_REL_ADAPT:
+            raise ValueError(f"human_cai: unknown codon {codon!r}")
+        if codon in _CAI_EXCLUDED:
+            continue
+        logs.append(math.log(max(_CAI_REL_ADAPT[codon], _CAI_ZERO_FLOOR)))
+    if not logs:
+        return 1.0
+    return math.exp(sum(logs) / len(logs))
 
 
 # ---------------------------------------------------------------- CodonVariant
@@ -133,28 +195,54 @@ def _surviving_variants(aa_sequence: str) -> Iterator[Tuple[str, int, float]]:
         yield dna, dna.count("C"), _gc_content(dna)
 
 
-def enumerate_variants(aa_sequence: str, max_variants: int = 100) -> List[CodonVariant]:
+_RANKINGS = ("gc_c", "cai")
+
+
+def _check_ranking(ranking: str) -> None:
+    if ranking not in _RANKINGS:
+        raise ValueError(f"ranking must be one of {_RANKINGS}; got {ranking!r}")
+
+
+def _nlargest_key(ranking: str):
+    """Key for :func:`heapq.nlargest` (larger = better) over ``(dna, c_count, gc)``."""
+    if ranking == "cai":
+        # CAI primary, then the gc_c order as a deterministic tiebreak.
+        return lambda t: (human_cai(t[0]), t[1], -abs(t[2] - 0.55))
+    return lambda t: (t[1], -abs(t[2] - 0.55))
+
+
+def _final_sort_key(ranking: str):
+    """Ascending sort key mirroring :func:`_nlargest_key`, with ``dna`` for stability."""
+    if ranking == "cai":
+        return lambda t: (-human_cai(t[0]), -t[1], abs(t[2] - 0.55), t[0])
+    return lambda t: (-t[1], abs(t[2] - 0.55), t[0])
+
+
+def enumerate_variants(
+    aa_sequence: str, max_variants: int = 100, ranking: str = "gc_c"
+) -> List[CodonVariant]:
     """Return top ``max_variants`` surviving variants, globally ranked.
 
-    Ranking: (c_count DESC, abs(gc_content - 0.55) ASC). Uses :func:`heapq.nlargest`
-    with a key that mirrors this ordering so the top-K is globally correct
-    even when only a subset of combinations is kept in memory.
+    ``ranking="gc_c"`` (default): ``(c_count DESC, abs(gc_content - 0.55) ASC)`` --
+    the synthesis-stability order. ``ranking="cai"``: human Codon Adaptation Index
+    DESC (see :func:`human_cai`), with the gc_c order as a deterministic tiebreak,
+    so the most human-adapted synonymous variant ranks first. Uses
+    :func:`heapq.nlargest` so the top-K is globally correct even when only a subset
+    of combinations is kept in memory.
     """
+    _check_ranking(ranking)
     if not aa_sequence:
         return []
 
-    # heapq.nlargest keeps the K biggest items by ``key``.  Our desired order
-    # is (c_count DESC, |gc - 0.55| ASC) so a larger key = (c_count, -|gc-0.55|).
     top = heapq.nlargest(
         max_variants,
         _surviving_variants(aa_sequence),
-        key=lambda t: (t[1], -abs(t[2] - 0.55)),
+        key=_nlargest_key(ranking),
     )
 
-    # nlargest produces items in descending key order; but ties may land in
-    # arbitrary order.  Re-sort exactly by the canonical ordering before
-    # assigning ranks so the result is deterministic.
-    top.sort(key=lambda t: (-t[1], abs(t[2] - 0.55), t[0]))
+    # nlargest produces items in descending key order; ties may land arbitrarily,
+    # so re-sort by the canonical ordering before assigning ranks (deterministic).
+    top.sort(key=_final_sort_key(ranking))
 
     return [
         CodonVariant(dna=dna, c_count=c, gc_content=gc, rank=i)
@@ -177,8 +265,11 @@ class EnumerationResult:
     was_capped: bool
 
 
-def enumerate_with_metadata(aa_sequence: str, max_variants: int = 100) -> EnumerationResult:
+def enumerate_with_metadata(
+    aa_sequence: str, max_variants: int = 100, ranking: str = "gc_c"
+) -> EnumerationResult:
     """Like :func:`enumerate_variants` but also returns counting metadata."""
+    _check_ranking(ranking)
     if not aa_sequence:
         return EnumerationResult(variants=[], theoretical_max=0, was_capped=False)
 
@@ -193,11 +284,11 @@ def enumerate_with_metadata(aa_sequence: str, max_variants: int = 100) -> Enumer
     picked = heapq.nlargest(
         peek,
         _surviving_variants(aa_sequence),
-        key=lambda t: (t[1], -abs(t[2] - 0.55)),
+        key=_nlargest_key(ranking),
     )
     was_capped = len(picked) > max_variants
     picked = picked[:max_variants]
-    picked.sort(key=lambda t: (-t[1], abs(t[2] - 0.55), t[0]))
+    picked.sort(key=_final_sort_key(ranking))
     variants = [
         CodonVariant(dna=dna, c_count=c, gc_content=gc, rank=i)
         for i, (dna, c, gc) in enumerate(picked)
