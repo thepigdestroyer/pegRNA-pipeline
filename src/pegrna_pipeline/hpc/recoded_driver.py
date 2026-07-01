@@ -9,6 +9,7 @@ staged weights) and fails loud if any dependency is missing.
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, Sequence, Tuple, Union
@@ -39,6 +40,53 @@ class RecodedDesignOutput:
     csv_path: Optional[str] = None
 
 
+def _real_scorer_kwargs(
+    *,
+    uniprot_acc: str,
+    cas9: str,
+    genome_fasta: Optional[str],
+    boltz_cache: Optional[str],
+    rinalmo_weights: Optional[str],
+    rnaformer_model_dir: Optional[str],
+    pam: str,
+    max_mismatches: int,
+) -> dict:
+    """Resolve real-scorer resource paths into ``make_scorers`` kwargs (ADR 0008).
+
+    Each resource is taken from its explicit parameter OR the environment variable
+    that ``scripts/hpc/smoke_models.py`` and ``run_recoded_pipeline.pbs`` already
+    set (explicit wins), so the design run consumes exactly the staged resources the
+    5/5 gate self-check validated:
+
+    * ``genome_fasta`` / ``$PEGRNA_GENOME``      -> off-target genome FASTA (cas-offinder)
+    * ``boltz_cache`` / ``$BOLTZ_CACHE``          -> pre-staged Boltz-2 weights (offline node)
+    * ``rinalmo_weights`` / ``$RINALMO_SS_WEIGHTS``
+    * ``rnaformer_model_dir`` / dir of ``$RNAFORMER_CKPT``
+
+    Leaving the genome unset (no param, no env) yields ``genome=None`` so the
+    off-target scorer stays fail-loud -- this never fabricates a path.
+    """
+    # ``or None`` so a hand-exported empty env var degrades to None uniformly
+    # (matching the ``if genome:`` fail-loud guard in scorer_factory) rather than
+    # reaching a scorer as an empty-string path.
+    genome = genome_fasta or os.environ.get("PEGRNA_GENOME") or None
+    boltz = boltz_cache or os.environ.get("BOLTZ_CACHE") or None
+    rinalmo = rinalmo_weights or os.environ.get("RINALMO_SS_WEIGHTS") or None
+    if rnaformer_model_dir is None:
+        ckpt = os.environ.get("RNAFORMER_CKPT")
+        rnaformer_model_dir = (os.path.dirname(ckpt) or None) if ckpt else None
+    return {
+        "uniprot_acc": uniprot_acc,
+        "cas9": cas9,
+        "genome": genome,
+        "pam": pam,
+        "max_mismatches": max_mismatches,
+        "boltz_cache": boltz,
+        "rinalmo_weights": rinalmo,
+        "rnaformer_model_dir": rnaformer_model_dir,
+    }
+
+
 def design_recoded(
     *,
     spacer: str,
@@ -60,6 +108,12 @@ def design_recoded(
     output_dir: Optional[Union[str, Path]] = None,
     manifest: Optional[dict] = None,
     uniprot_acc: str = "",
+    genome_fasta: Optional[str] = None,
+    boltz_cache: Optional[str] = None,
+    rinalmo_weights: Optional[str] = None,
+    rnaformer_model_dir: Optional[str] = None,
+    pam: str = "NGG",
+    max_mismatches: int = 3,
 ) -> RecodedDesignOutput:
     """Run the recoded TJ-PE design end-to-end and (optionally) write a report.
 
@@ -67,8 +121,31 @@ def design_recoded(
     path it was written to (or ``None`` if ``output_dir`` was not supplied).
     Raises :class:`pegrna_pipeline.hpc.recoded_tjpe_workflow.NoValidPegRNA` if no
     candidate survives all gates (fail-loud).
+
+    ``genome`` is the LOCAL design-context sequence (for nick search / recode /
+    INV-0). In ``mode="real"`` the heavy gate models also need staged resources,
+    which are supplied via the distinct parameters ``genome_fasta`` (off-target
+    genome FASTA for cas-offinder), ``boltz_cache``, ``rinalmo_weights`` and
+    ``rnaformer_model_dir``; each falls back to the environment variable the smoke
+    harness / ``run_recoded_pipeline.pbs`` set (``PEGRNA_GENOME`` / ``BOLTZ_CACHE`` /
+    ``RINALMO_SS_WEIGHTS`` / ``RNAFORMER_CKPT``) when the parameter is omitted, so a
+    real run consumes exactly the resources the 5/5 gate self-check validated
+    (ADR 0008). These are ignored in ``mode="fake"``.
     """
-    scorer_kwargs = {"uniprot_acc": uniprot_acc, "cas9": cas9} if mode == "real" else {}
+    scorer_kwargs = (
+        _real_scorer_kwargs(
+            uniprot_acc=uniprot_acc,
+            cas9=cas9,
+            genome_fasta=genome_fasta,
+            boltz_cache=boltz_cache,
+            rinalmo_weights=rinalmo_weights,
+            rnaformer_model_dir=rnaformer_model_dir,
+            pam=pam,
+            max_mismatches=max_mismatches,
+        )
+        if mode == "real"
+        else {}
+    )
     scorers = make_scorers(mode=mode, **scorer_kwargs)
 
     result = run_recoded_tjpe(
