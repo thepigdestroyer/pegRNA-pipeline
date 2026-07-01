@@ -185,15 +185,47 @@ class RNAformerScorer:
     unavailable.
     """
 
-    def __init__(self, *, model_dir: str | None = None, ckpt: str | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        model_dir: str | None = None,
+        ckpt: str | None = None,
+        config_file: str | None = None,
+    ) -> None:
         self.model_dir = model_dir
         self.ckpt = ckpt
+        self.config_file = config_file
         self._model = None
+
+    def _resolve_config(self, rnaformer_pkg) -> str:  # pragma: no cover - CX3 only
+        """Locate the RNAformer config YAML (RiboFormer is built from its
+        ``.RNAformer`` sub-config). Precedence: explicit config_file -> env
+        RNAFORMER_CONFIG -> ``<repo>/config/default_config.yaml`` next to the
+        installed package -> a ``*.yaml`` in model_dir."""
+        import glob
+        import os
+
+        cand = self.config_file or os.environ.get("RNAFORMER_CONFIG")
+        if cand and os.path.exists(cand):
+            return cand
+        pkg_dir = os.path.dirname(rnaformer_pkg.__file__)
+        repo_cfg = os.path.join(os.path.dirname(pkg_dir), "config", "default_config.yaml")
+        if os.path.exists(repo_cfg):
+            return repo_cfg
+        if self.model_dir:
+            ys = sorted(glob.glob(os.path.join(self.model_dir, "*.yaml")))
+            if ys:
+                return ys[0]
+        raise FileNotFoundError(
+            "RNAformer config YAML not found; set RNAFORMER_CONFIG or pass config_file= "
+            "(e.g. <RNAformer repo>/config/default_config.yaml)"
+        )
 
     def _load(self):  # pragma: no cover - exercised only with rnaformer installed
         if self._model is not None:
             return
         try:
+            import RNAformer  # noqa: PLC0415
             import torch  # noqa: PLC0415
             from RNAformer.model.RNAformer import RiboFormer  # noqa: PLC0415
             from RNAformer.utils.configuration import Config  # noqa: PLC0415
@@ -220,27 +252,34 @@ class RNAformerScorer:
                     "set RNAFORMER_CKPT or pass ckpt="
                 )
             ckpt = cands[0]
-        state = torch.load(ckpt, map_location="cpu")
-        model = RiboFormer(Config(state.get("config", {})))
-        model.load_state_dict(state["state_dict"], strict=False)
+        # Real RNAformer API (verified against infer_RNAformer.py): build the model
+        # from the config YAML's `.RNAformer` sub-config, then load the RAW state
+        # dict (the .pth IS the state_dict, not a {'state_dict': ...} wrapper).
+        config = Config(config_file=self._resolve_config(RNAformer))
+        model = RiboFormer(config.RNAformer)
+        state_dict = torch.load(ckpt, map_location="cpu")
+        model.load_state_dict(state_dict, strict=True)
         self._model = model.eval()
 
     def pair_probs(self, seq: str) -> Dict[Tuple[int, int], float]:  # pragma: no cover
         """L x L base-pair probabilities from RNAformer (CPU-capable, CI fallback).
 
-        Encodes the sequence, runs the model to get the pairwise logits, applies
-        sigmoid, and sparsifies. VALIDATE ON CX3 / locally with the staged
-        checkpoint: confirm the encoder token map + output head returns a
-        symmetric L x L pairing-probability map.
+        Faithful to infer_RNAformer.py: vocab ['A','C','G','U','N'] (T->U); the
+        forward is ``model(sequence, src_len, pdb_sample) -> (logits, mask)`` with
+        logits shape (1, L, L, C); the pairing probability map is
+        ``sigmoid(logits[0, :, :, -1])``. Sparsified to {(i, j): p} for i < j.
         """
         import torch
 
         self._load()
-        token_map = {"A": 0, "C": 1, "G": 2, "U": 3, "T": 3, "N": 4}
-        ids = torch.tensor([[token_map.get(b, 4) for b in seq.upper()]])
+        stoi = {"A": 0, "C": 1, "G": 2, "U": 3, "N": 4}
+        idx = [stoi.get(b, 4) for b in seq.upper().replace("T", "U")]
+        sequence = torch.tensor([idx], dtype=torch.long)
+        src_len = torch.tensor([len(idx)], dtype=torch.long)
+        pdb_sample = torch.tensor([[1.0]], dtype=torch.float32)
         with torch.no_grad():
-            logits = self._model(ids)
-            probs = torch.sigmoid(logits)[0].cpu().numpy()
+            logits, _mask = self._model(sequence, src_len, pdb_sample)
+            probs = torch.sigmoid(logits[0, :, :, -1]).cpu().numpy()
         n = len(seq)
         out: Dict[Tuple[int, int], float] = {}
         for i in range(n):
