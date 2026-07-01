@@ -150,6 +150,11 @@ p(
 
 # ---- 5. How to run it ----
 h1("5. How to run it")
+p(
+    "You do not need an AI assistant or any special agent to run this tool - it is an "
+    "ordinary command you type (or that a colleague can run for you). There are three "
+    "ways to run it, from simplest to most automated."
+)
 h2("Option A - a quick dry run (any computer, no special hardware)")
 p(
     "This runs the full design logic and produces a real report, using stand-in "
@@ -168,6 +173,23 @@ code("qsub -v PEGRNA_DATA=$PEGRNA_DATA,CONFIG=examples/ctcf_cterm/config.json \\
 p(
     "Full step-by-step install and run instructions are in scripts/hpc/README.md, and "
     "common problems and fixes are in docs/TROUBLESHOOTING.md.",
+    italic=True,
+)
+h2("Option C - let the tool drive the HPC for you (optional)")
+p(
+    "If you would rather not log in to the research computer yourself, the tool can do "
+    "it for you: it checks your request, submits the job, waits for it to finish, and "
+    "downloads the results to your machine. You set this up once, then start runs with "
+    "a single command:"
+)
+code("pegrna setup                      # once - saves how to reach the HPC")
+code('pegrna run --gene CTCF --construct "<your construct>" --mode tjpe --output-dir results')
+p("And to keep track of runs:")
+code("pegrna status      # see your runs\npegrna tail <run-id>   # watch progress\npegrna cancel <run-id> # stop a run")
+p(
+    "This is just convenience automation (it logs in and submits for you) - it is not "
+    "an AI making decisions. It currently drives the tjPE / PA / PE7 workflows; the "
+    "recoded design is run with Option A or B above.",
     italic=True,
 )
 

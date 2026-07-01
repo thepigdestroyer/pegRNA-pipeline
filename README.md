@@ -162,6 +162,35 @@ The config is a JSON of the design inputs (`spacer`, `rtt_aa`, `cargo`, `genome`
 (`gene`, `transcript`, `uniprot_acc`) are routed into the report manifest. See
 `examples/ctcf_cterm/config.json` for a complete, runnable CTCF C-terminal knock-in.
 
+### How it runs (no AI agent required)
+
+The pipeline is a plain command-line tool — you do **not** need an AI/LLM agent to run
+it. (The Python package is named `...agent...`, but that layer is just an SSH job
+launcher, not an AI.) Three ways to run, in increasing automation:
+
+1. **Directly (recommended for most use).** Run the CLI yourself:
+   - dry run anywhere: `pegrna design-recoded --config <cfg> --mode fake --output-dir <out>`
+   - full run on the HPC as a batch job: `qsub -v PEGRNA_DATA=$PEGRNA_DATA,CONFIG=<cfg> scripts/hpc/run_recoded_pipeline.pbs`
+2. **Via the built-in launcher (optional automation).** If you'd rather not SSH to the
+   HPC by hand, the `pegrna` CLI can orchestrate a run from your laptop — it validates
+   the construct locally, submits the HPC job, polls for completion, and downloads the
+   reports:
+   ```bash
+   pegrna setup                      # once: write ~/.pegrna/config.yaml (HPC host, user)
+   pegrna run --gene CTCF --construct "<construct>" --mode tjpe --output-dir results
+   pegrna status        # list runs        pegrna tail <run-id>   # stream the driver log
+   pegrna list          # recorded runs    pegrna cancel <run-id> # stop a run
+   ```
+   The launcher currently drives the `tjpe` / `pa` / `pe7` workflows; the recoded design
+   is run via the batch script or the `design-recoded` CLI above.
+3. **From your own agent/automation.** Because everything is a normal CLI with JSON
+   config in and text/CSV out, any external agent or workflow system can call it — it
+   just shells out to `pegrna design-recoded` (or `qsub` the PBS script) and reads the
+   files from `--output-dir`. No special integration is needed.
+
+The only hard requirement for a *full* (real-gate) run is the **HPC environment**
+(GPU + staged model weights), not an agent; `--mode fake` runs anywhere.
+
 ### Output
 
 Each run writes two files to `--output-dir`:
