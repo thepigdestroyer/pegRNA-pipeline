@@ -162,6 +162,21 @@ The config is a JSON of the design inputs (`spacer`, `rtt_aa`, `cargo`, `genome`
 (`gene`, `transcript`, `uniprot_acc`) are routed into the report manifest. See
 `examples/ctcf_cterm/config.json` for a complete, runnable CTCF C-terminal knock-in.
 
+### Output
+
+Each run writes two files to `--output-dir`:
+
+- `recoded_tjpe_report.txt` — human-readable design + coordinates + gate results.
+- `recoded_tjpe_components.csv` — one row per labelled construct component
+  (`index,component,role,part_of,sequence,length`) for table/list consumption.
+
+The construct is reported 5′→3′ as **Spacer · Scaffold · PBS2 · RTT · PBS1 · PolyU**.
+The **RTT is decomposed** into its labelled sub-parts rather than a single opaque
+block: `insert` (the cargo payload) and `replacement_gDNA` (the synonymously recoded
+deletion-replacement arm) — these reconcatenate to the RTT exactly. `part_of`
+distinguishes the **tjPE template-jumping portion** (PBS2 · RTT · PBS1) from the
+spacer/scaffold that complete the full construct.
+
 Full install/usage/troubleshooting: [`scripts/hpc/README.md`](scripts/hpc/README.md)
 and [`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.md).
 

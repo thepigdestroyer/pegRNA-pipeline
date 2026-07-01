@@ -194,6 +194,50 @@ class RecodedTJPEResult:
     candidates_tried: int
     warnings: List[str] = field(default_factory=list)
     allele_specific_options: list = field(default_factory=list)
+    #: The RTT decomposed into its labelled sub-parts, in RTT (5'->3') order, as a
+    #: list of (label, sequence) with labels "insert" (the cargo) and
+    #: "replacement_gdna" (the recoded deletion-replacement arm). Concatenating the
+    #: sequences reproduces ``rtt`` exactly. Empty until set by the workflow.
+    rtt_components: List[Tuple[str, str]] = field(default_factory=list)
+    #: Convenience: the insert (cargo) sub-sequence as it appears in the RTT.
+    insert_seq: str = ""
+    #: Convenience: the replacement gDNA (recoded arm) sub-sequence in the RTT.
+    replacement_gdna: str = ""
+
+
+def _decompose_rtt(
+    rtt: str,
+    *,
+    cargo: str,
+    arm_sense: str,
+    pegrna_strand: str,
+    nick_gt_s: bool,
+) -> List[Tuple[str, str]]:
+    """Split the RTT into its labelled sub-parts in RTT (5'->3') order.
+
+    The RTT is ``orient_rtt_tail(sense_flap)`` where the sense flap is
+    ``cargo + arm`` (nick 3' of S) or ``arm + cargo`` (nick 5' of S). Returns
+    ``[(label, seq), ...]`` with labels ``"insert"`` (the cargo) and
+    ``"replacement_gdna"`` (the recoded arm), ordered so the sequences concatenate
+    back to ``rtt`` exactly (verified). A reverse-targeting pegRNA RC's the flap,
+    which reverses the segment order; this handles both. Empty segments (e.g. a
+    zero-length arm) are omitted.
+    """
+    sense_segments = (
+        [("insert", cargo), ("replacement_gdna", arm_sense)]
+        if nick_gt_s
+        else [("replacement_gdna", arm_sense), ("insert", cargo)]
+    )
+    oriented = [
+        (label, orient_rtt_tail(seq, pegrna_strand=pegrna_strand))
+        for label, seq in sense_segments
+        if seq
+    ]
+    if "".join(s for _, s in oriented) != rtt:  # Rv RC reverses order -> reorder
+        oriented = list(reversed(oriented))
+    if "".join(s for _, s in oriented) != rtt:  # pragma: no cover - guard
+        raise AssertionError("RTT decomposition does not reconstruct the RTT")
+    return oriented
 
 
 def _frame_at(cds_mask: Sequence[bool], pos: int) -> int:
@@ -587,6 +631,14 @@ def run_recoded_tjpe(
                     "microhomology advisory: non-coding locked span re-templated "
                     "byte-exact (cannot recode; Decision 15)"
                 )
+            rtt_components = _decompose_rtt(
+                rtt,
+                cargo=cargo,
+                arm_sense=arm.sense_arm,
+                pegrna_strand=pegrna_strand,
+                nick_gt_s=pos > site_s,
+            )
+            parts_map = dict(rtt_components)
             return RecodedTJPEResult(
                 pegRNA_sequence=peg,
                 spacer=spacer,
@@ -602,6 +654,9 @@ def run_recoded_tjpe(
                 candidates_tried=tried,
                 warnings=warnings,
                 allele_specific_options=allele_options,
+                rtt_components=rtt_components,
+                insert_seq=parts_map.get("insert", ""),
+                replacement_gdna=parts_map.get("replacement_gdna", ""),
             )
 
     raise NoValidPegRNA(
