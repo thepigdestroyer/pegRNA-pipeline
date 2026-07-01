@@ -388,6 +388,7 @@ def design_recoded_cmd(config_path: str, mode: str, output_dir: str) -> None:
     ``--mode fake`` runs the full design logic with stand-in scorers (dry-run /
     smoke); ``--mode real`` uses the real models (CX3, GPU, staged weights).
     """
+    import inspect
     import json
     from pathlib import Path
 
@@ -395,8 +396,18 @@ def design_recoded_cmd(config_path: str, mode: str, output_dir: str) -> None:
 
     cfg = json.loads(Path(config_path).read_text())
     cfg.setdefault("pegrna_strand", "Rv")
+    # Split provenance/metadata from design parameters: anything starting with "_"
+    # (e.g. "_comment") or the known provenance keys is routed into the report
+    # manifest instead of being passed as a design kwarg (design_recoded only
+    # accepts real design parameters). This lets configs be self-documenting.
+    valid_params = set(inspect.signature(design_recoded).parameters)
+    manifest = dict(cfg.pop("manifest", {}) or {})
+    for key in [k for k in cfg if k.startswith("_") or k not in valid_params]:
+        manifest[key.lstrip("_")] = cfg.pop(key)
+    if cfg.get("uniprot_acc"):
+        manifest.setdefault("uniprot", cfg["uniprot_acc"])
     try:
-        out = design_recoded(mode=mode, output_dir=output_dir, **cfg)
+        out = design_recoded(mode=mode, output_dir=output_dir, manifest=manifest, **cfg)
     except Exception as exc:  # fail loud with a clear message
         click.echo(f"design-recoded failed: {type(exc).__name__}: {exc}", err=True)
         sys.exit(1)

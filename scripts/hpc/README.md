@@ -19,41 +19,54 @@ Imperial CX3 HPC.
 CX3 is behind ZScaler ZPA + SAML SSO (interactive — must be done by a human).
 Use the `hpc-connect` skill or your usual `ssh` flow.
 
-## 1. Environment (login node, has internet)
+## 1. Install (one command, login node, has internet)
 
 ```bash
-module load anaconda3/personal
-conda env create -f scripts/hpc/environment.yml
+git clone https://github.com/thepigdestroyer/pegRNA-pipeline && cd pegRNA-pipeline
+export PEGRNA_DATA=$EPHEMERAL/pegrna-data
+bash scripts/hpc/install.sh
+```
+
+This does everything in steps 1-3 below (env create → `pip install -e '.[…all extras…]'`
+→ stage weights/genome → login-node smoke). Idempotent. If you prefer the manual steps
+(or need to debug one), they are:
+
+```bash
+# 1a. env
+module load anaconda3/personal          # or: source ~/miniforge3/etc/profile.d/conda.sh
+conda env create -f scripts/hpc/environment.yml   # includes cas-offinder
 conda activate pegrna-recoded
 pip install -e '.[recode,splice,importance,fullstructure,complex]'
-```
-
-## 2. Stage weights + reference data (login node, once)
-
-```bash
+# 1b. stage weights + reference genome (T2T-KOLF/GRCh38, SpliceAI, RiNALMo, RNAformer
+#     + its matching config .yml, Boltz cache, AFDB dir)
 export PEGRNA_DATA=$EPHEMERAL/pegrna-data
-bash scripts/hpc/stage_models.sh        # T2T-KOLF genome, SpliceAI, RiNALMo,
-                                         # RNAformer, Boltz cache, AFDB dir
+bash scripts/hpc/stage_models.sh
 ```
 
-Resolve every `TODO`/`WARN` the script prints (exact Zenodo asset names, RiNALMo
-SS-head checkpoint, RNAformer ckpt, GRCh38↔KOLF chain). They are pinned to
-`$PEGRNA_DATA/MANIFEST.txt` for run provenance.
+Resolve every `WARN` the staging script prints; pins go to `$PEGRNA_DATA/MANIFEST.txt`
+for run provenance. If a model fails to load, see
+[`docs/TROUBLESHOOTING.md`](../../docs/TROUBLESHOOTING.md).
 
 ## 3. Validate every real model (the gate)
 
 ```bash
-python scripts/hpc/smoke_models.py --data $PEGRNA_DATA
+# login-node CPU-capable gates (splice, importance, structure via RNAformer):
+python scripts/hpc/smoke_models.py --data $PEGRNA_DATA --only splice importance structure
+# all 5 gates on a GPU node (incl. RiNALMo + Boltz-2):
+qsub -v PEGRNA_DATA=$PEGRNA_DATA scripts/hpc/gpu_smoke.pbs   # target: 5/5
 ```
 
-Must report **5/5 passed**. This is where any mistake in the documented-API
-inference bodies surfaces (wrong tensor shape, wrong JSON key, wrong checkpoint
-path) — fix against the installed versions until green. `run_recoded_pipeline.pbs`
-re-runs this and aborts the job if it fails.
+`gpu_smoke.pbs` must report **5/5 passed**. This is where any mistake in the
+documented-API inference bodies surfaces (wrong tensor shape, JSON key, checkpoint
+path). `run_recoded_pipeline.pbs` re-runs the smoke and aborts the job if it fails.
 
-## 4. Build a design config
+## 4. Build a design config (or use the shipped CTCF example)
 
-JSON consumed by `pegrna design-recoded`:
+A complete, runnable example ships at
+[`examples/ctcf_cterm/config.json`](../../examples/ctcf_cterm/config.json) (CTCF
+C-terminal FLAG-P2A-ZeoR knock-in, real chr16+ locus). The config is a JSON of the
+design inputs; `_`-prefixed keys and provenance keys (`gene`, `transcript`,
+`uniprot_acc`) are routed into the report manifest:
 
 ```json
 {
@@ -80,7 +93,7 @@ JSON consumed by `pegrna design-recoded`:
 ## 5. Submit
 
 ```bash
-qsub -v CONFIG=/path/to/design_config.json,PEGRNA_DATA=$PEGRNA_DATA \
+qsub -v CONFIG=examples/ctcf_cterm/config.json,PEGRNA_DATA=$PEGRNA_DATA \
      scripts/hpc/run_recoded_pipeline.pbs
 ```
 

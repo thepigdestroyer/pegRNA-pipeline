@@ -6,31 +6,46 @@
 #PBS -j oe
 #
 # Full end-to-end recoded TJ-PE design run with ALL real gate models active.
-# Submit from a CX3 login node after staging:
+# Submit from a CX3 login node AFTER scripts/hpc/install.sh has staged weights:
 #
-#   export PEGRNA_DATA=$EPHEMERAL/pegrna-data
-#   bash scripts/hpc/stage_models.sh                 # once, on login node
-#   python scripts/hpc/smoke_models.py               # confirm every model runs
-#   qsub -v CONFIG=/path/to/design_config.json scripts/hpc/run_recoded_pipeline.pbs
+#   qsub -v PEGRNA_DATA=$EPHEMERAL/pegrna-data,CONFIG=examples/ctcf_cterm/config.json \
+#        scripts/hpc/run_recoded_pipeline.pbs
 #
-# Requires an Ampere+ GPU (RiNALMo FlashAttention; Boltz-2 AF3-class). The A100
-# request matches CX3's GPU nodes; adjust gpu_type to availability.
-set -euo pipefail
+# Requires an Ampere+ GPU (Boltz-2 AF3-class; RiNALMo FlashAttention, else the
+# structure gate falls back to RNAformer on CPU). Runs the 5/5 gate self-check
+# first and aborts if a gate is broken, so the design never trusts a dead gate.
+set -uo pipefail
 
-cd "${PBS_O_WORKDIR:-$PWD}"
-module load anaconda3/personal cuda/12.2 || true
-source activate pegrna-recoded
-
-: "${PEGRNA_DATA:?stage models first (scripts/hpc/stage_models.sh)}"
-: "${CONFIG:?pass -v CONFIG=/path/to/design_config.json}"
+cd "${PBS_O_WORKDIR:-$HOME/pegRNA-pipeline}"
+: "${PEGRNA_DATA:?stage models first (scripts/hpc/install.sh)}"
+: "${CONFIG:?pass -v CONFIG=/path/to/design_config.json (e.g. examples/ctcf_cterm/config.json)}"
 export BOLTZ_CACHE="${BOLTZ_CACHE:-$PEGRNA_DATA/boltz_cache}"
+MF="${CONDA_ROOT:-$HOME/miniforge3}"; ENV="${PEGRNA_ENV:-pegrna-recoded}"
+RUN() { "$MF/bin/mamba" run -n "$ENV" "$@"; }
+log() { echo "[$(date -u +%FT%TZ)] $*"; }
 OUT="${OUT:-results/recoded_$(date -u +%Y%m%dT%H%M%SZ)}"
 mkdir -p "$OUT"
 
-echo "[$(date -u +%FT%TZ)] gate self-check (every real model must pass before the run)"
-python scripts/hpc/smoke_models.py --data "$PEGRNA_DATA"
+log "GPU check"; nvidia-smi -L || log "WARN: no GPU visible"
+module load cuda/12.2 || log "WARN: no cuda module (flash-attn may fall back to RNAformer)"
+RUN pip install --quiet flash-attn --no-build-isolation \
+    || log "WARN: flash-attn unavailable — structure gate will use RNAformer (CPU)"
+[ -d "$PEGRNA_DATA/RiNALMo" ] && RUN pip install --quiet -e "$PEGRNA_DATA/RiNALMo" || true
 
-echo "[$(date -u +%FT%TZ)] running recoded TJ-PE design (mode=real) -> $OUT"
-pegrna design-recoded --config "$CONFIG" --mode real --output-dir "$OUT"
+export RINALMO_SS_WEIGHTS="$PEGRNA_DATA/rinalmo_weights/rinalmo_giga_ss_archiveII-23s_ft.pt"
+export RNAFORMER_CKPT="$PEGRNA_DATA/rnaformer_weights/RNAformer_32M_state_dict_biophysical.pth"
+export PEGRNA_GENOME="$PEGRNA_DATA/GRCh38.fa"
 
-echo "[$(date -u +%FT%TZ)] done. Report + manifest in $OUT"
+log "Gate self-check (every real model must pass before the run)"
+RINALMO_SS_WEIGHTS="$RINALMO_SS_WEIGHTS" RNAFORMER_CKPT="$RNAFORMER_CKPT" \
+    PEGRNA_GENOME="$PEGRNA_GENOME" BOLTZ_CACHE="$BOLTZ_CACHE" \
+    RUN python scripts/hpc/smoke_models.py --data "$PEGRNA_DATA" || {
+        log "ABORT: gate self-check failed; not running the design against a broken gate."; exit 1; }
+
+log "Running recoded TJ-PE design (mode=real) CONFIG=$CONFIG -> $OUT"
+RINALMO_SS_WEIGHTS="$RINALMO_SS_WEIGHTS" RNAFORMER_CKPT="$RNAFORMER_CKPT" \
+    PEGRNA_GENOME="$PEGRNA_GENOME" BOLTZ_CACHE="$BOLTZ_CACHE" \
+    RUN pegrna design-recoded --config "$CONFIG" --mode real --output-dir "$OUT"
+rc=$?
+log "design exit code: $rc (0=ok, 1=error/no-valid-pegrna). Report + manifest in $OUT"
+exit $rc

@@ -110,15 +110,47 @@ two directional T7 promoters for linear RNA amplification:
 e.g. `FLAG-GGGGS-T7-P2A-ZeoR` → T7 transcribes `P2A-ZeoR`; swap in `T7_rev` →
 transcribes `GGGGS-FLAG`.
 
-### Running it
+### Installation & running on the HPC (one command)
+
+Clone the repo on an **Imperial CX3 login node** (it needs internet to build the env
+and download weights), then run the installer:
 
 ```bash
-# Dry-run anywhere (full design logic, stand-in scorers, no GPU):
-pegrna design-recoded --config design_config.json --mode fake --output-dir results/dry
-
-# Real end-to-end with all gate models on Imperial CX3:
-#   see scripts/hpc/README.md  (env, model staging, smoke validation, PBS submit)
+git clone https://github.com/thepigdestroyer/pegRNA-pipeline && cd pegRNA-pipeline
+export PEGRNA_DATA=$EPHEMERAL/pegrna-data          # where weights/genome are staged
+bash scripts/hpc/install.sh                         # env + package + weights + login-node smoke
 ```
+
+`install.sh` is idempotent. It (1) creates the `pegrna-recoded` conda env from
+`scripts/hpc/environment.yml`, (2) `pip install -e '.[recode,splice,importance,fullstructure,complex]'`,
+(3) stages all model weights + the GRCh38 reference (`stage_models.sh`), and (4) runs
+the login-node gate smoke (SpliceAI, AlphaFold-importance, structure via RNAformer).
+
+Then submit the GPU jobs:
+
+```bash
+# All 5 gate models on a GPU node (target 5/5):
+qsub -v PEGRNA_DATA=$PEGRNA_DATA scripts/hpc/gpu_smoke.pbs
+
+# End-to-end recoded TJ-PE design with real gates (ships a real CTCF example):
+qsub -v PEGRNA_DATA=$PEGRNA_DATA,CONFIG=examples/ctcf_cterm/config.json \
+     scripts/hpc/run_recoded_pipeline.pbs
+```
+
+### Running a design (any machine, no GPU)
+
+```bash
+# Dry-run: full design logic with stand-in scorers (produces a real report):
+pegrna design-recoded --config examples/ctcf_cterm/config.json --mode fake --output-dir results/dry
+```
+
+The config is a JSON of the design inputs (`spacer`, `rtt_aa`, `cargo`, `genome`,
+`site_s`, `cds_mask`, `arm_side`, ...); keys starting with `_` or provenance keys
+(`gene`, `transcript`, `uniprot_acc`) are routed into the report manifest. See
+`examples/ctcf_cterm/config.json` for a complete, runnable CTCF C-terminal knock-in.
+
+Full install/usage/troubleshooting: [`scripts/hpc/README.md`](scripts/hpc/README.md)
+and [`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.md).
 
 ### Gate thresholds (literature-derived defaults)
 
@@ -140,6 +172,39 @@ override them, but they are rationally defensible out of the box:
 
 These are *rational priors*; final tuning still benefits from a wet-lab
 calibration set, but the pipeline no longer ships unjustified numbers.
+
+## Testing
+
+```bash
+pip install -e '.[dev]'
+ruff check src tests && black --check --line-length 100 src tests   # lint (CI gates on both)
+pytest -q                                                            # ~660 tests
+```
+
+The suite (≈660 tests, 29 skipped) is heavy-model-free — every real gate is a
+`Protocol` with an in-repo fake, so the whole design logic is exercised on CPU with
+no weights. Coverage by area:
+
+- **Design logic**: candidate enumeration, the ranked-pool-walk, INV-0, strand
+  convention (`simulate_tprt`), arm partition/recode, nick search.
+- **Gates (pure logic)**: PBS2 length-selection (`test_pbs2_selection.py`), splice
+  indel-delta, structure region-pairing, docking thresholds, off-target aggregation.
+- **Scorer adapters (fakes + fail-loud paths)**: `test_scorer_fixes.py`,
+  `test_complex_dock.py` (incl. the Boltz offline single-sequence YAML).
+- **End-to-end**: `test_ctcf_example.py` runs the shipped CTCF example config through
+  the driver in fake mode and asserts a report is produced.
+- **Real models**: validated separately on CX3 via `scripts/hpc/gpu_smoke.pbs`
+  (`smoke_models.py`), not in the unit suite.
+
+## Documentation map
+
+| Doc | What |
+|---|---|
+| [`docs/DESIGN_HISTORY.md`](docs/DESIGN_HISTORY.md) | **How it works + full decision/rationale history**: architecture, the gate stack, algorithm, genome model, every locked decision, adversarial-review fixes. |
+| [`docs/decisions/`](docs/decisions/) | ADRs (0001-0007) — the primary sources DESIGN_HISTORY synthesises. |
+| [`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.md) | Install/run failure modes on CX3 and their fixes. |
+| [`scripts/hpc/README.md`](scripts/hpc/README.md) | HPC runbook: install, staging, smoke, PBS submit. |
+| [`examples/ctcf_cterm/`](examples/ctcf_cterm/) | A complete, runnable CTCF C-terminal knock-in design config. |
 
 > **STATUS — design-logic layer is implemented and unit-tested; real model
 > execution runs only on GPU/HPC.** Each heavy gate (SpliceAI, AlphaFold,

@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+#PBS -N pegrna_gpu_smoke
+#PBS -l select=1:ncpus=8:mem=64gb:ngpus=1:gpu_type=A100
+#PBS -l walltime=02:00:00
+#PBS -o pegrna_gpu_smoke.log
+#PBS -j oe
+#
+# GPU-node smoke: run all 5 real gate models and confirm each returns sane output.
+# Submit from a CX3 login node AFTER scripts/hpc/install.sh has staged weights:
+#
+#   qsub -v PEGRNA_DATA=$EPHEMERAL/pegrna-data scripts/hpc/gpu_smoke.pbs
+#
+# Target: 5/5. The two CPU-capable gates (SpliceAI, AlphaFold-importance) and the
+# structure gate (RiNALMo on GPU, else RNAformer on CPU) plus Boltz-2 docking and
+# Cas-OFFinder off-target all run here. Boltz runs single-sequence (msa: empty), so
+# it does not need the (unreachable) MSA server on the offline compute node.
+set -uo pipefail
+
+cd "${PBS_O_WORKDIR:-$HOME/pegRNA-pipeline}"
+: "${PEGRNA_DATA:?set PEGRNA_DATA (e.g. \$EPHEMERAL/pegrna-data)}"
+export BOLTZ_CACHE="${BOLTZ_CACHE:-$PEGRNA_DATA/boltz_cache}"
+MF="${CONDA_ROOT:-$HOME/miniforge3}"; ENV="${PEGRNA_ENV:-pegrna-recoded}"
+RUN() { "$MF/bin/mamba" run -n "$ENV" "$@"; }
+log() { echo "[$(date -u +%FT%TZ)] $*"; }
+
+log "GPU check"; nvidia-smi -L || log "WARN: no GPU visible"
+module load cuda/12.2 || log "WARN: no cuda module (flash-attn may fall back to RNAformer)"
+
+# RiNALMo hard-imports flash_attn (GPU-only build). Try it; the AutoStructureScorer
+# transparently falls back to RNAformer (CPU) if it is unavailable.
+RUN pip install --quiet flash-attn --no-build-isolation \
+    || log "WARN: flash-attn unavailable — structure gate will use RNAformer (CPU)"
+[ -d "$PEGRNA_DATA/RiNALMo" ] && RUN pip install --quiet -e "$PEGRNA_DATA/RiNALMo" || true
+
+export RINALMO_SS_WEIGHTS="$PEGRNA_DATA/rinalmo_weights/rinalmo_giga_ss_archiveII-23s_ft.pt"
+export RNAFORMER_CKPT="$PEGRNA_DATA/rnaformer_weights/RNAformer_32M_state_dict_biophysical.pth"
+export PEGRNA_GENOME="$PEGRNA_DATA/GRCh38.fa"
+
+log "Run smoke validation (target 5/5)"
+RINALMO_SS_WEIGHTS="$RINALMO_SS_WEIGHTS" RNAFORMER_CKPT="$RNAFORMER_CKPT" \
+    PEGRNA_GENOME="$PEGRNA_GENOME" BOLTZ_CACHE="$BOLTZ_CACHE" \
+    RUN python scripts/hpc/smoke_models.py --data "$PEGRNA_DATA"
+rc=$?
+log "gpu smoke exit code: $rc (0 = all 5 gates passed)"
+exit $rc
