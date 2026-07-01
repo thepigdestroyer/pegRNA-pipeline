@@ -51,10 +51,20 @@ class Boltz2DockScorer:
         cache_dir: str | None = None,
         use_msa_server: bool = False,
         offline_single_sequence: bool = True,
+        use_kernels: bool = False,
         apo_scaffold: str | None = None,
     ) -> None:
         self.cache_dir = cache_dir
         self.use_msa_server = use_msa_server
+        # Boltz-2 (>=2.2) accelerates its triangular-multiplicative updates with the
+        # cuequivariance_torch CUDA kernels, which it hard-imports only when kernels
+        # are enabled. That package is not part of the base install and needs a
+        # matching CUDA toolchain, so by default we pass --no_kernels: Boltz then
+        # uses the pure-PyTorch path (slower, but portable and offline-safe). Without
+        # this the docking gate fails with "No module named 'cuequivariance_torch'"
+        # (the real GPU-smoke failure). Set use_kernels=True if the CUDA kernels are
+        # installed and you want the speed-up.
+        self.use_kernels = use_kernels
         # Boltz-2 requires an MSA per protein/RNA chain. On offline CX3 compute
         # nodes the MSA server is unreachable, so by default we run in
         # SINGLE-SEQUENCE mode (`msa: empty` per chain) — the documented offline
@@ -74,6 +84,22 @@ class Boltz2DockScorer:
             apo_scaffold = STANDARD_SGRNA_SCAFFOLD
         self.apo_scaffold = apo_scaffold
         self._apo_cache: dict = {}
+
+    def _build_predict_cmd(self, yaml_path: str, out_dir: str) -> list:
+        """Build the ``boltz predict`` command line for this scorer's settings.
+
+        Adds ``--cache`` (offline weights), ``--no_kernels`` (skip the
+        cuequivariance CUDA kernels unless ``use_kernels``), and ``--use_msa_server``
+        only when explicitly requested. Extracted for testability.
+        """
+        cmd = ["boltz", "predict", str(yaml_path), "--out_dir", str(out_dir)]
+        if self.cache_dir:
+            cmd += ["--cache", str(self.cache_dir)]
+        if not self.use_kernels:
+            cmd.append("--no_kernels")
+        if self.use_msa_server:
+            cmd.append("--use_msa_server")
+        return cmd
 
     @staticmethod
     def _build_complex_yaml(rna: str, protein: str, *, single_sequence: bool) -> str:
@@ -118,15 +144,7 @@ class Boltz2DockScorer:
             yaml_path.write_text(
                 self._build_complex_yaml(rna, protein, single_sequence=self.offline_single_sequence)
             )
-            cmd = ["boltz", "predict", str(yaml_path), "--out_dir", str(tmp_path)]
-            # Offline compute nodes (Imperial CX3) cannot download Boltz weights /
-            # CCD at run time — point --cache at the pre-staged cache so the run is
-            # self-contained. Without this, boltz can exit 0 having done nothing and
-            # emit no confidence JSON (the exact "no confidence JSON" smoke failure).
-            if self.cache_dir:
-                cmd += ["--cache", str(self.cache_dir)]
-            if self.use_msa_server:
-                cmd.append("--use_msa_server")
+            cmd = self._build_predict_cmd(str(yaml_path), str(tmp_path))
             proc = subprocess.run(cmd, check=False, capture_output=True, text=True)
             if proc.returncode != 0:
                 tail = (proc.stderr or proc.stdout or "").strip()[-800:]

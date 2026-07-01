@@ -72,3 +72,22 @@ def test_boltz_use_msa_server_disables_single_sequence():
     assert sc.offline_single_sequence is False
     y = sc._build_complex_yaml("ACGU", "MKTAYIAKQR", single_sequence=sc.offline_single_sequence)
     assert "msa: empty" not in y
+
+
+def test_boltz_cmd_defaults_to_no_kernels():
+    # Default: pass --no_kernels so Boltz uses pure-PyTorch (no cuequivariance_torch
+    # CUDA dependency). --cache is included when set.
+    from pegrna_pipeline.hpc.complex_dock import Boltz2DockScorer
+
+    sc = Boltz2DockScorer(cache_dir="/data/boltz_cache")
+    cmd = sc._build_predict_cmd("in.yaml", "/out")
+    assert "--no_kernels" in cmd
+    assert "--cache" in cmd and "/data/boltz_cache" in cmd
+    assert "--use_msa_server" not in cmd  # not unless requested
+
+
+def test_boltz_use_kernels_true_omits_no_kernels():
+    from pegrna_pipeline.hpc.complex_dock import Boltz2DockScorer
+
+    cmd = Boltz2DockScorer(use_kernels=True)._build_predict_cmd("in.yaml", "/out")
+    assert "--no_kernels" not in cmd
