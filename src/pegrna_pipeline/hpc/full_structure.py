@@ -22,6 +22,7 @@ __all__ = [
     "FullStructureFake",
     "RiNALMoScorer",
     "RNAformerScorer",
+    "AutoStructureScorer",
     "StructureScore",
     "functional_region_pairing",
     "region_accessibility",
@@ -248,3 +249,40 @@ class RNAformerScorer:
                 if p >= 0.5:
                     out[(i, j)] = p
         return out
+
+
+class AutoStructureScorer:
+    """Prefer RiNALMo (Ampere+ GPU + FlashAttention); fall back to RNAformer (CPU).
+
+    Both are REAL models — this is NOT a fake fallback, so it does not violate the
+    "no silent downgrade to fakes in real mode" rule. It exists because RiNALMo
+    hard-requires FlashAttention (an Ampere/Ada/Hopper + a compiled ``flash_attn``),
+    which is not available on every node; RNAformer runs on CPU from a staged
+    checkpoint. The first call selects the backend and sticks with it. If BOTH are
+    unavailable the underlying error propagates (fail-loud).
+    """
+
+    def __init__(
+        self,
+        *,
+        rinalmo_weights: str | None = None,
+        rnaformer_model_dir: str | None = None,
+        rnaformer_ckpt: str | None = None,
+        threshold: float = 0.5,
+    ) -> None:
+        self._rinalmo = RiNALMoScorer(weights=rinalmo_weights, threshold=threshold)
+        self._rnaformer = RNAformerScorer(model_dir=rnaformer_model_dir, ckpt=rnaformer_ckpt)
+        self._active: FullStructureScorer | None = None
+        self.backend_name: str | None = None
+
+    def pair_probs(self, seq: str) -> Dict[Tuple[int, int], float]:  # pragma: no cover - CX3
+        if self._active is not None:
+            return self._active.pair_probs(seq)
+        try:
+            out = self._rinalmo.pair_probs(seq)
+            self._active, self.backend_name = self._rinalmo, "rinalmo"
+            return out
+        except ImportError:
+            out = self._rnaformer.pair_probs(seq)  # let its own errors propagate (fail-loud)
+            self._active, self.backend_name = self._rnaformer, "rnaformer"
+            return out

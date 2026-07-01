@@ -66,26 +66,45 @@ def _real_bundle(
     *,
     uniprot_acc: str = "",
     cas9: str = "nCas9",  # noqa: ARG001 — documented contract; used by caller
+    genome: str | None = None,
+    pam: str = "NGG",
+    max_mismatches: int = 3,
+    boltz_cache: str | None = None,
+    rinalmo_weights: str | None = None,
+    rnaformer_model_dir: str | None = None,
+    **_ignored: Any,
 ) -> GateScorers:
     from pegrna_pipeline.hpc.complex_dock import Boltz2DockScorer
-    from pegrna_pipeline.hpc.full_structure import RiNALMoScorer
+    from pegrna_pipeline.hpc.full_structure import AutoStructureScorer
+    from pegrna_pipeline.hpc.offtarget_scorer import CasOffinderScorer
     from pegrna_pipeline.hpc.splice_screen import SpliceAIScorer
     from pegrna_pipeline.hpc.structure_importance import AFDBImportanceScorer
 
-    def _real_offtarget(protospacers: List[str]) -> Dict[str, Tuple[float, int, bool]]:
-        # Real off-target scoring runs Cas-OFFinder / the offtarget_scorer HPC job
-        # against the KOLF2.1J genome. Wired in the HPC follow-on; fail loud here.
-        raise RuntimeError(
-            "real off-target scoring requires the Cas-OFFinder / offtarget_scorer "
-            "HPC job against the KOLF2.1J genome (configure on CX3)"
+    if genome:
+        # Real genome-wide specificity via cas-offinder (+ KOLF2.1J FASTA on CX3).
+        offtarget: Callable[[List[str]], Dict[str, Tuple[float, int, bool]]] = CasOffinderScorer(
+            genome=genome, pam=pam, max_mismatches=max_mismatches
         )
+    else:
+
+        def offtarget(protospacers: List[str]) -> Dict[str, Tuple[float, int, bool]]:
+            # Fail loud (never silently pass): real off-target needs a genome.
+            raise RuntimeError(
+                "real off-target scoring requires genome= (cas-offinder + the "
+                "KOLF2.1J FASTA on CX3); pass genome=/path/to/genome.fa to make_scorers"
+            )
 
     return GateScorers(
         splice_scorer=SpliceAIScorer(),
-        full_structure_scorer=RiNALMoScorer(),
+        # RiNALMo (Ampere+ GPU) with a transparent RNAformer (CPU) fallback so the
+        # structure gate runs even without FlashAttention — both real models.
+        full_structure_scorer=AutoStructureScorer(
+            rinalmo_weights=rinalmo_weights, rnaformer_model_dir=rnaformer_model_dir
+        ),
         importance_scorer=AFDBImportanceScorer(uniprot_acc or "UNKNOWN"),
-        dock_scorer=Boltz2DockScorer(),
-        offtarget_scorer=_real_offtarget,
+        # --cache points Boltz at pre-staged weights (offline CX3 compute nodes).
+        dock_scorer=Boltz2DockScorer(cache_dir=boltz_cache),
+        offtarget_scorer=offtarget,
     )
 
 

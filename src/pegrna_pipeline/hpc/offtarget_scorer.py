@@ -74,6 +74,120 @@ def _fmt_int(value: Optional[int]) -> str:
     return "NA" if value is None else str(value)
 
 
+class CasOffinderScorer:
+    """Real genome-wide off-target specificity via the ``cas-offinder`` binary
+    (Bae et al. 2014, Bioinformatics 30:1473).
+
+    Callable matching :func:`nick_search.screen_nick_candidates`'s contract:
+    ``protospacers -> {protospacer: (ontarget_proxy, offtarget_count, has_offtarget)}``.
+    For each guide it enumerates all genomic sites within ``max_mismatches`` of
+    ``spacer + PAM`` and aggregates:
+
+      * ``offtarget_count`` = genomic hits BEYOND the single intended on-target
+        (i.e. every hit with mismatches>0, plus any extra exact hits),
+      * ``has_offtarget`` = ``offtarget_count > 0``,
+      * ``ontarget_proxy`` = 1.0 iff the guide has >=1 exact (0-mismatch) genomic
+        hit (it exists uniquely at its locus), else 0.0.
+
+    On-target ACTIVITY (DeepSpCas9/DeepHF) is deliberately NOT this adapter's job
+    — Cas-OFFinder scores SPECIFICITY only; layer ``score_guides.R`` for activity.
+    Requires the ``cas-offinder`` binary + a genome FASTA (or 2bit dir) on CX3;
+    raises loud if the binary is absent (never silently passes a guide).
+    """
+
+    def __init__(
+        self,
+        *,
+        genome: str,
+        pam: str = "NGG",
+        spacer_len: int = 20,
+        max_mismatches: int = 3,
+        device: str = "C",  # cas-offinder: C=CPU, G=GPU
+        binary: str = "cas-offinder",
+    ) -> None:
+        self.genome = genome
+        self.pam = pam.upper()
+        self.spacer_len = spacer_len
+        self.max_mismatches = max_mismatches
+        self.device = device
+        self.binary = binary
+
+    def _run(self, input_path: str, output_path: str) -> None:  # pragma: no cover - CX3 only
+        """Invoke cas-offinder. Overridden in tests to inject canned output."""
+        import shutil  # noqa: PLC0415
+        import subprocess  # noqa: PLC0415
+
+        if shutil.which(self.binary) is None:
+            raise ImportError(
+                f"CasOffinderScorer requires the {self.binary!r} binary + a genome; "
+                "install cas-offinder and stage the genome on CX3 (never silently skipped)."
+            )
+        proc = subprocess.run(
+            [self.binary, input_path, self.device, output_path],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        if proc.returncode != 0:
+            tail = (proc.stderr or proc.stdout or "").strip()[-800:]
+            raise RuntimeError(f"cas-offinder failed (rc={proc.returncode}):\n{tail}")
+
+    def _write_input(self, path: str, protospacers: Sequence[str]) -> None:
+        pam_ns = "N" * len(self.pam)
+        pattern = "N" * self.spacer_len + self.pam
+        lines = [self.genome, pattern]
+        for sp in protospacers:
+            lines.append(f"{sp}{pam_ns} {self.max_mismatches}")
+        with open(path, "w") as fh:
+            fh.write("\n".join(lines) + "\n")
+
+    def __call__(self, protospacers: List[str]) -> "dict[str, Tuple[float, int, bool]]":
+        results: dict = {sp: {"exact": 0, "total": 0} for sp in protospacers}
+        if not protospacers:
+            return {}
+        with tempfile.TemporaryDirectory() as tmp:
+            inp = os.path.join(tmp, "casin.txt")
+            outp = os.path.join(tmp, "casout.txt")
+            self._write_input(inp, protospacers)
+            self._run(inp, outp)
+            for row in self._parse_output(outp):
+                guide = row["guide"]
+                if guide not in results:
+                    continue
+                results[guide]["total"] += 1
+                if row["mismatches"] == 0:
+                    results[guide]["exact"] += 1
+        out: dict = {}
+        for sp, agg in results.items():
+            exact, total = agg["exact"], agg["total"]
+            offtargets = max(0, total - 1) if exact >= 1 else total
+            on = 1.0 if exact >= 1 else 0.0
+            out[sp] = (on, offtargets, offtargets > 0)
+        return out
+
+    def _parse_output(self, path: str):
+        """Yield {'guide', 'mismatches'} rows from a cas-offinder output file.
+
+        cas-offinder columns are whitespace/tab separated:
+        ``crRNA  Chrom  Position  MatchedSeq  Strand  Mismatches``. The crRNA is
+        the query (guide + PAM Ns); we strip the trailing PAM Ns to recover the
+        guide. Header lines / blanks are skipped.
+        """
+        pam_len = len(self.pam)
+        with open(path) as fh:
+            for line in fh:
+                parts = line.split()
+                if len(parts) < 6:
+                    continue
+                crrna = parts[0].upper()
+                try:
+                    mism = int(parts[-1])
+                except ValueError:
+                    continue  # header row
+                guide = crrna[: len(crrna) - pam_len] if pam_len else crrna
+                yield {"guide": guide, "mismatches": mism}
+
+
 def parse_offtarget_tsv(tsv_text: str) -> List[OffTargetReport]:
     """Parse the TSV emitted by ``score_guides.R`` into reports."""
     reader = csv.DictReader(io.StringIO(tsv_text), delimiter="\t")

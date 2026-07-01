@@ -46,8 +46,15 @@ def test_real_adapter_fails_loud_on_short_context():
         SpliceAIScorer().delta("ACGT" * 30, "ACGA" * 30)
 
 
-def test_real_adapter_rejects_length_mismatch():
+def test_real_adapter_handles_indel_length_mismatch():
+    # Indel edits (recoded-TJPE: the edited allele is longer/shorter than the
+    # reference by the cargo insert) are now handled via prefix/suffix alignment,
+    # NOT rejected. With adequate context but no weights, delta reaches the model
+    # import and fails loud there — it must NOT raise the old "length-matched"
+    # ValueError. (The indel-delta math itself is unit-tested with a stubbed
+    # _tracks in tests/test_scorer_fixes.py.)
     from pegrna_pipeline.hpc.splice_screen import SpliceAIScorer
 
-    with pytest.raises(ValueError, match="length-matched"):
-        SpliceAIScorer().delta("A" * 11000, "A" * 10999)
+    with pytest.raises((ImportError, RuntimeError)) as exc:
+        SpliceAIScorer().delta("A" * 11000, "A" * 11000 + "GGGG")  # 4-nt insert
+    assert "length-matched" not in str(exc.value)

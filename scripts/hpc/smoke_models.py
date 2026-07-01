@@ -77,11 +77,43 @@ def smoke_rnaformer():
     return (isinstance(pp, dict), f"{len(pp)} pairs >= 0.5")
 
 
-def smoke_boltz():
+def smoke_boltz(data):
     from pegrna_pipeline.hpc.complex_dock import Boltz2DockScorer
 
-    iptm = Boltz2DockScorer().interface_iptm(_RTT_RNA, "MKTAYIAKQR")
+    # Point --cache at the pre-staged Boltz weights so the offline compute node
+    # is self-contained (the fix for the "no confidence JSON" failure).
+    iptm = Boltz2DockScorer(cache_dir=f"{data}/boltz_cache").interface_iptm(_RTT_RNA, "MKTAYIAKQR")
     return (0.0 <= iptm <= 1.0, f"iptm={iptm:.3f}")
+
+
+def smoke_structure_auto(data):
+    """The REAL design-path structure gate: RiNALMo (Ampere+ GPU) with a
+    transparent RNAformer (CPU) fallback. Passes if EITHER backend runs, so a node
+    without FlashAttention still validates via RNAformer."""
+    import os
+
+    from pegrna_pipeline.hpc.full_structure import AutoStructureScorer
+
+    model_dir = os.path.dirname(os.environ.get("RNAFORMER_CKPT", "")) or f"{data}/rnaformer_weights"
+    sc = AutoStructureScorer(
+        rinalmo_weights=os.environ.get("RINALMO_SS_WEIGHTS"), rnaformer_model_dir=model_dir
+    )
+    pp = sc.pair_probs(_SEQ)
+    return (isinstance(pp, dict), f"{len(pp)} pairs via backend={sc.backend_name}")
+
+
+def smoke_casoffinder(data):
+    import os
+
+    from pegrna_pipeline.hpc.offtarget_scorer import CasOffinderScorer
+
+    genome = os.environ.get("PEGRNA_GENOME") or f"{data}/GRCh38.fa"
+    if not os.path.exists(genome):
+        return (False, f"genome not found at {genome} (set PEGRNA_GENOME or stage GRCh38.fa)")
+    sc = CasOffinderScorer(genome=genome, max_mismatches=2)
+    res = sc(["GACGTTGACGATCGATCGAT"])  # arbitrary 20-mer; verifies the tool runs+parses
+    on, off, _has = next(iter(res.values()))
+    return (isinstance(res, dict) and len(res) == 1, f"ran; ontarget={on} offtargets={off}")
 
 
 def main(argv=None):
@@ -95,22 +127,32 @@ def main(argv=None):
     )
     args = ap.parse_args(argv)
 
+    # Default smoke = the 5 gates a real design run actually uses (structure via
+    # the auto RiNALMo->RNAformer path). RiNALMo/RNAformer are individually
+    # addressable via --only for debugging a specific backend.
     checks = {
         "splice (SpliceAI)": smoke_splice,
         "importance (AlphaFold/biotite)": lambda: smoke_importance(args.data),
+        "structure (auto RiNALMo->RNAformer)": lambda: smoke_structure_auto(args.data),
+        "docking (Boltz-2)": lambda: smoke_boltz(args.data),
+        "offtarget (Cas-OFFinder)": lambda: smoke_casoffinder(args.data),
+    }
+    debug_checks = {
         "full_structure (RiNALMo)": smoke_rinalmo,
         "full_structure (RNAformer)": smoke_rnaformer,
-        "docking (Boltz-2)": smoke_boltz,
     }
     keys = {
         "splice": "splice (SpliceAI)",
         "importance": "importance (AlphaFold/biotite)",
+        "structure": "structure (auto RiNALMo->RNAformer)",
+        "boltz": "docking (Boltz-2)",
+        "offtarget": "offtarget (Cas-OFFinder)",
         "rinalmo": "full_structure (RiNALMo)",
         "rnaformer": "full_structure (RNAformer)",
-        "boltz": "docking (Boltz-2)",
     }
+    all_checks = {**checks, **debug_checks}
     selected = [keys[k] for k in args.only] if args.only else list(checks)
-    results = [_check(name, checks[name]) for name in selected]
+    results = [_check(name, all_checks[name]) for name in selected]
     n_ok = sum(results)
     print(f"\n{n_ok}/{len(results)} gate models passed smoke validation")
     return 0 if all(results) else 1

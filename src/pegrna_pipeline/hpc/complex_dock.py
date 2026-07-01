@@ -100,12 +100,34 @@ class Boltz2DockScorer:
             seqs.append(f"  - protein:\n      id: C\n      sequence: {protein}")
             yaml_path.write_text("version: 1\nsequences:\n" + "\n".join(seqs) + "\n")
             cmd = ["boltz", "predict", str(yaml_path), "--out_dir", str(tmp_path)]
+            # Offline compute nodes (Imperial CX3) cannot download Boltz weights /
+            # CCD at run time — point --cache at the pre-staged cache so the run is
+            # self-contained. Without this, boltz can exit 0 having done nothing and
+            # emit no confidence JSON (the exact "no confidence JSON" smoke failure).
+            if self.cache_dir:
+                cmd += ["--cache", str(self.cache_dir)]
             if self.use_msa_server:
                 cmd.append("--use_msa_server")
-            subprocess.run(cmd, check=True, capture_output=True)
-            conf_files = list(tmp_path.rglob("confidence_*.json"))
+            proc = subprocess.run(cmd, check=False, capture_output=True, text=True)
+            if proc.returncode != 0:
+                tail = (proc.stderr or proc.stdout or "").strip()[-800:]
+                raise RuntimeError(
+                    f"boltz predict failed (rc={proc.returncode}). "
+                    f"cache={self.cache_dir!r}. stderr/stdout tail:\n{tail}"
+                )
+            # Boltz writes to <out_dir>/boltz_results_<stem>/predictions/<stem>/;
+            # search broadly for the confidence JSON (name varies by version).
+            conf_files = sorted(tmp_path.rglob("confidence_*.json")) or sorted(
+                tmp_path.rglob("*confidence*.json")
+            )
             if not conf_files:
-                raise RuntimeError("Boltz produced no confidence JSON")
+                produced = [str(p.relative_to(tmp_path)) for p in tmp_path.rglob("*")][:40]
+                tail = (proc.stderr or proc.stdout or "").strip()[-500:]
+                raise RuntimeError(
+                    "Boltz produced no confidence JSON. "
+                    f"cache={self.cache_dir!r}; files under out_dir: {produced}; "
+                    f"boltz output tail:\n{tail}"
+                )
             data = json.loads(conf_files[0].read_text())
             # Prefer the chain-pair ipTM for the RNA<->protein interface; fall
             # back to the global complex ipTM. (Key names: confirm on CX3.)

@@ -87,39 +87,77 @@ class SpliceAIScorer:
         mean = np.mean(preds, axis=0)[0]
         return mean[:, 1], mean[:, 2]  # acceptor, donor probability tracks
 
-    def delta(self, ref_seq: str, alt_seq: str) -> float:  # pragma: no cover - CX3 only
-        """Max |Δ| across acceptor/donor tracks between REF and ALT.
+    @staticmethod
+    def _common_prefix(a: str, b: str) -> int:
+        n = min(len(a), len(b))
+        i = 0
+        while i < n and a[i] == b[i]:
+            i += 1
+        return i
 
-        Faithful to the SpliceAI delta-score definition (max of acceptor/donor
-        gain & loss). Requires ref/alt windows padded with >=5 kb genomic context
-        each side (the model's receptive field) — the caller supplies the genomic
-        window via genome_context.to_grch38. VALIDATE ON CX3: confirm context
-        length + that ref/alt are length-matched before a production run.
+    @staticmethod
+    def _common_suffix(a: str, b: str, cap: int) -> int:
+        n = min(len(a), len(b), cap)
+        i = 0
+        while i < n and a[len(a) - 1 - i] == b[len(b) - 1 - i]:
+            i += 1
+        return i
+
+    def delta(self, ref_seq: str, alt_seq: str) -> float:  # pragma: no cover - CX3 only
+        """Max |Δ splice score| between REF and ALT, indel-aware.
+
+        Faithful to the SpliceAI delta-score definition (acceptor/donor gain &
+        loss). For an equal-length (SNV/MNV) edit this is the position-wise max
+        |Δ|. For an INDEL (the recoded-TJPE common case — the ``edited`` allele is
+        longer than ``reference`` by the cargo insert), REF/ALT differ in length,
+        so a naive position-wise diff mis-aligns every base downstream of the
+        variant. Instead we align on the common prefix/suffix and score:
+
+          * perturbation of existing sites in the aligned flanks (|Δ| there), and
+          * a splice-site GAIN = strongest predicted site inside the ALT variant
+            region, and a LOSS = strongest site inside the REF variant region.
+
+        This mirrors SpliceAI-lookup's indel handling. FAIL-LOUD on inadequate
+        context (a safety gate must never silently return Δ=0 because the window
+        was too short). The caller supplies the genomic window (>=``context`` nt
+        each side of the edit) via genome_context; VALIDATE ON CX3.
         """
         import numpy as np  # noqa: PLC0415
 
-        # FAIL-LOUD, not fail-open: a safety gate must never return Δ=0 (pass)
-        # because the windows were too short or mismatched. SpliceAI needs the
-        # genomic context with >=5 kb flanks each side (the model receptive
-        # field), and REF/ALT must be length-matched for the position-wise delta.
-        if len(ref_seq) != len(alt_seq):
-            raise ValueError(
-                "SpliceAIScorer.delta requires length-matched REF/ALT windows "
-                f"(got {len(ref_seq)} vs {len(alt_seq)}); align around the variant"
-            )
-        if len(ref_seq) < 2 * self._context:
+        if len(ref_seq) < 2 * self._context or len(alt_seq) < 2 * self._context:
             raise ValueError(
                 f"SpliceAIScorer.delta requires >= {2 * self._context} nt of context "
-                f"(>= {self._context} each side); got {len(ref_seq)} nt"
+                f"(>= {self._context} each side); got ref={len(ref_seq)} alt={len(alt_seq)} nt"
             )
         a_ref, d_ref = self._tracks(ref_seq)
         a_alt, d_alt = self._tracks(alt_seq)
-        n = min(len(a_ref), len(a_alt))
-        if n == 0:
+        if len(a_ref) == 0 or len(a_alt) == 0:
             raise ValueError("SpliceAIScorer produced empty score tracks (context too short)")
-        da = np.abs(a_alt[:n] - a_ref[:n]).max()
-        dd = np.abs(d_alt[:n] - d_ref[:n]).max()
-        return float(max(da, dd))
+
+        if len(ref_seq) == len(alt_seq):
+            n = min(len(a_ref), len(a_alt))
+            da = np.abs(a_alt[:n] - a_ref[:n]).max()
+            dd = np.abs(d_alt[:n] - d_ref[:n]).max()
+            return float(max(da, dd))
+
+        # --- indel: align on common prefix/suffix, then gain/loss in the middle ---
+        lr, la = len(ref_seq), len(alt_seq)
+        p = self._common_prefix(ref_seq, alt_seq)
+        s = self._common_suffix(ref_seq, alt_seq, cap=min(lr, la) - p)
+        deltas = [0.0]
+        if p > 0:  # aligned prefix flank
+            deltas.append(float(np.abs(a_alt[:p] - a_ref[:p]).max()))
+            deltas.append(float(np.abs(d_alt[:p] - d_ref[:p]).max()))
+        if s > 0:  # aligned suffix flank (tail-aligned; both length s)
+            deltas.append(float(np.abs(a_alt[la - s :] - a_ref[lr - s :]).max()))
+            deltas.append(float(np.abs(d_alt[la - s :] - d_ref[lr - s :]).max()))
+        if lr - s > p:  # REF variant region -> LOSS (strongest site removed)
+            deltas.append(float(a_ref[p : lr - s].max()))
+            deltas.append(float(d_ref[p : lr - s].max()))
+        if la - s > p:  # ALT variant region -> GAIN (strongest site created)
+            deltas.append(float(a_alt[p : la - s].max()))
+            deltas.append(float(d_alt[p : la - s].max()))
+        return float(max(deltas))
 
 
 def passes_splice_gate(
