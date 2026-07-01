@@ -68,8 +68,14 @@ if [ ! -d "$PEGRNA_DATA/RNAformer" ]; then
 fi
 mkdir -p "$PEGRNA_DATA/rnaformer_weights"
 RF=https://ml.informatik.uni-freiburg.de/research-artifacts/RNAformer/models
+# BOTH the state_dict AND its matching config .yml are required: RiboFormer is
+# built from the config's dims and load_state_dict is strict=True, so a mismatched
+# / missing config fails (CX3 smoke: 'NoneType has no attribute items' from the
+# template default_config.yaml). Names pair as _state_dict_X.pth <-> _config_X.yml.
 for w in RNAformer_32M_state_dict_biophysical.pth \
-         RNAformer_32M_state_dict_inter_family_finetuned.pth; do
+         RNAformer_32M_config_biophysical.yml \
+         RNAformer_32M_state_dict_inter_family_finetuned.pth \
+         RNAformer_32M_config_inter_family_finetuned.yml; do
   [ -f "$PEGRNA_DATA/rnaformer_weights/$w" ] || { log "Fetching $w"; \
     wget -q -O "$PEGRNA_DATA/rnaformer_weights/$w" "$RF/$w"; }
 done

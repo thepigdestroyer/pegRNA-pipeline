@@ -197,28 +197,43 @@ class RNAformerScorer:
         self.config_file = config_file
         self._model = None
 
-    def _resolve_config(self, rnaformer_pkg) -> str:  # pragma: no cover - CX3 only
-        """Locate the RNAformer config YAML (RiboFormer is built from its
-        ``.RNAformer`` sub-config). Precedence: explicit config_file -> env
-        RNAFORMER_CONFIG -> ``<repo>/config/default_config.yaml`` next to the
-        installed package -> a ``*.yaml`` in model_dir."""
+    def _resolve_config(self, rnaformer_pkg, ckpt: str) -> str:  # pragma: no cover - CX3
+        """Locate the RNAformer config YAML that MATCHES ``ckpt`` (RiboFormer is
+        built from its ``.RNAformer`` sub-config, whose dims must match the state
+        dict for ``strict=True``). Precedence:
+
+        1. explicit ``config_file`` / ``RNAFORMER_CONFIG`` env;
+        2. the ckpt-paired config by the upstream naming convention
+           (``..._state_dict_X.pth`` <-> ``..._config_X.yml``) — the correct one;
+        3. a ``*.yml``/``*.yaml`` in model_dir;
+        4. ``<repo>/config/default_config.yaml`` (last resort; it is a template and
+           may be incomplete).
+        """
         import glob
         import os
 
         cand = self.config_file or os.environ.get("RNAFORMER_CONFIG")
         if cand and os.path.exists(cand):
             return cand
+        # ckpt-paired: RNAformer_32M_state_dict_biophysical.pth -> _config_biophysical.yml
+        for ext in (".yml", ".yaml"):
+            paired = ckpt.replace("state_dict", "config")
+            paired = paired[:-4] + ext if paired.endswith((".pth", ".ckpt")) else paired
+            if os.path.exists(paired):
+                return paired
+        search_dir = self.model_dir or os.path.dirname(ckpt) or "."
+        ys = sorted(glob.glob(os.path.join(search_dir, "*.yml"))) + sorted(
+            glob.glob(os.path.join(search_dir, "*.yaml"))
+        )
+        if ys:
+            return ys[0]
         pkg_dir = os.path.dirname(rnaformer_pkg.__file__)
         repo_cfg = os.path.join(os.path.dirname(pkg_dir), "config", "default_config.yaml")
         if os.path.exists(repo_cfg):
             return repo_cfg
-        if self.model_dir:
-            ys = sorted(glob.glob(os.path.join(self.model_dir, "*.yaml")))
-            if ys:
-                return ys[0]
         raise FileNotFoundError(
             "RNAformer config YAML not found; set RNAFORMER_CONFIG or pass config_file= "
-            "(e.g. <RNAformer repo>/config/default_config.yaml)"
+            "(the config that MATCHES the checkpoint, e.g. RNAformer_32M_config_biophysical.yml)"
         )
 
     def _load(self):  # pragma: no cover - exercised only with rnaformer installed
@@ -255,7 +270,7 @@ class RNAformerScorer:
         # Real RNAformer API (verified against infer_RNAformer.py): build the model
         # from the config YAML's `.RNAformer` sub-config, then load the RAW state
         # dict (the .pth IS the state_dict, not a {'state_dict': ...} wrapper).
-        config = Config(config_file=self._resolve_config(RNAformer))
+        config = Config(config_file=self._resolve_config(RNAformer, ckpt))
         model = RiboFormer(config.RNAformer)
         state_dict = torch.load(ckpt, map_location="cpu")
         model.load_state_dict(state_dict, strict=True)
