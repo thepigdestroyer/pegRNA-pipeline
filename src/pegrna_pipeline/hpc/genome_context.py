@@ -5,9 +5,14 @@ KOLF2.1J assembly** as the source of truth for all emitted/avoided sequence, on
 **both haplotypes**, and maps each locus to GRCh38 only to feed the
 GRCh38-trained gates (SpliceAI/Pangolin, AlphaFold-DB).
 
-The real fetch (T2T-KOLF diploid FASTA + per-haplotype annotations + a
-KOLF<->GRCh38 chain) is a separate follow-on plan; this module defines the
-diploid-aware type, the mRNA<->genomic and KOLF<->GRCh38 conversions, and the
+The diploid is materialised **coordinate-safely** (scope A, ADR 0007): the pipeline
+stays in GRCh38 coordinates and applies KOLF2.1J phased substitutions per haplotype
+(``genome_ingest`` + ``variant_apply``), so ``to_grch38`` remains a valid identity and
+the GRCh38-trained gates are unaffected. Making the KOLF assembly FASTA
+(GCA_058280895.1 / GCA_058280805.1) the *truth* genome -- with a validated
+KOLF<->GRCh38 chain, GENCODE->KOLF annotation projection, and indel-accurate
+per-haplotype coordinates -- is the separate follow-on "scope B". This module defines
+the diploid-aware type, the mRNA<->genomic and KOLF<->GRCh38 conversions, and the
 fail-loud guard that forbids any recoding/splice work when context is absent.
 """
 
