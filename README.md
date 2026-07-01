@@ -99,15 +99,28 @@ reconstructs the integrated **sense** allele from the designed extension and
 fails loudly on any wrong operation (its tests prove it rejects plain
 `complement` and plain `reverse`).
 
-### Insertable cargo elements: T7 / T7-rev
+### Insertable cargo elements: T7-G / rcT7-G (frame-safe T7 promoters)
 
 `insert_elements.assemble_insert` builds the cargo from named segments, including
-two directional T7 promoters for linear RNA amplification:
+two directional, frame-safe T7 promoters for linear RNA amplification:
 
-- `T7` (`TAATACGACTCACTATAGGG`) transcribes the segments **downstream** (3′).
-- `T7_rev` (reverse complement) transcribes the segments **upstream** (5′).
+- `T7-G` (`TAATACGACTCACTATAGGGG`, 21 nt) transcribes the segments **downstream** (3′).
+- `rcT7-G` (`CCCCTATAGTGAGTCGTATTA`, 21 nt) transcribes the segments **upstream** (5′).
 
-e.g. `FLAG-GGGGS-T7-P2A-ZeoR` → T7 transcribes `P2A-ZeoR`; swap in `T7_rev` →
+Two correctness points are baked in:
+- **Reverse orientation is the reverse *complement* of the promoter**, not the
+  reverse. Inserting `rcT7-G` puts the functional promoter 5′→3′ on the *non-targeted*
+  strand, preserving its directionality. (Reversing the letters would place it 3′→5′
+  and break it.)
+- **Frame-safe with a guanine start.** T7 RNA polymerase initiates at a **G** and the
+  start is G-rich (consensus `TAATACGACTCACTATAGGGAGA`, transcription begins at the
+  first G; Rong et al. 1998 *PNAS* 95:515). The element is the coding strand, so the
+  initiator is G there. The 20-nt core isn't a multiple of 3, so mid-cargo it would
+  frameshift the downstream CDS (e.g. ZeoR); we append the minimum **G** bases (one
+  for the 20-mer → 21 nt) to fix the frame while keeping the start G-rich. (C would be
+  wrong — cytosines on the coding strand are not the initiator.)
+
+e.g. `FLAG-GGGGS-T7-G-P2A-ZeoR` → `T7-G` transcribes `P2A-ZeoR`; swap in `rcT7-G` →
 transcribes `GGGGS-FLAG`.
 
 ### Installation & running on the HPC (one command)
