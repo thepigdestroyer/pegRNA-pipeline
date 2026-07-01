@@ -71,11 +71,23 @@ class HPCLauncher:
 
     # ---------------------------------------------------------- helpers
     def _build_ssh(self):
-        """Build an SSH client per ``self.config`` and the injected factory."""
+        """Build an SSH client per ``self.config`` and the injected factory.
+
+        When ``config['jump_host']`` is set, ProxyJump kwargs are passed through
+        so :class:`SSHClient` tunnels the CX3 connection through the jump host
+        (ECDSA key + opkssh certificate); see ``SSHClient`` for the mechanism.
+        Absent ``jump_host``, the direct connection is used (unchanged default).
+        """
+        kwargs: Dict[str, Any] = {}
+        if self.config.get("jump_host"):
+            kwargs["jump_host"] = self.config["jump_host"]
+            kwargs["jump_username"] = self.config.get("jump_username", self.config["username"])
+            kwargs["jump_key_path"] = self.config.get("jump_key_path", "~/.ssh/id_ecdsa")
         return self.ssh_factory(
             hostname=self.config["hostname"],
             username=self.config["username"],
             password_provider=self.password_provider,
+            **kwargs,
         )
 
     def _fetch_gene_record_on_login(self, ssh, gene: str) -> GeneRecord:
@@ -117,10 +129,30 @@ class HPCLauncher:
         self._write_and_upload(ssh, yaml.safe_dump(payload, sort_keys=False), remote_path, ".yaml")
 
     def _qsub_driver(self, ssh, remote_run_dir: str) -> str:
-        """qsub the wrapper with -v RUN_DIR=... and return the scheduler id."""
+        """qsub the wrapper with -v RUN_DIR=... and return the scheduler id.
+
+        The driver is a long-lived *orchestrator*: it submits PRIDICT child
+        jobs (12h walltime each — see ``submit_pridict_batches``) and then
+        sits polling them. It therefore needs an explicit walltime that
+        OUTLIVES its children; otherwise it inherits the PBS site default
+        (1h on Imperial CX3) and is killed mid-run before parsing results /
+        writing reports (regression run CTCF_tjpe_71ec3282: Exit_status -29,
+        ``walltime 3647 exceeded limit 3600``). The driver itself is almost
+        entirely idle (it only polls), so 1 cpu / small mem is plenty — the
+        long walltime is the only resource that matters. All three are
+        config-overridable.
+        """
         repo_dir = self.config.get("repo_dir", "~/pegRNA-pipeline")
         wrapper = f"{repo_dir}/scripts/driver_pbs_wrapper.sh"
-        out, err, rc = ssh.exec(f"/opt/pbs/bin/qsub -v RUN_DIR={remote_run_dir} {wrapper}")
+        walltime_hours = int(self.config.get("driver_walltime_hours", 16))
+        ncpus = int(self.config.get("driver_ncpus", 1))
+        mem_gb = int(self.config.get("driver_mem_gb", 4))
+        select = f"select=1:ncpus={ncpus}:mem={mem_gb}gb"
+        walltime = f"walltime={walltime_hours:02d}:00:00"
+        qsub = self.config.get("qsub_path", "/opt/pbs/bin/qsub")
+        out, err, rc = ssh.exec(
+            f"{qsub} -l {select} -l {walltime} " f"-v RUN_DIR={remote_run_dir} {wrapper}"
+        )
         if rc != 0:
             raise RuntimeError(f"qsub failed: rc={rc} err={err!r}")
         sid = out.strip().split()[0] if out.strip() else ""

@@ -10,3 +10,7 @@ dist/
 build/
 .env
 .ruff_cache/
+
+# Pipeline run outputs (per-run design artifacts, reports, logs) — not source.
+results/
+*.log

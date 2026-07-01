@@ -32,6 +32,11 @@ from pegrna_pipeline.hpc.pridict_parser import (
     parse_ngrna_csv,
     parse_pegrna_csv,
 )
+from pegrna_pipeline.hpc.scarless import (
+    assert_inv0,
+    build_restored_segment,
+    predict_edited_allele,
+)
 
 OPPOSITE_STRAND = {"Fw": "Rv", "Rv": "Fw"}
 
@@ -134,6 +139,28 @@ def select_tjpe_ngrna(
     return max(survivors, key=lambda c: c.deepcas9_score)
 
 
+# ------------------------------------------------- scarless helpers (Tasks 6/7)
+
+
+def require_b_at_s(*, distance_to_edit: int, pegrna_strand: str) -> bool:
+    """Scarless strand rule: a reverse-strand pegRNA requires the nicking-sgRNA
+    nick to fall **exactly at the edit site S** (signed ``distance_to_edit == 0``)
+    so no endogenous base is lost. For a forward-strand pegRNA this constraint
+    does not apply (returns ``True``).
+    """
+    if pegrna_strand == "Rv":
+        return distance_to_edit == 0
+    if pegrna_strand == "Fw":
+        return True
+    raise ValueError(f"pegrna_strand must be 'Fw'/'Rv'; got {pegrna_strand!r}")
+
+
+def combine_two_end_scores(*, insert_score: float, pbs2_score: float) -> float:
+    """Bottleneck combination of the two-end PRIDICT decomposition: a design is
+    only as good as its weaker end (insert/initiation vs PBS2/second-strand)."""
+    return min(float(insert_score), float(pbs2_score))
+
+
 # ------------------------------------------------------------------ T8
 
 
@@ -194,27 +221,98 @@ def assemble_tj_pegrna(
     insert_dna: str,
     pbs1: str,
     rc_pbs2: str,
+    restored_segment: str = "",
     scaffold: str = STANDARD_SGRNA_SCAFFOLD,
 ) -> str:
     """Return the full TJ-PE pegRNA DNA string.
 
-    Layout (5' -> 3'):
+    Current layout (5' -> 3'):
 
-        spacer + scaffold + insert_dna + pbs1 + rc_pbs2
+        spacer + scaffold + insert_dna + restored_segment + pbs1 + rc_pbs2
 
-    All four sequence components (plus the scaffold) must be non-empty
+    .. note:: AUTHORITATIVE tjPE pegRNA STRUCTURE (locked 2026-06-18, B1).
+       The recoded-redesign target order is::
+
+           Spacer · Scaffold · PBS2 · RTT(Insert + Deletion-Replacement-Arm) · PBS1 · PolyU(2-3 U)
+
+       i.e. **PBS2 occupies the Homology-Arm slot** (HA is *replaced* by PBS2 in
+       tjPE) immediately 3' of the scaffold and 5' of the RTT; PBS1 is INTERNAL;
+       the construct ends in a **PolyU (2-3 U) tail that binds the La protein of
+       the PE7 editor**. Mechanism: PBS1 (3'-proximal) primes first-strand
+       synthesis; the RT copies the RTT; PBS2 (5' of the extension) is copied
+       last and becomes the 3' jumping end for the template jump. This function
+       is rewritten to that signature in
+       ``docs/superpowers/plans/2026-06-18-recoded-tjpe-pegrna-redesign.md``
+       Task 11b. The historical 3'-terminal ``rc_pbs2`` arg below predates that
+       decision; the PBS2-slot literal-vs-reverse-complement convention is
+       asserted against the predicted product in the recoded workflow (Task 13).
+
+    The optional ``restored_segment`` carries the re-templated A→B genomic span
+    used by the **scarless** mode (zero endogenous deletion); when empty the
+    layout is the standard deleting tjPE construct, so existing callers are
+    unaffected. All non-empty sequence components (plus the scaffold) must be
     uppercase ACGT. Any lowercase letter, ``U``, or ambiguity code raises
     :class:`ValueError`.
     """
-    for label, value in (
+    checks = [
         ("spacer", spacer),
         ("insert_dna", insert_dna),
         ("pbs1", pbs1),
         ("rc_pbs2", rc_pbs2),
         ("scaffold", scaffold),
+    ]
+    if restored_segment:
+        checks.append(("restored_segment", restored_segment))
+    for label, value in checks:
+        _check_acgt(label, value)
+    return spacer + scaffold + insert_dna + restored_segment + pbs1 + rc_pbs2
+
+
+def assemble_tj_pegrna_v2(
+    *,
+    spacer: str,
+    pbs2: str,
+    rtt: str,
+    pbs1: str,
+    polyu: str = "UUU",
+    scaffold: str = STANDARD_SGRNA_SCAFFOLD,
+) -> str:
+    """Assemble the full tjPE pegRNA in the AUTHORITATIVE 5'->3' order (decision 0).
+
+    Layout::
+
+        spacer + scaffold + PBS2 + RTT + PBS1 + PolyU
+
+    * ``pbs2`` occupies the Homology-Arm slot (HA is REPLACED by PBS2 in tjPE),
+      immediately 3' of the scaffold and 5' of the RTT. Its RT copy becomes the
+      3' jumping end that hybridises to the second nick (template jump).
+    * ``rtt`` = insert + deletion-replacement-arm (recoded; passed pre-assembled).
+    * ``pbs1`` primes first-strand synthesis; it is INTERNAL (5' of PolyU).
+    * ``polyu`` = 2-3 uridines, the 3' free tail bound by the La protein of the
+      PE7 editor. Only ``U`` permitted.
+
+    DNA components (spacer/pbs2/rtt/pbs1/scaffold) must be uppercase ACGT; the
+    PolyU tail must be 2-3 ``U``. This is a SEPARATE function from the legacy
+    :func:`assemble_tj_pegrna` so the old scarless workflow + its tests are
+    unaffected (see Task 11b deviation note).
+
+    .. note:: The ``pbs2`` orientation (literal vs reverse-complement) at this 5'
+       slot is asserted against the predicted product by the recoded workflow
+       (Task 13), not here.
+    """
+    for label, value in (
+        ("spacer", spacer),
+        ("scaffold", scaffold),
+        ("pbs2", pbs2),
+        ("rtt", rtt),
+        ("pbs1", pbs1),
     ):
         _check_acgt(label, value)
-    return spacer + scaffold + insert_dna + pbs1 + rc_pbs2
+    if not polyu or set(polyu.upper()) - {"U"}:
+        raise ValueError(f"polyu must be 2-3 uridines (U only); got {polyu!r}")
+    if not (2 <= len(polyu) <= 3):
+        raise ValueError(f"polyu length must be 2-3; got {len(polyu)}")
+    return spacer + scaffold + pbs2 + rtt + pbs1 + polyu
 
 
 # ------------------------------------------------------------------ T10
@@ -249,6 +347,27 @@ class TJPEResult:
     # / 100. Reported for transparency; NOT used for ranking.
     joint_pe3_score: float = 0.0
     all_evaluated_variants: List[VariantScore] = field(default_factory=list)
+    # ---- scarless mode fields (defaults keep back-compat for deleting tjPE) ----
+    scarless: bool = False
+    restored_segment: str = ""
+    silent_pam_edit: Optional[dict] = None
+    predicted_edited_allele: str = ""
+    deletion_size: int = 0
+    insert_end_score: float = 0.0
+    pbs2_end_score: float = 0.0
+    combined_score: float = 0.0
+    microhomology_flag: bool = False
+    recut_flag: bool = False
+    structure_norm_mfe: float = 0.0
+    warnings: List[str] = field(default_factory=list)
+
+
+class ScarlessNoValidDesign(RuntimeError):
+    """Raised when scarless mode finds no candidate passing all hard gates.
+
+    Per the adversarial-review risk register (R4), scarless mode must **fail
+    loudly with a reason** rather than silently return an empty/garbage design.
+    """
 
 
 def _load_variants_from_fixtures(fixtures_dir: Path) -> List[VariantScore]:
@@ -292,6 +411,7 @@ def run_tjpe_workflow(
     ngrna_distance_max: int = 100,
     pbs2_length: int = 17,
     score_cell_line: str = DEFAULT_SCORE_CELL_LINE,
+    scarless: bool = False,
 ) -> TJPEResult:
     """Run the TJ-PE workflow end-to-end for one gene + insertion.
 
@@ -332,6 +452,11 @@ def run_tjpe_workflow(
     edit_position_in_mrna = gene.stop_codon_start
 
     if winning is None or best_peg is None:
+        if scarless:
+            raise ScarlessNoValidDesign(
+                f"no valid scarless design for {gene.gene_name}: no ranked pegRNA "
+                f"variant available (0 of {len(variants)} variants usable)"
+            )
         # Degenerate case: caller asked us to design with no variants.  We
         # return a TJPEResult with zeroed strings so downstream diagnostics
         # can still inspect all_evaluated_variants.
@@ -362,6 +487,12 @@ def run_tjpe_workflow(
     )
 
     if best_ng is None:
+        if scarless:
+            raise ScarlessNoValidDesign(
+                f"no valid scarless design for {gene.gene_name}: no safe nicking "
+                f"sgRNA in the {ngrna_distance_min}-{ngrna_distance_max} bp window "
+                f"(strand-opposite of {best_peg.target_strand})"
+            )
         # No usable ngRNA for this variant — surface via empty ngRNA fields
         # so callers can decide to fail vs retry.  A full-on exception would
         # be wrong here because the caller may well want to iterate through
@@ -392,12 +523,64 @@ def run_tjpe_workflow(
         pbs2_length=pbs2_length,
     )
 
+    # -------- scarless construction (zero endogenous deletion) --------
+    restored_segment = ""
+    predicted_allele = ""
+    deletion_size = 0
+    warnings: List[str] = []
+    if scarless:
+        # Reverse-strand pegRNA must have its nicking nick exactly at S.
+        if not require_b_at_s(
+            distance_to_edit=best_ng.distance_to_edit,
+            pegrna_strand=best_peg.target_strand,
+        ):
+            raise ScarlessNoValidDesign(
+                f"no valid scarless design for {gene.gene_name}: reverse-strand "
+                f"pegRNA requires the nicking nick exactly at S (distance 0), "
+                f"got {best_ng.distance_to_edit}"
+            )
+        a_nick = edit_position_in_mrna
+        b_nick = ngrna_nick_in_mrna
+        restored_segment = build_restored_segment(
+            gene.mrna_sequence,
+            a_nick=a_nick,
+            b_nick=b_nick,
+            pegrna_strand=best_peg.target_strand,
+        )
+        predicted_allele = predict_edited_allele(
+            gene.mrna_sequence,
+            site_s=edit_position_in_mrna,
+            cargo=insert_full_dna,
+            a_nick=a_nick,
+            b_nick=b_nick,
+            pegrna_strand=best_peg.target_strand,
+            silent_pam_edit=None,
+        )
+        # INV-0 HARD GATE — zero endogenous deletion (raises on failure).
+        assert_inv0(
+            reference=gene.mrna_sequence,
+            edited=predicted_allele,
+            site_s=edit_position_in_mrna,
+            cargo=insert_full_dna,
+            allowed_silent=None,
+        )
+        # Advisory warnings (A-only: surfaced, never blocking).
+        warnings.append(
+            "microhomology: restored segment is 100% genome-homologous " "(see spec §10 R1)"
+        )
+        if abs(best_ng.distance_to_edit) < 70:
+            warnings.append(
+                f"distance {abs(best_ng.distance_to_edit)} bp < 70 bp validated "
+                "minimum (R3, untested)"
+            )
+
     # -------- assemble final pegRNA --------
     tjpe_pegrna = assemble_tj_pegrna(
         spacer=best_peg.spacer,
         insert_dna=insert_full_dna,
         pbs1=best_peg.pbs,
         rc_pbs2=rc_pbs2,
+        restored_segment=restored_segment,
     )
 
     pe2_value = float(getattr(best_peg, _score_attr(score_cell_line)))
@@ -418,4 +601,11 @@ def run_tjpe_workflow(
         ngrna_nick_in_mrna=ngrna_nick_in_mrna,
         joint_pe3_score=pe2_value * float(best_ng.deepcas9_score) / 100.0,
         all_evaluated_variants=list(variants),
+        scarless=scarless,
+        restored_segment=restored_segment,
+        predicted_edited_allele=predicted_allele,
+        deletion_size=deletion_size,
+        microhomology_flag=bool(scarless),
+        recut_flag=False,
+        warnings=warnings,
     )

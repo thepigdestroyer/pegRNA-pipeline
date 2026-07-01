@@ -1,0 +1,31 @@
+# Conda environment for the recoded TJ-PE pipeline with ALL real gate models.
+# Build on Imperial CX3 (GPU node, Ampere+). See scripts/hpc/README.md.
+#
+#   module load anaconda3/personal
+#   conda env create -f scripts/hpc/environment.yml
+#   conda activate pegrna-recoded
+#   pip install -e '.[recode,splice,importance,fullstructure,complex]'
+#
+# RiNALMo + Boltz-2 require an Ampere/Ada/Hopper GPU with FlashAttention.
+name: pegrna-recoded
+channels:
+  - conda-forge
+  - bioconda
+dependencies:
+  - python=3.11
+  - pip
+  - numpy
+  - pandas
+  - biopython>=1.80
+  - viennarna>=2.6            # cheap inner-loop structure pre-screen
+  - dssp                      # mkdssp binary for AlphaFold RSA metrics
+  - cas-offinder>=2.4         # genome-wide off-target gate (real Cas-OFFinder binary)
+  - pip:
+      - dnachisel>=3.2          # recode optimiser  [recode]
+      - biotite>=0.40           # AFDB metrics      [importance]
+      - spliceai>=1.3           # splice gate       [splice]
+      - tensorflow>=2.6         # SpliceAI backend  [splice]
+      - torch>=2.0              # RiNALMo/RNAformer [fullstructure]
+      - pangolin-splice         # splice cross-check (optional)
+      # RiNALMo, RNAformer, and Boltz-2 are installed from their upstream repos
+      # by scripts/hpc/stage_models.sh (they are not on PyPI under stable names).
