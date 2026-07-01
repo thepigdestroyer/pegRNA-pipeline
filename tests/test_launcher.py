@@ -154,6 +154,36 @@ def test_launch_run_uses_qsub_v_flag_for_run_dir(tmp_path):
     assert any("-v" in c and "RUN_DIR=" in c for c in qsub_cmds)
 
 
+def test_qsub_driver_sets_explicit_walltime(tmp_path):
+    """The driver is a long-lived orchestrator that polls its PRIDICT child
+    jobs (12h walltime). It MUST request an explicit walltime that outlives
+    those children — otherwise it inherits the PBS site default (1h on CX3)
+    and gets killed mid-run before writing reports (regression: run
+    CTCF_tjpe_71ec3282, Exit_status -29, walltime 3647 > limit 3600)."""
+    fake = FakeSSH()
+    launcher = HPCLauncher(
+        config=CONFIG,
+        password_provider=lambda: "pw",
+        ssh_factory=_ssh_factory(fake),
+    )
+    launcher.launch_run(
+        gene="CTCF",
+        construct="eGFP",
+        mode="tjpe",
+        local_output_dir=str(tmp_path / "out"),
+    )
+    qsub_cmds = [c for c in fake.commands if c.startswith("/opt/pbs/bin/qsub ")]
+    assert qsub_cmds
+    driver_qsub = next(c for c in qsub_cmds if "RUN_DIR=" in c)
+    # Must pass -l walltime=HH:00:00 with at least 13h (child PRIDICT jobs
+    # request 12h, the orchestrator must outlive them).
+    assert "-l walltime=" in driver_qsub, driver_qsub
+    import re as _re
+
+    m = _re.search(r"walltime=(\d+):", driver_qsub)
+    assert m and int(m.group(1)) >= 13, driver_qsub
+
+
 def test_poll_driver_grep_specific_log_path():
     """_poll_driver must grep <remote_run_dir>/driver.log — not a wildcard."""
     fake = FakeSSH()
@@ -169,6 +199,30 @@ def test_poll_driver_grep_specific_log_path():
     grep_cmds = [c for c in fake.commands if "grep" in c and "DRIVER_DONE" in c]
     assert grep_cmds
     assert any("/remote/run/driver.log" in c for c in grep_cmds)
+
+
+def test_build_ssh_forwards_jump_host_only_when_configured():
+    """ProxyJump kwargs are forwarded to the SSH factory iff config sets jump_host;
+    a direct connection (no jump_host) passes none (backward compatible)."""
+    captured: dict = {}
+
+    def recording_factory(*, hostname=None, username=None, password_provider=None, **kw):
+        captured.clear()
+        captured.update(kw)
+        return FakeSSH()
+
+    cfg_jump = dict(CONFIG, jump_host="opkssh.ic.ac.uk", jump_key_path="~/.ssh/id_ecdsa")
+    HPCLauncher(
+        config=cfg_jump, password_provider=lambda: "pw", ssh_factory=recording_factory
+    )._build_ssh()
+    assert captured.get("jump_host") == "opkssh.ic.ac.uk"
+    assert captured.get("jump_username") == CONFIG["username"]
+    assert captured.get("jump_key_path") == "~/.ssh/id_ecdsa"
+
+    HPCLauncher(
+        config=CONFIG, password_provider=lambda: "pw", ssh_factory=recording_factory
+    )._build_ssh()
+    assert "jump_host" not in captured  # direct connection -> no ProxyJump kwargs
 
 
 def test_download_reports_is_public_method(tmp_path):

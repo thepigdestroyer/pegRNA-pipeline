@@ -14,12 +14,29 @@ activity. A typical production call site is::
     with ssh:
         stdout, stderr, rc = ssh.exec("qsub job.pbs")
 
+ProxyJump (jump_host) support
+------------------------------
+When ``jump_host`` is supplied, the client first opens a paramiko session to
+the jump host using an ECDSA key + opkssh certificate, then tunnels the main
+connection through a ``direct-tcpip`` channel.  This mirrors what
+``ssh -J jump_host target`` does::
+
+    ssh = SSHClient(
+        hostname="login.cx3.hpc.imperial.ac.uk",
+        username="mj1824",
+        password_provider=lambda: "...",
+        jump_host="opkssh.ic.ac.uk",
+        jump_username="mj1824",
+        jump_key_path="~/.ssh/id_ecdsa",
+    )
+
 The class exposes synchronous ``exec``, SFTP ``upload`` / ``download``,
 and ``reconnect`` for resilient polling loops.
 """
 
 from __future__ import annotations
 
+import os
 import socket
 from typing import Any, Callable, Optional, Tuple
 
@@ -73,6 +90,9 @@ class SSHClient:
         timeout: int = 30,
         keepalive: int = 60,
         client_factory: Callable[[], Any] = _default_client_factory,
+        jump_host: Optional[str] = None,
+        jump_username: Optional[str] = None,
+        jump_key_path: Optional[str] = None,
     ) -> None:
         self.hostname = hostname
         self.username = username
@@ -80,31 +100,75 @@ class SSHClient:
         self.timeout = timeout
         self.keepalive = keepalive
         self._client_factory = client_factory
+        self.jump_host = jump_host
+        self.jump_username = jump_username or username
+        self.jump_key_path = os.path.expanduser(jump_key_path or "~/.ssh/id_ecdsa")
         self._client: Optional[Any] = None
         self._sftp: Optional[Any] = None
         self._connected: bool = False
+        self._jump_client: Optional[Any] = None
 
     # ---------------------------------------------------------------- lifecycle
     @property
     def is_connected(self) -> bool:
         return self._connected
 
-    def connect(self) -> None:
-        """Open the SSH session, applying ``AutoAddPolicy`` for the host key."""
-        import paramiko  # deferred
-
-        client = self._client_factory()
-        client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-        password = self.password_provider()
+    def _open_jump_channel(self, paramiko):
+        """Connect to jump_host via key+cert and return a direct-tcpip channel."""
+        jump = self._client_factory()
+        jump.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        key = paramiko.ECDSAKey.from_private_key_file(self.jump_key_path)
+        cert_path = self.jump_key_path + "-cert.pub"
+        if os.path.exists(cert_path):
+            try:
+                key.load_certificate(cert_path)
+            except Exception:
+                pass
         try:
-            client.connect(
-                hostname=self.hostname,
-                username=self.username,
-                password=password,
+            jump.connect(
+                hostname=self.jump_host,
+                username=self.jump_username,
+                pkey=key,
                 timeout=self.timeout,
                 look_for_keys=False,
                 allow_agent=False,
             )
+        except paramiko.AuthenticationException as exc:
+            raise SSHAuthError(f"jump host auth failed: {exc}") from exc
+        except (socket.gaierror, socket.timeout, OSError, paramiko.SSHException) as exc:
+            raise SSHConnectError(f"jump host unreachable: {exc}") from exc
+        self._jump_client = jump
+        transport = jump.get_transport()
+        channel = transport.open_channel(
+            "direct-tcpip",
+            (self.hostname, 22),
+            ("127.0.0.1", 0),
+        )
+        return channel
+
+    def connect(self) -> None:
+        """Open the SSH session, applying ``AutoAddPolicy`` for the host key."""
+        import paramiko  # deferred
+
+        sock = None
+        if self.jump_host:
+            sock = self._open_jump_channel(paramiko)
+
+        client = self._client_factory()
+        client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        password = self.password_provider()
+        connect_kwargs: dict = dict(
+            hostname=self.hostname,
+            username=self.username,
+            password=password,
+            timeout=self.timeout,
+            look_for_keys=False,
+            allow_agent=False,
+        )
+        if sock is not None:
+            connect_kwargs["sock"] = sock
+        try:
+            client.connect(**connect_kwargs)
         except paramiko.AuthenticationException as exc:
             raise SSHAuthError(str(exc)) from exc
         except (socket.gaierror, socket.timeout, OSError, paramiko.SSHException) as exc:
@@ -135,6 +199,12 @@ class SSHClient:
                 self._client.close()
             except Exception:  # pragma: no cover - defensive
                 pass
+        if self._jump_client is not None:
+            try:
+                self._jump_client.close()
+            except Exception:  # pragma: no cover - defensive
+                pass
+            self._jump_client = None
         self._connected = False
 
     def reconnect(self) -> None:
