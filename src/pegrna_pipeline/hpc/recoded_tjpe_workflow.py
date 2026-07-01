@@ -54,6 +54,7 @@ def enumerate_pbs_rtt_variants(
     rtt_aa: str,
     pbs_lengths: Tuple[int, ...],
     max_rtt_variants: int = 100,
+    ranking: str = "cai",
 ) -> List[PbsRttVariant]:
     """Enumerate (synonymous RTT) × (PBS1 length); the spacer is FIXED by site S.
 
@@ -61,8 +62,13 @@ def enumerate_pbs_rtt_variants(
     The spacer is never varied — there is one (or a few) protospacer(s) that nick
     at S, and that placement is fixed (decision 1). Deterministic order:
     RTT-variant rank, then PBS length.
+
+    ``ranking`` defaults to ``"cai"`` (ADR 0009): the synonymous RTT variants for the
+    recoded arm are ranked by human Codon Adaptation Index so the most
+    human-expressed recoding is preferred for PRIDICT2 + assembly. Pass
+    ``ranking="gc_c"`` for the legacy synthesis-stability order.
     """
-    rtts = enumerate_variants(rtt_aa, max_variants=max_rtt_variants)
+    rtts = enumerate_variants(rtt_aa, max_variants=max_rtt_variants, ranking=ranking)
     out: List[PbsRttVariant] = []
     for rv in rtts:
         for length in pbs_lengths:
