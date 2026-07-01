@@ -36,8 +36,10 @@ log "TODO-IF-MISSING: GRCh38<->KOLF2.1Jv1.1 chain (build via minimap2 -cx asm5)"
 
 # --- 2. SpliceAI weights (ship with the pip package) + GRCh38 ref for context ---
 log "SpliceAI weights ship inside the 'spliceai' pip package (models/spliceai{1..5}.h5)"
-if [ ! -f "$PEGRNA_DATA/GRCh38.primary_assembly.genome.fa" ]; then
-  log "Fetching GRCh38 primary assembly (GENCODE) for SpliceAI +/-5kb context"
+# Staged as GRCh38.fa (the name smoke_models.py / CasOffinderScorer expect via
+# PEGRNA_GENOME). Guard on the SAME filename we create, else it re-downloads 3 GB.
+if [ ! -f "$PEGRNA_DATA/GRCh38.fa" ]; then
+  log "Fetching GRCh38 primary assembly (GENCODE) for SpliceAI +/-5kb context + off-target"
   wget -q -O "$PEGRNA_DATA/GRCh38.fa.gz" \
     "https://ftp.ebi.ac.uk/pub/databases/gencode/Gencode_human/release_46/GRCh38.primary_assembly.genome.fa.gz"
   gunzip -f "$PEGRNA_DATA/GRCh38.fa.gz"
@@ -87,9 +89,10 @@ log "Pre-fetching Boltz-2 weights via a tiny login-node prediction (cache to \$B
 export BOLTZ_CACHE="$PEGRNA_DATA/boltz_cache"
 mkdir -p "$BOLTZ_CACHE"
 # A 1-residue dummy predict primes the weight cache; ignore failure if offline-limited.
-printf 'version: 1\nsequences:\n  - protein:\n      id: A\n      sequence: M\n' \
+# msa: empty => single-sequence mode, so priming does not need the MSA server.
+printf 'version: 1\nsequences:\n  - protein:\n      id: A\n      sequence: M\n      msa: empty\n' \
   > "$PEGRNA_DATA/_prime.yaml"
-boltz predict "$PEGRNA_DATA/_prime.yaml" --out_dir "$BOLTZ_CACHE" || \
+boltz predict "$PEGRNA_DATA/_prime.yaml" --out_dir "$BOLTZ_CACHE" --cache "$BOLTZ_CACHE" || \
   log "WARN: prime Boltz cache manually before a compute-node run"
 
 # --- 6. AlphaFold-DB models: pre-fetch on the login node (compute is offline) ---

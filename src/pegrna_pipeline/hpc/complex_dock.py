@@ -50,10 +50,19 @@ class Boltz2DockScorer:
         *,
         cache_dir: str | None = None,
         use_msa_server: bool = False,
+        offline_single_sequence: bool = True,
         apo_scaffold: str | None = None,
     ) -> None:
         self.cache_dir = cache_dir
         self.use_msa_server = use_msa_server
+        # Boltz-2 requires an MSA per protein/RNA chain. On offline CX3 compute
+        # nodes the MSA server is unreachable, so by default we run in
+        # SINGLE-SEQUENCE mode (`msa: empty` per chain) — the documented offline
+        # path. Without this, boltz aborts with "Missing MSA's in input and
+        # --use_msa_server flag not set" (the real GPU-smoke failure). Single-
+        # sequence is lower-accuracy but deterministic and self-contained; set
+        # use_msa_server=True to instead generate MSAs (login node / online only).
+        self.offline_single_sequence = offline_single_sequence and not use_msa_server
         # The apo baseline is the STANDARD scaffold + Cas9 complex (an RNA chain
         # must be present or ipTM is undefined). Defaults to the SpCas9 sgRNA
         # scaffold so the baseline is a real two-chain interface.
@@ -65,6 +74,18 @@ class Boltz2DockScorer:
             apo_scaffold = STANDARD_SGRNA_SCAFFOLD
         self.apo_scaffold = apo_scaffold
         self._apo_cache: dict = {}
+
+    @staticmethod
+    def _build_complex_yaml(rna: str, protein: str, *, single_sequence: bool) -> str:
+        """Build the Boltz ``predict`` input YAML for an (RNA pegRNA + protein Cas9)
+        complex. In ``single_sequence`` mode each chain gets ``msa: empty`` so Boltz
+        runs without an MSA server (required on offline compute nodes)."""
+        msa_line = "\n      msa: empty" if single_sequence else ""
+        seqs = []
+        if rna:
+            seqs.append(f"  - rna:\n      id: P\n      sequence: {rna}{msa_line}")
+        seqs.append(f"  - protein:\n      id: C\n      sequence: {protein}{msa_line}")
+        return "version: 1\nsequences:\n" + "\n".join(seqs) + "\n"
 
     def _predict(self, components):  # pragma: no cover - exercised only on big GPU
         """Run Boltz-2 on a pegRNA(+Cas9) complex via the documented ``boltz
@@ -94,11 +115,9 @@ class Boltz2DockScorer:
         with tempfile.TemporaryDirectory(dir=self.cache_dir) as tmp:
             tmp_path = Path(tmp)
             yaml_path = tmp_path / "complex.yaml"
-            seqs = []
-            if rna:
-                seqs.append(f"  - rna:\n      id: P\n      sequence: {rna}")
-            seqs.append(f"  - protein:\n      id: C\n      sequence: {protein}")
-            yaml_path.write_text("version: 1\nsequences:\n" + "\n".join(seqs) + "\n")
+            yaml_path.write_text(
+                self._build_complex_yaml(rna, protein, single_sequence=self.offline_single_sequence)
+            )
             cmd = ["boltz", "predict", str(yaml_path), "--out_dir", str(tmp_path)]
             # Offline compute nodes (Imperial CX3) cannot download Boltz weights /
             # CCD at run time — point --cache at the pre-staged cache so the run is

@@ -19,6 +19,7 @@ dependencies:
   - biopython>=1.80
   - viennarna>=2.6            # cheap inner-loop structure pre-screen
   - dssp                      # mkdssp binary for AlphaFold RSA metrics
+  - cas-offinder>=2.4         # genome-wide off-target gate (real Cas-OFFinder binary)
   - pip:
       - dnachisel>=3.2          # recode optimiser  [recode]
       - biotite>=0.40           # AFDB metrics      [importance]

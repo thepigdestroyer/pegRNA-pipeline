@@ -47,11 +47,18 @@ export RINALMO_SS_WEIGHTS="$PEGRNA_DATA/rinalmo_weights/rinalmo_giga_ss_archiveI
 export RNAFORMER_CKPT="$PEGRNA_DATA/rnaformer_weights/RNAformer_32M_state_dict_biophysical.pth"
 
 # Prime Boltz weights with the env's boltz binary (GPU node; downloads if online).
+# msa: empty => single-sequence mode so priming does not need the MSA server
+# (compute nodes are offline; the docking adapter runs single-sequence too).
 log "Priming Boltz-2 weights"
-printf 'version: 1\nsequences:\n  - protein:\n      id: A\n      sequence: MKTAYIAKQR\n' \
+printf 'version: 1\nsequences:\n  - protein:\n      id: A\n      sequence: MKTAYIAKQR\n      msa: empty\n' \
     > "$PEGRNA_DATA/_prime.yaml"
-RUN boltz predict "$PEGRNA_DATA/_prime.yaml" --out_dir "$BOLTZ_CACHE" --override 2>&1 | tail -3 \
+RUN boltz predict "$PEGRNA_DATA/_prime.yaml" --out_dir "$BOLTZ_CACHE" --cache "$BOLTZ_CACHE" --override 2>&1 | tail -3 \
     || log "WARN: boltz prime failed"
+
+# cas-offinder is declared in environment.yml; ensure it is present (older envs
+# built before it was added get it here so the off-target gate can run).
+RUN bash -lc "command -v cas-offinder >/dev/null || mamba install -n $ENV -y -q -c bioconda cas-offinder" \
+    || log "WARN: cas-offinder not available — off-target gate will fail"
 
 log "Run smoke validation (target 5/5)"
 PYTHONPATH=src RINALMO_SS_WEIGHTS="$RINALMO_SS_WEIGHTS" RNAFORMER_CKPT="$RNAFORMER_CKPT" \

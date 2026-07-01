@@ -38,3 +38,37 @@ def test_real_boltz_adapter_errors_without_gpu():
 
     with pytest.raises((ImportError, RuntimeError)):
         Boltz2DockScorer().apo_interface_iptm("nCas9")
+
+
+def test_boltz_yaml_offline_mode_adds_empty_msa_per_chain():
+    # Offline single-sequence mode (default) must add `msa: empty` to EACH chain so
+    # Boltz does not require the MSA server (the real GPU-smoke failure:
+    # "Missing MSA's in input and --use_msa_server flag not set").
+    from pegrna_pipeline.hpc.complex_dock import Boltz2DockScorer
+
+    y = Boltz2DockScorer._build_complex_yaml("ACGU", "MKTAYIAKQR", single_sequence=True)
+    assert y.count("msa: empty") == 2  # one per chain (rna + protein)
+    assert "sequence: ACGU" in y and "sequence: MKTAYIAKQR" in y
+
+
+def test_boltz_yaml_msa_server_mode_omits_empty_msa():
+    from pegrna_pipeline.hpc.complex_dock import Boltz2DockScorer
+
+    y = Boltz2DockScorer._build_complex_yaml("ACGU", "MKTAYIAKQR", single_sequence=False)
+    assert "msa: empty" not in y
+
+
+def test_boltz_defaults_to_offline_single_sequence():
+    from pegrna_pipeline.hpc.complex_dock import Boltz2DockScorer
+
+    assert Boltz2DockScorer().offline_single_sequence is True
+
+
+def test_boltz_use_msa_server_disables_single_sequence():
+    # Asking for the MSA server (online/login node) turns OFF single-sequence mode.
+    from pegrna_pipeline.hpc.complex_dock import Boltz2DockScorer
+
+    sc = Boltz2DockScorer(use_msa_server=True)
+    assert sc.offline_single_sequence is False
+    y = sc._build_complex_yaml("ACGU", "MKTAYIAKQR", single_sequence=sc.offline_single_sequence)
+    assert "msa: empty" not in y
