@@ -381,7 +381,8 @@ also frameshifts ZeoR, so it dies under Zeocin. What survives selection is there
 limited to in-frame products. The residual error classes the in-silico gates still
 have to catch are in-frame missense, in-frame indels, and symmetric exon-skips,
 which is exactly what the splice, AlphaFold, and INV-0 gates target. Promoter
-elements (`T7` / `T7-rev`) are insertable via `insert_elements.py`.
+elements (`T7-G` / `rcT7-G`, frame-safe with a guanine start) are insertable via
+`insert_elements.py`.
 
 ---
 
@@ -553,7 +554,7 @@ Recoded layer (`src/pegrna_pipeline/hpc/`):
 | `allele_specificity.py` | Het-SNP allele-specific options (`allele_hunt`). |
 | `strand_orientation.py` | `orient_rtt_tail`, `orient_pbs2` (the strand convention in code). |
 | `tprt_sim.py` | `simulate_tprt`, `TPRTMismatch` (strand self-consistency net). |
-| `insert_elements.py` | T7 / T7-rev promoter insertion. |
+| `insert_elements.py` | T7-G / rcT7-G frame-safe promoter insertion (guanine start; rc = reverse complement). |
 | `scarless.py` | `assert_inv0` (span-aware INV-0 contract). |
 | `gate_thresholds.py` | `THRESHOLDS` + per-value citations. |
 | `scorer_factory.py` | `build_scorers`: real-adapter-with-fake-fallback, per gate. |
