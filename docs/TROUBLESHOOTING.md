@@ -69,8 +69,16 @@ internet).
 Boltz couldn't find its weights on an offline node. **Fixed** — the adapter passes
 `--cache $BOLTZ_CACHE`; make sure `install.sh`/`stage_models.sh` primed the cache on the
 login node (`$PEGRNA_DATA/boltz_cache` should contain `boltz2_conf.ckpt`). Re-prime:
-`boltz predict $PEGRNA_DATA/_prime.yaml --out_dir $PEGRNA_DATA/boltz_cache --cache $PEGRNA_DATA/boltz_cache`
+`boltz predict $PEGRNA_DATA/_prime.yaml --out_dir $PEGRNA_DATA/boltz_cache --cache $PEGRNA_DATA/boltz_cache --no_kernels`
 (the `_prime.yaml` uses `msa: empty`).
+
+### `ModuleNotFoundError: No module named 'cuequivariance_torch'` (Boltz)
+Boltz-2 (>=2.2) accelerates its triangular-multiplicative updates with the
+cuequivariance CUDA kernels, which it hard-imports only when kernels are enabled — and
+that package needs a matching CUDA toolchain that is not in the base install.
+**Fixed** — the adapter passes `--no_kernels` by default, so Boltz uses the
+pure-PyTorch path (slower but portable, offline-safe). If you have the CUDA kernels
+installed and want the speed-up, construct `Boltz2DockScorer(use_kernels=True)`.
 
 ---
 

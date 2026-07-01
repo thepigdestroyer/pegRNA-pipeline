@@ -92,7 +92,7 @@ mkdir -p "$BOLTZ_CACHE"
 # msa: empty => single-sequence mode, so priming does not need the MSA server.
 printf 'version: 1\nsequences:\n  - protein:\n      id: A\n      sequence: M\n      msa: empty\n' \
   > "$PEGRNA_DATA/_prime.yaml"
-boltz predict "$PEGRNA_DATA/_prime.yaml" --out_dir "$BOLTZ_CACHE" --cache "$BOLTZ_CACHE" || \
+boltz predict "$PEGRNA_DATA/_prime.yaml" --out_dir "$BOLTZ_CACHE" --cache "$BOLTZ_CACHE" --no_kernels || \
   log "WARN: prime Boltz cache manually before a compute-node run"
 
 # --- 6. AlphaFold-DB models: pre-fetch on the login node (compute is offline) ---

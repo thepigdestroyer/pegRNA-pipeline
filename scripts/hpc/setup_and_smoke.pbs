@@ -52,7 +52,7 @@ export RNAFORMER_CKPT="$PEGRNA_DATA/rnaformer_weights/RNAformer_32M_state_dict_b
 log "Priming Boltz-2 weights"
 printf 'version: 1\nsequences:\n  - protein:\n      id: A\n      sequence: MKTAYIAKQR\n      msa: empty\n' \
     > "$PEGRNA_DATA/_prime.yaml"
-RUN boltz predict "$PEGRNA_DATA/_prime.yaml" --out_dir "$BOLTZ_CACHE" --cache "$BOLTZ_CACHE" --override 2>&1 | tail -3 \
+RUN boltz predict "$PEGRNA_DATA/_prime.yaml" --out_dir "$BOLTZ_CACHE" --cache "$BOLTZ_CACHE" --no_kernels --override 2>&1 | tail -3 \
     || log "WARN: boltz prime failed"
 
 # cas-offinder is declared in environment.yml; ensure it is present (older envs
