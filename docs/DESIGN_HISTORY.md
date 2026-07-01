@@ -204,9 +204,12 @@ Then for each (nick × variant), in this exact order:
 6. **Assemble the edit** (`_assemble_edit`): cargo always at `S`; arm on the chosen
    side; produce the sense flap and the predicted edited allele.
 7. **Orient** the RTT tail and PBS2 per strand.
-8. **PBS2 gate** (`passes_pbs2_gate`): length 11-17, GC 40-70%, Tm 37-42 °C
-   (Biopython nearest-neighbour), not repetitive. Length and Tm are coupled, so the
-   feasible PBS2 set tends to collapse toward 14-17 nt; that is expected.
+ 8. **PBS2 selection + gate** (`_select_pbs2` + `passes_pbs2_gate`): PBS2 is the
+    captured window 5' of the ngRNA nick, so its sequence is genome-fixed and only its
+    **length** is free. Its length is **scanned per-nick (10-18 nt)** to hit the Tm
+    band [37,42] °C (GC 40-70%, non-repetitive), picking the length whose Tm is closest
+    to band-centre — decoupled from PBS1's length. Runs once per nick; a per-nick miss
+    skips that nick, not the whole run.
 9. **INV-0** (`assert_inv0`): the only thing that may differ between reference and
    product is the cargo at `S` plus protein-silent recode-span edits plus byte-exact
    locked-span re-templating. The CDS recode is verified protein-silent
@@ -257,13 +260,23 @@ literature-derived defaults, overridable by a wet-lab calibration library.
   efficiency onset ≈ 6-8 bp (Sfeir & Symington 2015). The recoder minimises the
   actual run below this ceiling; smaller preferred.
 
-### 5.2 PBS2 gate
-- **What:** PBS2 length / GC / Tm / repetitiveness.
+### 5.2 PBS2 selection + gate
+- **What:** choose PBS2 (the captured window 5' of the ngRNA nick) to be a good
+  second-strand primer: length, GC, Tm, non-repetitive.
 - **Why:** PBS2 must anneal the second strand stably but not so stably it mis-primes;
-  repetitive PBS2 mis-targets.
-- **How:** `passes_pbs2_gate`; Tm via Biopython `Tm_NN`.
-- **Threshold:** length 11-17 nt, GC 40-70%, Tm 37-42 °C. Length and Tm coupling
-  collapses the feasible set toward 14-17 nt (expected, not a bug).
+  repetitive PBS2 mis-targets. PBS2's sequence is genome-fixed at the nick, so its
+  **length** is the only free parameter.
+- **How:** `_select_pbs2` scans the length range **per-nick** and picks the length
+  whose Tm is closest to the band centre; `passes_pbs2_gate` then validates the choice.
+  Tm via Biopython `Tm_NN`. This is decoupled from PBS1's length.
+- **Threshold** (`THRESHOLDS.pbs2_*`): Tm [37,42] °C, GC 40-70%, length scan 10-18 nt.
+  Cited: Anzalone 2019 (PBS ~8-17 nt, Tm ~37 °C optimum); PRIDICT (Mathis 2023) tunes
+  PBS length to a favourable Tm; SantaLucia 1998 NN model.
+- **Bug fixed (2026-07-01):** the old gate **fixed** PBS2 to PBS1's lengths (13/15/17)
+  then rejected on Tm. Those 3 lengths are nested windows at the nick (correlated GC),
+  and under Tm_NN defaults len-17 exceeds 42 °C at every GC ≥ 40% while len-13 needs
+  ≥ 50% GC to reach 37 °C — so whole candidate pools failed the gate together
+  (`no_valid_pegrna`). Scanning length raises per-nick success ≈ 55% → ≈ 74% (50% GC).
 
 ### 5.3 INV-0 (invariant zero) gate
 - **What:** the product differs from reference by exactly: cargo at `S` +
@@ -413,7 +426,7 @@ violating one is a bug, not a tradeoff. Primary sources: the plan
 | 1  | Insert site `S` is fixed; the pegRNA spacer is fixed; only the nick + RTT variants + PBS length are enumerated. | `S` is the experimental intent; moving it changes the experiment. |
 | —  | ngRNA nick distance 40-70 bp, smaller preferred, **not** auto-calibrated. | The one gate left as an experimental-design knob, not a threshold. |
 | —  | Recode = minimum synonymous edits to break microhomology, frame-aware. | Fewer edits = less risk, easier synthesis. |
-| 8  | PBS2 gate length 11-17 / GC 40-70 / Tm 37-42; coupling collapses to ~14-17 nt. | Stable but specific second-strand capture. |
+| 8  | PBS2 length **scanned per-nick (10-18 nt)** to hit Tm [37,42] / GC 40-70, decoupled from PBS1; closest-to-centre wins. | PBS2 is genome-fixed at the nick; fixing length then rejecting collapsed the pool (`no_valid_pegrna`). Selecting length gives stable second-strand capture. |
 | 15 | Arm partitioned by CDS mask: recode CDS runs, keep non-coding runs byte-exact to the targeted allele; reject non-monotone (>2-run) arms. | Synonymous recoding is undefined outside a CDS; do not overwrite the other allele. |
 | —  | Selection = 2A-ZeoR cassette downstream of GOI; frameshifts self-select out. | Biological pre-filter; in-silico gates handle the in-frame residue. |
 | —  | Gate thresholds literature-derived, each with a citation; wet-lab override allowed. | Defensible defaults, not arbitrary placeholders. |
