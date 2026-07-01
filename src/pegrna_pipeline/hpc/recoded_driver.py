@@ -19,7 +19,7 @@ from pegrna_pipeline.hpc.recoded_tjpe_workflow import (
     RecodedTJPEResult,
     run_recoded_tjpe,
 )
-from pegrna_pipeline.hpc.report_writer import render_recoded_report
+from pegrna_pipeline.hpc.report_writer import render_recoded_csv, render_recoded_report
 from pegrna_pipeline.hpc.scorer_factory import make_scorers
 
 __all__ = [
@@ -35,6 +35,8 @@ class RecodedDesignOutput:
     result: RecodedTJPEResult
     report_text: str
     report_path: Optional[str]
+    csv_text: str = ""
+    csv_path: Optional[str] = None
 
 
 def design_recoded(
@@ -95,16 +97,27 @@ def design_recoded(
     manifest = dict(manifest or {})
     manifest.setdefault("scorer_mode", mode)
     report_text = render_recoded_report(result, manifest=manifest)
+    csv_text = render_recoded_csv(result, manifest=manifest)
 
     report_path: Optional[str] = None
+    csv_path: Optional[str] = None
     if output_dir is not None:
         out = Path(output_dir)
         out.mkdir(parents=True, exist_ok=True)
         path = out / "recoded_tjpe_report.txt"
         path.write_text(report_text)
         report_path = str(path)
+        cpath = out / "recoded_tjpe_components.csv"
+        cpath.write_text(csv_text)
+        csv_path = str(cpath)
 
-    return RecodedDesignOutput(result=result, report_text=report_text, report_path=report_path)
+    return RecodedDesignOutput(
+        result=result,
+        report_text=report_text,
+        report_path=report_path,
+        csv_text=csv_text,
+        csv_path=csv_path,
+    )
 
 
 @dataclass

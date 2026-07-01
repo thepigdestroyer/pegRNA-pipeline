@@ -684,14 +684,27 @@ def render_recoded_report(result, manifest: dict) -> str:
     lines: List[str] = []
     lines.append("=== Recoded TJ-PE pegRNA design ===")
     lines.append("")
-    lines.append("Design (pegRNA, 5'->3' = Spacer.Scaffold.PBS2.RTT.PBS1.PolyU):")
+    lines.append("Full construct (pegRNA, 5'->3' = Spacer.Scaffold.PBS2.RTT.PBS1.PolyU):")
     lines.append(f"  spacer : {result.spacer}")
     lines.append(f"  PBS2   : {result.pbs2}")
     lines.append(f"  RTT    : {result.rtt}")
+    # Decompose the RTT ("insert") into its labelled sub-parts. Historically the
+    # whole RTT was dumped as one opaque block; it is the insert (cargo) plus the
+    # replacement gDNA (the recoded deletion-replacement arm).
+    if result.rtt_components:
+        for label, seq in result.rtt_components:
+            pretty = "insert (cargo)" if label == "insert" else "replacement gDNA (recoded)"
+            lines.append(f"    - {pretty:<28}: {seq}")
     lines.append(f"  PBS1   : {result.pbs1}")
     lines.append(f"  PolyU  : {result.polyu}")
     lines.append(f"  full pegRNA : {result.pegRNA_sequence}")
     lines.append(f"  ngRNA protospacer : {result.ngrna_protospacer}")
+    lines.append("")
+    lines.append(
+        "  (tjPE template-jumping portion = PBS2.RTT.PBS1, where RTT = insert + "
+        "replacement gDNA;"
+    )
+    lines.append("   the spacer and scaffold complete the full construct.)")
     lines.append("")
     lines.append("Coordinates & invariants:")
     lines.append(f"  insert site S      : {result.site_s}")
@@ -722,3 +735,56 @@ def render_recoded_report(result, manifest: dict) -> str:
     for key in sorted(manifest):
         lines.append(f"  {key}: {manifest[key]}")
     return "\n".join(lines)
+
+
+def render_recoded_csv(result, manifest: Dict[str, Any] | None = None) -> str:
+    """Render the recoded TJ-PE design as a component-breakdown CSV.
+
+    One row per labelled construct component (5'->3' order), with columns
+    ``index,component,role,part_of,sequence,length``. The ``insert`` is split into
+    its sub-parts (``insert`` = cargo, ``replacement_gDNA`` = recoded arm) rather
+    than dumped as one opaque RTT block, and ``part_of`` marks whether each
+    component is in the tjPE template-jumping portion or is spacer/scaffold. A
+    trailing metadata block (``#`` rows) carries site/nick/edits/strand/provenance.
+    """
+    import io
+
+    scaffold = STANDARD_SGRNA_SCAFFOLD
+    # (component, role, part_of, sequence) in authoritative 5'->3' construct order.
+    rows: List[tuple] = [
+        ("spacer", "targets+nicks at S", "spacer/scaffold", result.spacer),
+        ("scaffold", "sgRNA scaffold (binds nCas9)", "spacer/scaffold", scaffold),
+        ("PBS2", "primer-binding site 2 (2nd-strand capture)", "tjPE_jump", result.pbs2),
+    ]
+    if result.rtt_components:
+        for label, seq in result.rtt_components:
+            role = (
+                "insert / cargo payload"
+                if label == "insert"
+                else "replacement gDNA (synonymously recoded arm)"
+            )
+            name = "insert" if label == "insert" else "replacement_gDNA"
+            rows.append((name, role, "tjPE_jump (RTT)", seq))
+    else:
+        rows.append(("RTT", "reverse-transcription template (insert)", "tjPE_jump", result.rtt))
+    rows.append(("PBS1", "primer-binding site 1 (pegRNA nick)", "tjPE_jump", result.pbs1))
+    rows.append(("PolyU", "3' U tail (La/PE7)", "tjPE_jump", result.polyu))
+
+    buf = io.StringIO()
+    w = csv.writer(buf)
+    w.writerow(["index", "component", "role", "part_of", "sequence", "length"])
+    for i, (component, role, part_of, seq) in enumerate(rows, start=1):
+        w.writerow([i, component, role, part_of, seq, len(seq)])
+    # metadata as comment rows (ignored by CSV parsers that skip '#', still visible)
+    meta = {
+        "full_pegRNA": result.pegRNA_sequence,
+        "full_pegRNA_length": len(result.pegRNA_sequence),
+        "ngRNA_protospacer": result.ngrna_protospacer,
+        "site_s": result.site_s,
+        "nick_position": result.nick_position,
+        "deletion_size": result.deletion_size,
+        "recode_edits": result.recode_edits,
+    }
+    for k, v in {**meta, **dict(manifest or {})}.items():
+        w.writerow([f"# {k}", v])
+    return buf.getvalue()
