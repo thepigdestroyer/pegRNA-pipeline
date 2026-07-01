@@ -1,7 +1,14 @@
 # 0006. Genome model: T2T-KOLF2.1J truth, GRCh38 for ML gates
 
 Date: 2026-06-18
-Status: Accepted
+Status: Accepted (the "data-change-only" framing is refined by ADR 0007)
+
+> **Update 2026-07-01 (ADR 0007):** A clean diploid KOLF2.1J assembly now exists
+> (NCBI GCA_058280895.1 `pri` + GCA_058280805.1 `alt`, NHGRI, 2026-06-17), so the
+> availability blocker below is stale. The diploid is now materialised
+> coordinate-safely on GRCh38 (scope A). Making the assembly the *truth* genome
+> (scope B) is NOT a drop-in data change: it requires a validated KOLF↔GRCh38 chain
+> and a GENCODE→KOLF annotation projection. See ADR 0007.
 
 ## Context
 

@@ -334,12 +334,21 @@ literature-derived defaults, overridable by a wet-lab calibration library.
 
 ## 6. Genome model
 
-Decision B3-C. The truth model is the **T2T diploid KOLF2.1J** genome (the lab's
-iPSC line; male/XY), and ML gates that were trained on GRCh38 (SpliceAI, AlphaFold)
-operate in GRCh38 coordinates. In practice the wiring is **Ensembl GRCh38 ingest +
-a KOLF2.1J het-SNP overlay** (`genome_ingest.py`, `genome_context.py`), because a
-clean T2T-KOLF FASTA was not resolvable at build time; the interface is identical, so
-swapping in the T2T FASTA later is a data change, not a code change.
+Decision B3-C, refined by ADR 0007. The truth is the KOLF2.1J iPSC line (male/XY), and
+the ML gates trained on GRCh38 (SpliceAI, AlphaFold) operate in GRCh38 coordinates. The
+pipeline stays in **GRCh38 coordinates** and materialises the real diploid
+**coordinate-safely (scope A)**: KOLF2.1J phased substitutions are applied onto the
+GRCh38 region sequence per haplotype (`variant_apply.apply_phased_variants`, wired
+through `genome_ingest.build_genomic_context`). Same-length substitutions preserve the
+coordinate frame, so `to_grch38` stays a valid identity and the GRCh38-trained gates are
+untouched; a ref-base mismatch is fail-loud; indels are advisory only.
+
+A clean diploid KOLF2.1J assembly now exists (NCBI GCA_058280895.1 `pri` +
+GCA_058280805.1 `alt`, NHGRI, 2026-06-17), so the old availability blocker is gone.
+Making it the *truth* genome is **scope B** (separate follow-on): it needs a validated
+KOLF<->GRCh38 liftover chain and a GENCODE->KOLF annotation projection, because feeding
+KOLF coordinates to the GRCh38-trained gates without a chain silently corrupts scores.
+Scope B is not a drop-in data change.
 
 The genome context provides the local sequence window, the CDS mask (which bases are
 coding, used to partition the arm), and splice-site context. Het-SNPs are surfaced as
@@ -503,7 +512,9 @@ live.
   GPU environment is fixed, those two gates run as fakes off-cluster.
 - **`simulate_tprt` is a self-consistency check, not an experimental strand proof.**
   It catches orientation bugs; it does not prove the design edits in a cell.
-- **Genome is Ensembl-GRCh38 + KOLF SNP overlay, not the true T2T-KOLF FASTA** yet.
+- **Genome is GRCh38-coordinate with a coordinate-safe materialised KOLF2.1J diploid**
+  (scope A, substitutions only; ADR 0007). Indels are advisory, and full KOLF-as-truth
+  (assembly FASTA + KOLF↔GRCh38 chain + annotation projection) is the pending scope B.
 - The pipeline is **not production-ready**: do not order DNA off its output without
   wet-lab threshold calibration and a 5/5 smoke pass. This was stated explicitly to
   the user; no false green light.
