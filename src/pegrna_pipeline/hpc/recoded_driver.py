@@ -169,6 +169,7 @@ def design_recoded(
         importance_scorer=scorers.importance_scorer,
         dock_scorer=scorers.dock_scorer,
         offtarget_scorer=scorers.offtarget_scorer,
+        maxent_scorer=scorers.maxent_scorer,
     )
 
     manifest = dict(manifest or {})

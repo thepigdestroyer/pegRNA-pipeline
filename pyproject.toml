@@ -39,6 +39,7 @@ recode = [
 splice = [
     "spliceai>=1.3",
     "tensorflow>=2.6",
+    "maxentpy>=0.0.1",
 ]
 importance = [
     "biotite>=0.40",

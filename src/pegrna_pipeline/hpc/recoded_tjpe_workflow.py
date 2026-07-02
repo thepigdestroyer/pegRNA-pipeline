@@ -15,6 +15,7 @@ from typing import Callable, Dict, List, Optional, Sequence, Tuple
 from pegrna_pipeline.hpc.allele_specificity import find_allele_specific
 from pegrna_pipeline.hpc.codon_expander import _gc_content, enumerate_variants
 from pegrna_pipeline.hpc.complex_dock import passes_docking_gate
+from pegrna_pipeline.hpc.cryptic_splice import passes_cryptic_splice_gate
 from pegrna_pipeline.hpc.full_structure import functional_region_pairing
 from pegrna_pipeline.hpc.gate_thresholds import THRESHOLDS
 from pegrna_pipeline.hpc.nick_search import enumerate_nick_sites, screen_nick_candidates
@@ -416,6 +417,7 @@ def run_recoded_tjpe(
     importance_scorer,
     dock_scorer,
     offtarget_scorer: Callable[[List[str]], Dict[str, Tuple[float, int, bool]]],
+    maxent_scorer=None,
     cas9: str = "nCas9",
     allele_hunt: bool = False,
     het_snps: Optional[Sequence[dict]] = None,
@@ -594,14 +596,36 @@ def run_recoded_tjpe(
             )
             # --- expensive gates last; each is GUARDED so a scorer crash skips the
             # candidate (with a diagnostic) instead of aborting the whole walk. ---
+            # PRIMARY splice gate: MaxEntScan cryptic-splice-site scan of the edited
+            # construct (recode span + cassette + junctions). Context-free, so it is
+            # the right instrument for a large exogenous-cassette insertion (ADR 0011).
+            if maxent_scorer is not None:
+                try:
+                    ms_ok, ms_why = passes_cryptic_splice_gate(
+                        reference, edited, scorer=maxent_scorer
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    diagnostics.append(f"cand{tried}: cryptic-splice scorer error: {exc}")
+                    continue
+                if not ms_ok:
+                    diagnostics.append(f"cand{tried}: cryptic splice: {ms_why}")
+                    continue
+
+            # ADVISORY cross-check: SpliceAI needs >=10 kb of real genomic context. When
+            # a caller supplies it, a concordant disruption call also fails the candidate;
+            # on short context it raises ValueError and is skipped (NOT fail-loud) so the
+            # MaxEnt gate above remains the primary check (ADR 0011).
             try:
                 sp_ok, sp_why = passes_splice_gate(reference, edited, scorer=splice_scorer)
+            except ValueError:
+                pass  # inadequate genomic context -> advisory skip
             except Exception as exc:  # noqa: BLE001
-                diagnostics.append(f"cand{tried}: splice scorer error: {exc}")
+                diagnostics.append(f"cand{tried}: splice cross-check error: {exc}")
                 continue
-            if not sp_ok:
-                diagnostics.append(f"cand{tried}: splice: {sp_why}")
-                continue
+            else:
+                if not sp_ok:
+                    diagnostics.append(f"cand{tried}: splice (SpliceAI cross-check): {sp_why}")
+                    continue
 
             # AlphaFold importance: only the recoded CDS footprint maps to residues.
             # A purely non-coding (byte-exact) arm changes no residue -> skip.

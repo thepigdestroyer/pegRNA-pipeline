@@ -3,6 +3,7 @@
 import pytest
 
 from pegrna_pipeline.hpc.complex_dock import DockFake
+from pegrna_pipeline.hpc.cryptic_splice import MaxEntScanFake
 from pegrna_pipeline.hpc.full_structure import FullStructureFake
 from pegrna_pipeline.hpc.recoded_tjpe_workflow import (
     NoValidPegRNA,
@@ -125,6 +126,44 @@ def test_raising_scorer_does_not_crash_the_walk():
             dock_scorer=DockFake(apo_iptm=0.85, candidate_iptm=0.82),
             offtarget_scorer=_clean_offtarget,
         )
+
+
+class _ShortContextSplice:
+    """SpliceAI adapter behaviour on short context: delta() raises ValueError."""
+
+    def delta(self, ref, alt):
+        raise ValueError("SpliceAIScorer.delta requires >= 10000 nt of context")
+
+
+def test_spliceai_short_context_is_advisory_not_fatal():
+    # The CTCF-wall fix: SpliceAI can't run on the short design window, but the
+    # MaxEnt cryptic gate is the primary check, so a short-context SpliceAI must be
+    # skipped (advisory), NOT abort the run. Previously ValueError failed every cand.
+    res = run_recoded_tjpe(
+        **_inputs(),
+        splice_scorer=_ShortContextSplice(),
+        full_structure_scorer=FullStructureFake(pairs={}),
+        importance_scorer=_all_pass_importance(),
+        dock_scorer=DockFake(apo_iptm=0.85, candidate_iptm=0.82),
+        offtarget_scorer=_clean_offtarget,
+        maxent_scorer=MaxEntScanFake(),  # primary gate: all motifs below threshold
+    )
+    assert res.pegRNA_sequence
+    assert res.candidates_tried >= 1
+
+
+def test_maxent_gate_wired_and_happy_path_passes():
+    res = run_recoded_tjpe(
+        **_inputs(),
+        splice_scorer=SpliceFake(delta=0.0),
+        full_structure_scorer=FullStructureFake(pairs={}),
+        importance_scorer=_all_pass_importance(),
+        dock_scorer=DockFake(apo_iptm=0.85, candidate_iptm=0.82),
+        offtarget_scorer=_clean_offtarget,
+        maxent_scorer=MaxEntScanFake(),
+    )
+    assert isinstance(res, RecodedTJPEResult)
+    assert res.pegRNA_sequence
 
 
 def test_allele_hunt_surfaces_options_without_moving_s():
