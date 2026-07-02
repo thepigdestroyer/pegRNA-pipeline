@@ -25,7 +25,9 @@ dependencies:
       - biotite>=0.40           # AFDB metrics      [importance]
       - spliceai>=1.3           # splice gate (advisory cross-check)  [splice]
       - tensorflow>=2.6         # SpliceAI backend  [splice]
-      - maxentpy>=0.0.1         # MaxEntScan cryptic-splice gate (primary)  [splice]
+      # maxentpy (MaxEntScan, primary cryptic-splice gate) is NOT on PyPI and its
+      # C extension won't build on py3.11 -> staged pure-Python from source by
+      # scripts/hpc/stage_models.sh (see section 2b there).
       - torch>=2.0              # RiNALMo/RNAformer [fullstructure]
       - pangolin-splice         # splice cross-check (optional)
       # RiNALMo, RNAformer, and Boltz-2 are installed from their upstream repos
