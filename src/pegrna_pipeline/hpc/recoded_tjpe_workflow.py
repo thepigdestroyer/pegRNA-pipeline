@@ -448,6 +448,7 @@ def run_recoded_tjpe(
         distance_min=ngrna_distance_min,
         distance_max=ngrna_distance_max,
     )
+    raw_nick_count = len(nicks)
     nicks = screen_nick_candidates(nicks, scorer=offtarget_scorer)
 
     variants = enumerate_pbs_rtt_variants(
@@ -466,6 +467,22 @@ def run_recoded_tjpe(
     except Exception as exc:  # noqa: BLE001 - scorer/runtime failures are diagnostics
         raise NoValidPegRNA(f"docking apo baseline failed to compute: {exc}") from exc
     tried = 0
+
+    # Diagnosability: an empty nick pool means the candidate loop never runs, so the
+    # final NoValidPegRNA would otherwise carry a blank diagnostic. Say WHY here.
+    if not nicks:
+        if raw_nick_count == 0:
+            diagnostics.append(
+                f"0 nick sites: no NGG-PAM protospacer in the "
+                f"[{ngrna_distance_min},{ngrna_distance_max}] bp window on the strand "
+                f"opposite the pegRNA ({pegrna_strand})"
+            )
+        else:
+            diagnostics.append(
+                f"0 nicks after off-target screen: all {raw_nick_count} PAM candidate(s) "
+                f"were rejected (each needs a unique on-target and 0 off-targets within the "
+                f"gate mismatch tier)"
+            )
 
     for nick in nicks:
         pos = nick.nick_position
