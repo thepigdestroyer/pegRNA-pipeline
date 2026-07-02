@@ -8,9 +8,11 @@ from pegrna_pipeline.hpc.full_structure import FullStructureFake
 from pegrna_pipeline.hpc.recoded_tjpe_workflow import (
     NoValidPegRNA,
     RecodedTJPEResult,
+    _insertion_site_footprint,
     run_recoded_tjpe,
 )
 from pegrna_pipeline.hpc.splice_screen import SpliceFake
+from pegrna_pipeline.hpc.structure_importance import ResidueMetrics
 
 
 def _all_pass_importance():
@@ -180,3 +182,65 @@ def test_allele_hunt_surfaces_options_without_moving_s():
     )
     assert res.site_s == 150  # S NEVER moves, even in allele_hunt
     assert res.allele_specific_options  # at least one surfaced
+
+
+def test_insertion_site_footprint_flanks_s():
+    # S=150, all-CDS: residues of 149 (49) and 150 (50), +/-1 context -> 48..51.
+    assert _insertion_site_footprint(150, [True] * 320, context=1) == [48, 49, 50, 51]
+
+
+def test_insertion_site_footprint_context_zero():
+    assert _insertion_site_footprint(150, [True] * 320, context=0) == [49, 50]
+
+
+def test_insertion_site_footprint_noncoding_returns_empty():
+    assert _insertion_site_footprint(5, [False] * 10, context=1) == []
+
+
+class _BlockResidues:
+    """Importance scorer that marks the given residue indices as buried + packed."""
+
+    def __init__(self, blocked):
+        self._b = set(blocked)
+
+    def metrics(self, i):
+        buried = i in self._b
+        return ResidueMetrics(
+            plddt=90.0 if buried else 50.0,
+            rsa=0.05 if buried else 0.5,
+            contact_number=30 if buried else 4,
+            is_catalytic=False,
+            is_disulfide=False,
+            is_positive_phi_gly=False,
+            is_structural_pro=False,
+        )
+
+
+def test_importance_gate_blocks_structured_insertion_site():
+    # S=150 -> insertion footprint [48..51]; a buried residue there blocks all cands.
+    with pytest.raises(NoValidPegRNA):
+        run_recoded_tjpe(
+            **_inputs(),
+            splice_scorer=SpliceFake(delta=0.0),
+            full_structure_scorer=FullStructureFake(pairs={}),
+            importance_scorer=_BlockResidues([50]),
+            dock_scorer=DockFake(apo_iptm=0.85, candidate_iptm=0.82),
+            offtarget_scorer=_clean_offtarget,
+            maxent_scorer=MaxEntScanFake(),
+        )
+
+
+def test_importance_gate_ignores_recode_arm_residues():
+    # Residue 55 is in the recoded arm (the old gate would have blocked it) but NOT
+    # in the insertion footprint [48..51]. The gate now judges the insertion site
+    # only, so the synonymous recode arm no longer blocks the design.
+    res = run_recoded_tjpe(
+        **_inputs(),
+        splice_scorer=SpliceFake(delta=0.0),
+        full_structure_scorer=FullStructureFake(pairs={}),
+        importance_scorer=_BlockResidues([55]),
+        dock_scorer=DockFake(apo_iptm=0.85, candidate_iptm=0.82),
+        offtarget_scorer=_clean_offtarget,
+        maxent_scorer=MaxEntScanFake(),
+    )
+    assert res.pegRNA_sequence

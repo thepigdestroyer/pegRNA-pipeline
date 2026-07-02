@@ -265,6 +265,34 @@ def _frame_at(cds_mask: Sequence[bool], pos: int) -> int:
     return max(0, pos - cds_start) % 3
 
 
+def _insertion_site_footprint(
+    site_s: int, cds_mask: Sequence[bool], *, context: int = 1
+) -> List[int]:
+    """Residue indices flanking the cargo insertion point ``site_s`` (ADR 0013).
+
+    The cargo (tag + linker + T7-leftover junk) is inserted at ``site_s``; the
+    coding residues it physically abuts -- the residue at ``site_s - 1`` (5') and at
+    ``site_s`` (3', if coding), plus ``context`` residues each side -- are the ones
+    whose structural context the insert could disrupt. This is the correct target of
+    the structural-importance gate: forbid inserting into a buried / interaction-prone
+    region. It is NOT the synonymous recode arm (INV-0 guarantees the protein there is
+    unchanged, so the arm residues' burial is irrelevant). Returns ``[]`` when the
+    insertion point has no flanking CDS. Residue index = (pos - cds_start) // 3.
+    """
+    mask = list(cds_mask)
+    if not any(mask):
+        return []
+    cds0 = mask.index(True)
+    residues = set()
+    for p in (site_s - 1, site_s):
+        if 0 <= p < len(mask) and mask[p]:
+            residues.add((p - cds0) // 3)
+    if not residues:
+        return []
+    lo, hi = min(residues), max(residues)
+    return list(range(max(0, lo - context), hi + context + 1))
+
+
 def _derive_pbs1(genome: str, *, site_s: int, pbs_length: int, pegrna_strand: str) -> str:
     """PBS1 primes off the 3'-OH the pegRNA nick creates (the pegRNA nick is at S,
     decision 1). It base-pairs antiparallel to the L genomic bases ending at the
@@ -430,6 +458,7 @@ def run_recoded_tjpe(
     het_snps: Optional[Sequence[dict]] = None,
     structure_threshold: float = 0.5,
     max_interface_drop: float = 0.15,
+    insertion_importance_context: int = 1,
 ) -> "RecodedTJPEResult":
     """Ranked-pool-walk orchestrator (decisions 0-15).
 
@@ -634,21 +663,28 @@ def run_recoded_tjpe(
                     diagnostics.append(f"cand{tried}: splice (SpliceAI cross-check): {sp_why}")
                     continue
 
-            # AlphaFold importance: only the recoded CDS footprint maps to residues.
-            # A purely non-coding (byte-exact) arm changes no residue -> skip.
-            if arm.recode_span is not None:
-                cds0 = list(cds_mask).index(True) if any(cds_mask) else 0
-                rlo, rhi = arm.recode_span
-                res_lo = (rlo - cds0) // 3
-                n_res = ((rhi - rlo) + 2) // 3
-                footprint = list(range(res_lo, res_lo + max(1, n_res)))
+            # Insertion-site structural tolerance (ADR 0013): the cargo (tag + linker
+            # + T7-leftover junk) is inserted at S and must NOT land in a structured /
+            # interaction-prone region, or the insert disrupts the fold. Judge the
+            # residues flanking the insertion point -- NOT the synonymous recode arm
+            # (INV-0 guarantees the protein there is unchanged, so the arm residues'
+            # burial is irrelevant). Retains the special-residue hard block.
+            ins_footprint = _insertion_site_footprint(
+                site_s, cds_mask, context=insertion_importance_context
+            )
+            if ins_footprint:
                 try:
-                    blocked = span_blocked(importance_scorer, footprint)
+                    blocked = span_blocked(importance_scorer, ins_footprint)
                 except Exception as exc:  # noqa: BLE001
                     diagnostics.append(f"cand{tried}: importance scorer error: {exc}")
                     continue
                 if blocked:
-                    diagnostics.append(f"cand{tried}: AlphaFold importance blocked a residue")
+                    diagnostics.append(
+                        f"cand{tried}: insertion site S residue(s) {ins_footprint} "
+                        "structurally important (buried/packed/special) -- inserting a "
+                        "tag/linker here risks disrupting the protein; choose a "
+                        "surface/loop/terminal insertion site"
+                    )
                     continue
 
             regions = _regions_for(spacer, pbs2, rtt, pbs1)
