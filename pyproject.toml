@@ -39,7 +39,9 @@ recode = [
 splice = [
     "spliceai>=1.3",
     "tensorflow>=2.6",
-    "maxentpy>=0.0.1",
+    # maxentpy (MaxEntScan, primary cryptic-splice gate) is NOT pip-installable on
+    # Python 3.11 (broken C ext); it is staged pure-Python from source by
+    # scripts/hpc/stage_models.sh (like RiNALMo/RNAformer/Boltz).
 ]
 importance = [
     "biotite>=0.40",

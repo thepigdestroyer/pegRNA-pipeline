@@ -36,6 +36,22 @@ log "TODO-IF-MISSING: GRCh38<->KOLF2.1Jv1.1 chain (build via minimap2 -cx asm5)"
 
 # --- 2. SpliceAI weights (ship with the pip package) + GRCh38 ref for context ---
 log "SpliceAI weights ship inside the 'spliceai' pip package (models/spliceai{1..5}.h5)"
+
+# --- 2b. MaxEntScan (maxentpy) — pure-Python install, broken C extension stripped ---
+# maxentpy is NOT on PyPI, and its shipped Cython C (_hashseq) won't build on
+# Python 3.11 (longintrepr.h was made private) and won't re-cythonize (Cython 3
+# rejects the old .pyx). BUT maxent.py's score5/score3 are pure Python (data
+# matrices matrix5.msg / matrix3.msg); _hashseq is only used by the maxent_fast
+# variant. So install from source with ext_modules stripped -> pure-Python maxentpy.
+PY_ENV="${PIP%/pip}/python"
+if ! "$PY_ENV" -c "import maxentpy.maxent" 2>/dev/null; then
+  log "Installing maxentpy (kepbod/maxentpy) pure-Python, C-extension stripped"
+  rm -rf "$PEGRNA_DATA/maxentpy_src"
+  git clone --depth 1 https://github.com/kepbod/maxentpy "$PEGRNA_DATA/maxentpy_src"
+  sed -i 's/^      ext_modules=ext_modules,//; s/install_requires=..msgpack-python..//' \
+    "$PEGRNA_DATA/maxentpy_src/setup.py"
+  pip install --no-build-isolation "$PEGRNA_DATA/maxentpy_src"
+fi
 # Staged as GRCh38.fa (the name smoke_models.py / CasOffinderScorer expect via
 # PEGRNA_GENOME). Guard on the SAME filename we create, else it re-downloads 3 GB.
 if [ ! -f "$PEGRNA_DATA/GRCh38.fa" ]; then
