@@ -52,6 +52,9 @@ fullstructure = [
 complex = [
     "boltz>=2.0",
 ]
+report = [
+    "python-docx>=1.1",
+]
 
 [project.scripts]
 pegrna = "pegrna_pipeline.agent.cli:cli"
