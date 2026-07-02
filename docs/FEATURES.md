@@ -62,14 +62,16 @@ calibration set.
 |---|---|---|---|
 | Microhomology | DnaChisel (synonymous recoder) | longest perfect repeat between arm and flank | max run **8 bp** (recoder minimises below) |
 | PBS2 | Biopython `Tm_NN` | second-strand primer stability | Tm **37–42 °C**, GC 40–70 %, length scan 10–18 nt |
-| Splice | **SpliceAI** (Pangolin alt) | edit creates/destroys a splice site | Δ ≤ **0.2** (high-recall) |
+| Cryptic splice (primary) | **MaxEntScan** (Yeo & Burge) | edit creates/strengthens a donor/acceptor motif in the recode span + cassette + junctions | MaxEnt < **8** bits (context-free) |
+| Splice (cross-check) | **SpliceAI** (advisory) | native-context splice disruption, when ≥10 kb genomic context is supplied | Δ ≤ **0.2**; skipped on short context |
 | Structural importance | **AlphaFold-DB** + biotite | recoded residue is buried / confident / packed | pLDDT ≥ 70, RSA < 0.25, contacts > 18 |
 | Full-pegRNA 2D structure | **RiNALMo** (GPU) → **RNAformer** (CPU) fallback | functional regions (spacer/PBS/RTT) mis-pair | base-pair prob boundary **0.5** |
 | Docking | **Boltz-2** (AF3-class ipTM) | scaffold–nCas9 interface degraded by the extension | ipTM floor 0.6, max drop 0.2 vs apo |
 | Off-target | **Cas-OFFinder** (+ genome) | ngRNA nick specificity | 0 off-targets beyond the intended site |
 
-Gate order (cheap→expensive): recode/microhomology → PBS2 → INV-0 → TPRT → splice →
-AlphaFold importance → RiNALMo/RNAformer 2D → Boltz-2 docking. Each heavy gate is
+Gate order (cheap→expensive): recode/microhomology → PBS2 → INV-0 → TPRT →
+cryptic-splice (MaxEntScan; SpliceAI advisory cross-check) → AlphaFold importance →
+RiNALMo/RNAformer 2D → Boltz-2 docking. Each heavy gate is
 guarded so a scorer failure skips a candidate (with a diagnostic) rather than
 aborting the walk.
 

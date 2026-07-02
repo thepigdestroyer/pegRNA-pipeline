@@ -30,10 +30,12 @@ class GateScorers:
     importance_scorer: Any
     dock_scorer: Any
     offtarget_scorer: Callable[[List[str]], Dict[str, Tuple[float, int, bool]]]
+    maxent_scorer: Any = None
 
 
 def _fake_bundle() -> GateScorers:
     from pegrna_pipeline.hpc.complex_dock import DockFake
+    from pegrna_pipeline.hpc.cryptic_splice import MaxEntScanFake
     from pegrna_pipeline.hpc.full_structure import FullStructureFake
     from pegrna_pipeline.hpc.splice_screen import SpliceFake
     from pegrna_pipeline.hpc.structure_importance import ResidueMetrics
@@ -59,6 +61,7 @@ def _fake_bundle() -> GateScorers:
         importance_scorer=_AllPassImportance(),
         dock_scorer=DockFake(apo_iptm=0.85, candidate_iptm=0.83),
         offtarget_scorer=_clean_offtarget,
+        maxent_scorer=MaxEntScanFake(),  # all motifs below threshold -> gate passes
     )
 
 
@@ -75,6 +78,7 @@ def _real_bundle(
     **_ignored: Any,
 ) -> GateScorers:
     from pegrna_pipeline.hpc.complex_dock import Boltz2DockScorer
+    from pegrna_pipeline.hpc.cryptic_splice import MaxEntScanScorer
     from pegrna_pipeline.hpc.full_structure import AutoStructureScorer
     from pegrna_pipeline.hpc.offtarget_scorer import CasOffinderScorer
     from pegrna_pipeline.hpc.splice_screen import SpliceAIScorer
@@ -105,6 +109,8 @@ def _real_bundle(
         # --cache points Boltz at pre-staged weights (offline CX3 compute nodes).
         dock_scorer=Boltz2DockScorer(cache_dir=boltz_cache),
         offtarget_scorer=offtarget,
+        # MaxEntScan cryptic-splice gate (maxentpy staged in the [splice] extra).
+        maxent_scorer=MaxEntScanScorer(),
     )
 
 
