@@ -86,12 +86,14 @@ def test_casoffinder_counts_offtargets():
     g = "ACGTACGTACGTACGTACGT"
     rows = [
         (g + "NGG", "chr1", 100, g + "TGG", "+", 0),  # intended on-target
-        (g + "NGG", "chr5", 900, g + "AGG", "+", 2),  # a 2-mismatch off-target
-        (g + "NGG", "chr9", 55, g + "CGG", "-", 3),  # a 3-mismatch off-target
+        (g + "NGG", "chr5", 900, g + "AGG", "+", 2),  # a 2-mismatch (near-tier) off-target
+        (g + "NGG", "chr9", 55, g + "CGG", "-", 3),  # a 3-mismatch (distant) hit -> NOT counted
     ]
     sc = _StubCasOffinder(rows, genome="/x.fa")
     on, off, has = sc([g])[g]
-    assert on == 1.0 and off == 2 and has is True
+    # Only the 2-mismatch near-tier hit disqualifies; the distant 3-mismatch hit is
+    # searched but not counted (default count_mismatch_threshold=2).
+    assert on == 1.0 and off == 1 and has is True
 
 
 def test_casoffinder_guide_absent_is_flagged():

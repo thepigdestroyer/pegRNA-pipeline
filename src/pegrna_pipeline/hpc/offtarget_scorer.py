@@ -83,11 +83,21 @@ class CasOffinderScorer:
     For each guide it enumerates all genomic sites within ``max_mismatches`` of
     ``spacer + PAM`` and aggregates:
 
-      * ``offtarget_count`` = genomic hits BEYOND the single intended on-target
-        (i.e. every hit with mismatches>0, plus any extra exact hits),
+      * ``offtarget_count`` = disqualifying genomic hits beyond the single intended
+        on-target: extra EXACT (0-mismatch) duplicates PLUS near-tier hits with
+        ``0 < mismatches <= count_mismatch_threshold``. Distant hits (mismatches >
+        ``count_mismatch_threshold``, e.g. 3-mismatch sites) are still SEARCHED up to
+        ``max_mismatches`` but are NOT counted — they are not functional off-targets
+        and, against a whole 3 Gb genome, every 20-mer has dozens of them, which would
+        otherwise reject every guide,
       * ``has_offtarget`` = ``offtarget_count > 0``,
       * ``ontarget_proxy`` = 1.0 iff the guide has >=1 exact (0-mismatch) genomic
         hit (it exists uniquely at its locus), else 0.0.
+
+    ``count_mismatch_threshold`` (default 2) is the gate stringency: the mismatch
+    depth at or below which a hit counts as an off-target. It is decoupled from
+    ``max_mismatches`` (the search depth) so the search can characterise the full
+    off-target profile while the gate reflects real cleavage risk.
 
     On-target ACTIVITY (DeepSpCas9/DeepHF) is deliberately NOT this adapter's job
     — Cas-OFFinder scores SPECIFICITY only; layer ``score_guides.R`` for activity.
@@ -102,6 +112,7 @@ class CasOffinderScorer:
         pam: str = "NGG",
         spacer_len: int = 20,
         max_mismatches: int = 3,
+        count_mismatch_threshold: int = 2,
         device: str = "C",  # cas-offinder: C=CPU, G=GPU
         binary: str = "cas-offinder",
     ) -> None:
@@ -109,6 +120,7 @@ class CasOffinderScorer:
         self.pam = pam.upper()
         self.spacer_len = spacer_len
         self.max_mismatches = max_mismatches
+        self.count_mismatch_threshold = count_mismatch_threshold
         self.device = device
         self.binary = binary
 
@@ -142,7 +154,7 @@ class CasOffinderScorer:
             fh.write("\n".join(lines) + "\n")
 
     def __call__(self, protospacers: List[str]) -> "dict[str, Tuple[float, int, bool]]":
-        results: dict = {sp: {"exact": 0, "total": 0} for sp in protospacers}
+        results: dict = {sp: {"exact": 0, "near": 0} for sp in protospacers}
         if not protospacers:
             return {}
         with tempfile.TemporaryDirectory() as tmp:
@@ -154,13 +166,18 @@ class CasOffinderScorer:
                 guide = row["guide"]
                 if guide not in results:
                     continue
-                results[guide]["total"] += 1
-                if row["mismatches"] == 0:
+                mm = row["mismatches"]
+                if mm == 0:
                     results[guide]["exact"] += 1
+                elif mm <= self.count_mismatch_threshold:
+                    results[guide]["near"] += 1
+                # mm > count_mismatch_threshold: searched (up to max_mismatches) but
+                # NOT counted -- distant hits are not functional off-targets.
         out: dict = {}
         for sp, agg in results.items():
-            exact, total = agg["exact"], agg["total"]
-            offtargets = max(0, total - 1) if exact >= 1 else total
+            exact, near = agg["exact"], agg["near"]
+            # Disqualifying off-targets = extra EXACT duplicates + near-tier hits.
+            offtargets = max(0, exact - 1) + near
             on = 1.0 if exact >= 1 else 0.0
             out[sp] = (on, offtargets, offtargets > 0)
         return out
