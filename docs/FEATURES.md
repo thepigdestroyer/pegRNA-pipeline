@@ -89,11 +89,22 @@ unit suite is fast and deterministic.
 
 ## Output
 
-Two files per run: `recoded_tjpe_report.txt` (human-readable) and
-`recoded_tjpe_components.csv` (`index,component,role,part_of,sequence,length`, one row
-per labelled component). The RTT is split into `insert` and `replacement_gDNA`, and
-`part_of` distinguishes the tjPE template-jumping portion (PBS2·RTT·PBS1) from the
-spacer/scaffold. See [`DESIGN_HISTORY.md`](DESIGN_HISTORY.md) §5 for the gate detail.
+Three files per winning design:
+
+- `recoded_tjpe_report.txt` — human-readable text report.
+- `recoded_tjpe_components.csv` — `index,component,role,part_of,sequence,length`, one row
+  per labelled component. The RTT is split into `insert` and `replacement_gDNA`, and
+  `part_of` distinguishes the tjPE template-jumping portion (PBS2·RTT·PBS1) from the
+  spacer/scaffold.
+- `recoded_tjpe_verification.docx` — a **colour-annotated manual cross-check** report
+  (ADR 0012) with a legend and four sections: (1) the genomic context annotated with every
+  region the pegRNA binds/uses and every region that changes; (2) the full pegRNA broken
+  into every component; (3) the predicted fully-edited genomic DNA annotated with the insert
+  and every changed base; (4) every component sequence used to assemble the insert and the
+  winning pegRNA. Requires the `[report]` extra (python-docx); if it is not installed the
+  run still succeeds and the DOCX is skipped.
+
+See [`DESIGN_HISTORY.md`](DESIGN_HISTORY.md) §5 for the gate detail.
 
 ## Validation status
 

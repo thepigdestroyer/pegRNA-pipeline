@@ -210,6 +210,13 @@ class RecodedTJPEResult:
     insert_seq: str = ""
     #: Convenience: the replacement gDNA (recoded arm) sub-sequence in the RTT.
     replacement_gdna: str = ""
+    #: Verification data (for the manual cross-check report). ``edited_allele`` is
+    #: the predicted fully-edited genomic sequence; ``recode_span`` / ``locked_span``
+    #: are genome-context coordinates of the synonymously-recoded and non-coding
+    #: byte-exact re-templated regions. Empty/None until set by the workflow.
+    edited_allele: str = ""
+    recode_span: Optional[Tuple[int, int]] = None
+    locked_span: Optional[Tuple[int, int]] = None
 
 
 def _decompose_rtt(
@@ -704,6 +711,9 @@ def run_recoded_tjpe(
                 rtt_components=rtt_components,
                 insert_seq=parts_map.get("insert", ""),
                 replacement_gdna=parts_map.get("replacement_gdna", ""),
+                edited_allele=edited,
+                recode_span=arm.recode_span,
+                locked_span=arm.locked_span,
             )
 
     raise NoValidPegRNA(

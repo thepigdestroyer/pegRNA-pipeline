@@ -22,6 +22,7 @@ from pegrna_pipeline.hpc.recoded_tjpe_workflow import (
 )
 from pegrna_pipeline.hpc.report_writer import render_recoded_csv, render_recoded_report
 from pegrna_pipeline.hpc.scorer_factory import make_scorers
+from pegrna_pipeline.hpc.verification import build_verification_report, render_verification_docx
 
 __all__ = [
     "design_recoded",
@@ -38,6 +39,9 @@ class RecodedDesignOutput:
     report_path: Optional[str]
     csv_text: str = ""
     csv_path: Optional[str] = None
+    #: Path to the colour-annotated manual-verification DOCX (None if python-docx
+    #: is not installed in this environment, or if no output_dir was given).
+    verification_docx_path: Optional[str] = None
 
 
 def _real_scorer_kwargs(
@@ -179,6 +183,7 @@ def design_recoded(
 
     report_path: Optional[str] = None
     csv_path: Optional[str] = None
+    verification_docx_path: Optional[str] = None
     if output_dir is not None:
         out = Path(output_dir)
         out.mkdir(parents=True, exist_ok=True)
@@ -188,6 +193,15 @@ def design_recoded(
         cpath = out / "recoded_tjpe_components.csv"
         cpath.write_text(csv_text)
         csv_path = str(cpath)
+        # Colour-annotated manual-verification DOCX (sections 1-4). Guarded: if
+        # python-docx is not installed the run still succeeds with text + CSV.
+        try:
+            vreport = build_verification_report(result, genome=genome, cargo=cargo)
+            vpath = out / "recoded_tjpe_verification.docx"
+            render_verification_docx(vreport, vpath)
+            verification_docx_path = str(vpath)
+        except ImportError:
+            pass
 
     return RecodedDesignOutput(
         result=result,
@@ -195,6 +209,7 @@ def design_recoded(
         report_path=report_path,
         csv_text=csv_text,
         csv_path=csv_path,
+        verification_docx_path=verification_docx_path,
     )
 
 
