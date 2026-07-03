@@ -8,7 +8,7 @@ def _result():
     return RecodedTJPEResult(
         pegRNA_sequence="ACGT" * 20,
         spacer="ACGTACGTACGTACGTACGT",
-        pbs2="GCATGACTGAACGAT",
+        rcpbs2="GCATGACTGAACGAT",
         rtt="ATGAAACCCGGG" + "GCATGCAT",
         pbs1="ACGTACGTACGTA",
         polyu="UUU",
@@ -41,7 +41,7 @@ def test_report_includes_design_gates_and_provenance():
         "deletion",
         "0",
         "recode",
-        "PBS2",
+        "rcPBS2",
         "PolyU",
         "pegRNA",
         "ngRNA",

@@ -63,7 +63,7 @@ def _demo_result():
     return RecodedTJPEResult(
         pegRNA_sequence="SPACER" + "SCAF" + "PB2" + rtt + "PB1" + "UUU",
         spacer="SPACER",
-        pbs2="PB2",
+        rcpbs2="PB2",
         rtt=rtt,
         pbs1="PB1",
         polyu="UUU",
@@ -93,7 +93,7 @@ def test_csv_has_component_rows_with_split_insert():
     header, data = rows[0], rows[1:]
     assert header == ["index", "component", "role", "part_of", "sequence", "length"]
     names = [r[1] for r in data]
-    assert names == ["spacer", "scaffold", "PBS2", "insert", "replacement_gDNA", "PBS1", "PolyU"]
+    assert names == ["spacer", "scaffold", "rcPBS2", "insert", "replacement_gDNA", "PBS1", "PolyU"]
     # insert and replacement_gDNA are distinct labelled rows (not one opaque RTT)
     assert "RTT" not in names
     # metadata is present as comment rows

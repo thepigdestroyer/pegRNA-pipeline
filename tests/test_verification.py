@@ -19,14 +19,14 @@ EDITED = PREFIX + CARGO + ARM_SENSE + SUFFIX  # 38 nt (nick>S: prefix+cargo+arm+
 
 
 def _result():
-    spacer, pbs2, pbs1, polyu = "UUUUUUUUUU", "TTTT", "AAAA", "UUU"
+    spacer, rcpbs2, pbs1, polyu = "UUUUUUUUUU", "TTTT", "AAAA", "UUU"
     rtt_components = [("insert", CARGO), ("replacement_gdna", ARM_SENSE)]
     rtt = CARGO + ARM_SENSE
-    peg = spacer + STANDARD_SGRNA_SCAFFOLD + pbs2 + rtt + pbs1 + polyu
+    peg = spacer + STANDARD_SGRNA_SCAFFOLD + rcpbs2 + rtt + pbs1 + polyu
     return RecodedTJPEResult(
         pegRNA_sequence=peg,
         spacer=spacer,
-        pbs2=pbs2,
+        rcpbs2=rcpbs2,
         rtt=rtt,
         pbs1=pbs1,
         polyu=polyu,
@@ -87,7 +87,7 @@ def test_components_complete():
     for expected in [
         "spacer",
         "scaffold",
-        "PBS2",
+        "rcPBS2",
         "insert",
         "replacement_gDNA",
         "PBS1",
