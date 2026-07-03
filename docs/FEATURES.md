@@ -14,7 +14,8 @@ defending the edit against a stack of biological failure modes. Output is a
 human-readable report plus a component-breakdown CSV (see
 [Output](#output)).
 
-The construct is emitted 5′→3′ as **Spacer · Scaffold · PBS2 · RTT · PBS1 · PolyU**,
+The construct is emitted 5′→3′ as **Spacer · Scaffold · rcPBS2 · RTT · PBS1 · PolyU**
+(rcPBS2 = reverse complement of PBS2; PBS2 itself is synthesised onto the flap, ADR 0014),
 where the RTT is decomposed into the **insert** (cargo) and the **replacement gDNA**
 (the recoded deletion-replacement arm).
 
@@ -33,9 +34,10 @@ where the RTT is decomposed into the **insert** (cargo) and the **replacement gD
   cheap→expensive; the first candidate passing every gate wins. Exhaustion is
   fail-loud (`NoValidPegRNA`) with a per-candidate diagnostic naming the gate that
   killed each candidate. The insert site `S` never moves.
-- **PBS2 length selection.** PBS2 is genome-fixed at the ngRNA nick, so its **length
-  is scanned per nick** (10–18 nt) to hit the Tm band, decoupled from PBS1. (This
-  replaced a fixed-length gate that collapsed whole candidate pools.)
+- **rcPBS2 length selection.** rcPBS2 (= RC of PBS2; the pegRNA carries rcPBS2, ADR 0014)
+  is genome-fixed at the ngRNA nick, so its **length is scanned per nick** (10–18 nt) to hit
+  the Tm band, decoupled from PBS1. (This replaced a fixed-length gate that collapsed whole
+  candidate pools.)
 - **INV-0 correctness contract.** The product differs from the reference by exactly:
   the cargo at `S`, protein-silent recode-span edits, byte-exact re-templating of any
   non-coding span, and ≤2 silent PAM edits. Enforced with a real translation check.
@@ -61,7 +63,7 @@ calibration set.
 | Gate | Tool / model | Checks | Default threshold |
 |---|---|---|---|
 | Microhomology | DnaChisel (synonymous recoder) | longest perfect repeat between arm and flank | max run **8 bp** (recoder minimises below) |
-| PBS2 | Biopython `Tm_NN` | second-strand primer stability | Tm **37–42 °C**, GC 40–70 %, length scan 10–18 nt |
+| rcPBS2 | Biopython `Tm_NN` | second-strand primer stability | Tm **37–42 °C**, GC 40–70 %, length scan 10–18 nt |
 | Cryptic splice (primary) | **MaxEntScan** (Yeo & Burge) | edit creates/strengthens a donor/acceptor motif in the recode span + cassette + junctions | MaxEnt < **8** bits (context-free) |
 | Splice (cross-check) | **SpliceAI** (advisory) | native-context splice disruption, when ≥10 kb genomic context is supplied | Δ ≤ **0.2**; skipped on short context |
 | Insertion-site tolerance | **AlphaFold-DB** + biotite | the cargo insertion site (residues flanking S) must not be buried / packed / special, so the tag+linker+junk insert cannot disrupt the fold (judges the insertion site, **not** the synonymous recode arm) | pLDDT ≥ 70 & RSA < 0.25, or contacts > 18, or special residue |
@@ -69,7 +71,7 @@ calibration set.
 | Docking | **Boltz-2** (AF3-class ipTM) | scaffold–nCas9 interface degraded by the extension | ipTM floor 0.6, max drop 0.2 vs apo |
 | Off-target | **Cas-OFFinder** (+ genome) | ngRNA nick specificity | 0 off-targets beyond the intended site |
 
-Gate order (cheap→expensive): recode/microhomology → PBS2 → INV-0 → TPRT →
+Gate order (cheap→expensive): recode/microhomology → rcPBS2 → INV-0 → TPRT →
 cryptic-splice (MaxEntScan; SpliceAI advisory cross-check) → AlphaFold importance →
 RiNALMo/RNAformer 2D → Boltz-2 docking. Each heavy gate is
 guarded so a scorer failure skips a candidate (with a diagnostic) rather than
@@ -94,7 +96,7 @@ Three files per winning design:
 - `recoded_tjpe_report.txt` — human-readable text report.
 - `recoded_tjpe_components.csv` — `index,component,role,part_of,sequence,length`, one row
   per labelled component. The RTT is split into `insert` and `replacement_gDNA`, and
-  `part_of` distinguishes the tjPE template-jumping portion (PBS2·RTT·PBS1) from the
+  `part_of` distinguishes the tjPE template-jumping portion (rcPBS2·RTT·PBS1) from the
   spacer/scaffold.
 - `recoded_tjpe_verification.docx` — a **colour-annotated manual cross-check** report
   (ADR 0012) with a legend and four sections: (1) the genomic context annotated with every
@@ -143,7 +145,7 @@ pytest -q            # ~670 tests, heavy-model-free
 ```
 
 Coverage spans the design logic (enumeration, ranked-pool-walk, INV-0, strand/TPRT,
-arm partition, nick search), each gate's pure logic (PBS2 selection, splice
+arm partition, nick search), each gate's pure logic (rcPBS2 selection, splice
 indel-delta, structure region-pairing, docking thresholds, off-target aggregation),
 the scorer adapters (fakes + fail-loud paths, incl. the Boltz offline YAML), the
 output decomposition + CSV, and an end-to-end example run. Real models are validated
