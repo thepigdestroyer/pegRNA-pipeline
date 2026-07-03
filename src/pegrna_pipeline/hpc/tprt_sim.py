@@ -24,7 +24,7 @@ from typing import Optional
 
 from Bio.Seq import Seq
 
-__all__ = ["simulate_tprt", "TPRTMismatch"]
+__all__ = ["simulate_tprt", "simulate_rcpbs2_capture", "TPRTMismatch"]
 
 
 class TPRTMismatch(RuntimeError):
@@ -83,3 +83,41 @@ def simulate_tprt(
             "check complement vs reverse vs reverse_complement on the RTT tail)"
         )
     return allele
+
+
+def simulate_rcpbs2_capture(
+    *,
+    rcpbs2: str,
+    ts_capture_window: str,
+    expected_pbs2: Optional[str] = None,
+) -> str:
+    """Reconstruct the flap-borne PBS2 from the tj-pegRNA rcPBS2 and assert capture.
+
+    Mechanism (Zheng 2023; ADR 0014): the tj-pegRNA carries ``rcPBS2 = RC(TS)``. The
+    RT copies it into the 3' end of the newly-synthesised flap, where it appears as
+    its reverse complement, ``PBS2 = RC(rcPBS2)``. That flap-borne PBS2 must equal the
+    **target-strand** window (5'->3') it captures at the ngRNA nick — i.e. it recovers
+    the TS window when ``rcpbs2`` was correctly oriented as ``RC(TS)``.
+
+    Physics: the flap is synthesised as the reverse complement of the pegRNA 3'
+    extension template, so a template segment ``rcPBS2 = RC(TS)`` becomes
+    ``RC(RC(TS)) = TS`` on the flap. If a non-RC'd rcPBS2 (the TS literal — the old
+    ``orient_pbs2``=identity-for-Rv bug) is supplied, ``RC(rcpbs2) != TS`` and
+    :class:`TPRTMismatch` is raised.     ``expected_pbs2`` optionally pins the
+    reconstructed PBS2 for an extra caller-supplied cross-check.
+
+    Locus-dependent caveat: on an RC-palindromic capture window (``RC(TS) == TS``)
+    a TS-literal rcPBS2 is byte-identical to ``RC(TS)``, so the orientation error is
+    undetectable from sequence alone — this guard cannot flag it there.
+    """
+    pbs2_on_flap = _rc(rcpbs2)
+    if pbs2_on_flap != ts_capture_window:
+        raise TPRTMismatch(
+            "rcPBS2 does not capture the target-strand window — orientation error: "
+            f"RC(rcPBS2)={pbs2_on_flap!r} != TS window {ts_capture_window!r}. The "
+            "tj-pegRNA must carry rcPBS2 = RC(TS) (ADR 0014); a TS-literal rcPBS2 fails "
+            "here (check reverse_complement vs identity on the rcPBS2)."
+        )
+    if expected_pbs2 is not None and pbs2_on_flap != expected_pbs2:
+        raise TPRTMismatch(f"reconstructed PBS2 {pbs2_on_flap!r} != expected {expected_pbs2!r}")
+    return pbs2_on_flap

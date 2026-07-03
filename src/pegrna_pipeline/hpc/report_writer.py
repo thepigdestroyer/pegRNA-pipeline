@@ -684,9 +684,9 @@ def render_recoded_report(result, manifest: dict) -> str:
     lines: List[str] = []
     lines.append("=== Recoded TJ-PE pegRNA design ===")
     lines.append("")
-    lines.append("Full construct (pegRNA, 5'->3' = Spacer.Scaffold.PBS2.RTT.PBS1.PolyU):")
+    lines.append("Full construct (pegRNA, 5'->3' = Spacer.Scaffold.rcPBS2.RTT.PBS1.PolyU):")
     lines.append(f"  spacer : {result.spacer}")
-    lines.append(f"  PBS2   : {result.pbs2}")
+    lines.append(f"  rcPBS2 : {result.rcpbs2}")
     lines.append(f"  RTT    : {result.rtt}")
     # Decompose the RTT ("insert") into its labelled sub-parts. Historically the
     # whole RTT was dumped as one opaque block; it is the insert (cargo) plus the
@@ -701,7 +701,7 @@ def render_recoded_report(result, manifest: dict) -> str:
     lines.append(f"  ngRNA protospacer : {result.ngrna_protospacer}")
     lines.append("")
     lines.append(
-        "  (tjPE template-jumping portion = PBS2.RTT.PBS1, where RTT = insert + "
+        "  (tjPE template-jumping portion = rcPBS2.RTT.PBS1, where RTT = insert + "
         "replacement gDNA;"
     )
     lines.append("   the spacer and scaffold complete the full construct.)")
@@ -754,7 +754,12 @@ def render_recoded_csv(result, manifest: Dict[str, Any] | None = None) -> str:
     rows: List[tuple] = [
         ("spacer", "targets+nicks at S", "spacer/scaffold", result.spacer),
         ("scaffold", "sgRNA scaffold (binds nCas9)", "spacer/scaffold", scaffold),
-        ("PBS2", "primer-binding site 2 (2nd-strand capture)", "tjPE_jump", result.pbs2),
+        (
+            "rcPBS2",
+            "reverse complement of PBS2 (carried by pegRNA; 2nd-strand capture)",
+            "tjPE_jump",
+            result.rcpbs2,
+        ),
     ]
     if result.rtt_components:
         for label, seq in result.rtt_components:

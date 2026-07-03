@@ -6,7 +6,7 @@ pipeline assembled a functional pegRNA with nothing missed. Four sections:
   1. The genomic context around the edit, annotated with every region the
      pegRNA / tjPE-pegRNA binds or uses and every region that will be changed.
   2. The full pegRNA sequence, broken into every component (Spacer, Scaffold,
-     PBS2, RTT = insert + replacement gDNA, PBS1, PolyU).
+     rcPBS2, RTT = insert + replacement gDNA, PBS1, PolyU).
   3. The predicted fully-edited genomic DNA, annotated with the inserted cargo
      and every recoded (changed) base.
   4. A table of every component sequence the pipeline used to assemble the insert
@@ -87,7 +87,11 @@ CATEGORY_STYLE: Dict[str, Tuple[str, str, int]] = {
     "locked": ("Non-coding, re-templated byte-exact (Decision 15)", "GRAY_25", 75),
     "spacer": ("Spacer (targets + nicks at S)", "TURQUOISE", 60),
     "pbs1": ("PBS1 (primes off the pegRNA nick 3'-OH at S)", "TEAL", 55),
-    "pbs2": ("PBS2 (second-strand capture at the ngRNA nick)", "VIOLET", 55),
+    "rcpbs2": (
+        "rcPBS2 (RC of PBS2; carried by pegRNA, captures 2nd strand at ngRNA nick)",
+        "VIOLET",
+        55,
+    ),
     "rtt": ("RTT (reverse-transcription template)", "YELLOW", 40),
     "scaffold": ("sgRNA scaffold (binds nCas9)", "GRAY_25", 30),
     "polyu": ("3' PolyU tail", "DARK_YELLOW", 30),
@@ -192,12 +196,12 @@ def _pegrna_section(result) -> AnnotatedSequence:
     anns: List[Annotation] = []
     notes: List[str] = []
     scaffold = STANDARD_SGRNA_SCAFFOLD
-    # Authoritative 5'->3' order: Spacer . Scaffold . PBS2 . RTT . PBS1 . PolyU.
+    # Authoritative 5'->3' order: Spacer . Scaffold . rcPBS2 . RTT . PBS1 . PolyU.
     i = 0
     ordered = [
         ("spacer", result.spacer, "Spacer"),
         ("scaffold", scaffold, "Scaffold"),
-        ("pbs2", result.pbs2, "PBS2"),
+        ("rcpbs2", result.rcpbs2, "rcPBS2"),
     ]
     for cat, sub, label in ordered:
         if sub:
@@ -225,7 +229,7 @@ def _pegrna_section(result) -> AnnotatedSequence:
             "-- verify the assembly order."
         )
     notes.append(
-        f"tjPE template-jumping portion = PBS2.RTT.PBS1 (positions {rtt_start - len(result.pbs2)}..{rtt_end + len(result.pbs1)})."
+        f"tjPE template-jumping portion = rcPBS2.RTT.PBS1 (positions {rtt_start - len(result.rcpbs2)}..{rtt_end + len(result.pbs1)})."
     )
     return AnnotatedSequence("2. Full pegRNA, component breakdown", seq, anns, notes)
 
@@ -286,7 +290,10 @@ def _components(result, cargo: str) -> List[ComponentRow]:
         ComponentRow("spacer", result.spacer, "targets + nicks at S", "pegRNA"),
         ComponentRow("scaffold", STANDARD_SGRNA_SCAFFOLD, "sgRNA scaffold (binds nCas9)", "pegRNA"),
         ComponentRow(
-            "PBS2", result.pbs2, "primer-binding site 2 (2nd-strand capture)", "pegRNA (tjPE jump)"
+            "rcPBS2",
+            result.rcpbs2,
+            "reverse complement of PBS2 (carried by pegRNA; 2nd-strand capture)",
+            "pegRNA (tjPE jump)",
         ),
     ]
     if result.rtt_components:

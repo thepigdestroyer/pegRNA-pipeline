@@ -40,7 +40,7 @@ def test_ctcf_example_produces_a_report(tmp_path):
     assert out.result.pegRNA_sequence
     assert out.result.site_s == 147
     assert out.result.deletion_size == 0  # recode, not delete
-    assert out.report_text and "Spacer.Scaffold.PBS2.RTT.PBS1.PolyU" in out.report_text
+    assert out.report_text and "Spacer.Scaffold.rcPBS2.RTT.PBS1.PolyU" in out.report_text
     assert Path(out.report_path).exists()
     # PBS2 length is chosen by the per-nick scan (the fix); it need not be 13/15/17.
-    assert 10 <= len(out.result.pbs2) <= 18
+    assert 10 <= len(out.result.rcpbs2) <= 18

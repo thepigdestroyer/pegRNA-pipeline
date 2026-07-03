@@ -22,7 +22,7 @@ from pegrna_pipeline.hpc.nick_search import enumerate_nick_sites, screen_nick_ca
 from pegrna_pipeline.hpc.recode_arm import recode_arm
 from pegrna_pipeline.hpc.scarless import assert_inv0
 from pegrna_pipeline.hpc.splice_screen import passes_splice_gate
-from pegrna_pipeline.hpc.strand_orientation import orient_pbs2, orient_rtt_tail
+from pegrna_pipeline.hpc.strand_orientation import orient_rcpbs2, orient_rtt_tail
 from pegrna_pipeline.hpc.structure_importance import span_blocked
 from pegrna_pipeline.hpc.tjpe_workflow import STANDARD_SGRNA_SCAFFOLD, assemble_tj_pegrna_v2
 from pegrna_pipeline.hpc.tprt_sim import TPRTMismatch, simulate_tprt
@@ -30,7 +30,7 @@ from pegrna_pipeline.hpc.tprt_sim import TPRTMismatch, simulate_tprt
 __all__ = [
     "PbsRttVariant",
     "enumerate_pbs_rtt_variants",
-    "passes_pbs2_gate",
+    "passes_rcpbs2_gate",
     "run_recoded_tjpe",
     "RecodedTJPEResult",
     "NoValidPegRNA",
@@ -77,8 +77,8 @@ def enumerate_pbs_rtt_variants(
     return out
 
 
-def passes_pbs2_gate(
-    pbs2: str,
+def passes_rcpbs2_gate(
+    rcpbs2: str,
     *,
     repetitive: bool,
     min_len: int = 11,
@@ -88,25 +88,25 @@ def passes_pbs2_gate(
     tm_lo: float = 37.0,
     tm_hi: float = 42.0,
 ) -> Tuple[bool, str]:
-    """Joint PBS2 validation (decision 8): length, GC 40-70 %, Tm 37-42 C, not
+    """Joint rcPBS2 validation (decision 8): length, GC 40-70 %, Tm 37-42 C, not
     repetitive.
 
-    This VALIDATES a chosen PBS2. The length is selected upstream by
-    :func:`_select_pbs2`, which scans the length range to hit the Tm band, so this
-    gate should pass by construction for a selected PBS2 (it also guards a
-    caller-supplied PBS2). ``min_len``/``max_len`` default to the classic 11-17;
-    :func:`_select_pbs2` uses the wider 10-18 scan from THRESHOLDS. Tm uses
-    Biopython's nearest-neighbour model (imported lazily to keep the core import
-    light).
+    This VALIDATES a chosen rcPBS2 (the RC-of-PBS2 element the tj-pegRNA carries).
+    The length is selected upstream by :func:`_select_rcpbs2`, which scans the length
+    range to hit the Tm band, so this gate should pass by construction for a selected
+    rcPBS2 (it also guards a caller-supplied one). ``min_len``/``max_len`` default to
+    the classic 11-17; :func:`_select_rcpbs2` uses the wider 10-18 scan from
+    THRESHOLDS. Tm uses Biopython's nearest-neighbour model (imported lazily to keep
+    the core import light).
     """
-    if not (min_len <= len(pbs2) <= max_len):
-        return False, f"length {len(pbs2)} outside [{min_len},{max_len}]"
-    gc = _gc_content(pbs2)
+    if not (min_len <= len(rcpbs2) <= max_len):
+        return False, f"length {len(rcpbs2)} outside [{min_len},{max_len}]"
+    gc = _gc_content(rcpbs2)
     if not (gc_lo <= gc <= gc_hi):
         return False, f"GC {gc:.2f} outside [{gc_lo},{gc_hi}]"
     from Bio.SeqUtils import MeltingTemp as mt  # noqa: PLC0415
 
-    tm = float(mt.Tm_NN(pbs2))
+    tm = float(mt.Tm_NN(rcpbs2))
     if not (tm_lo <= tm <= tm_hi):
         return False, f"Tm {tm:.1f} outside [{tm_lo},{tm_hi}]"
     if repetitive:
@@ -127,7 +127,7 @@ def _is_repetitive(seq: str) -> bool:
     return False
 
 
-def _select_pbs2(
+def _select_rcpbs2(
     genome: str,
     *,
     nick_position: int,
@@ -139,21 +139,26 @@ def _select_pbs2(
     len_min: int,
     len_max: int,
 ) -> Tuple[Optional[str], str]:
-    """Choose PBS2 by SCANNING its length to hit the Tm band, decoupled from PBS1.
+    """Choose rcPBS2 by SCANNING its length to hit the Tm band, decoupled from PBS1.
 
-    PBS2 is the second-strand primer-binding site: it equals the captured genomic
-    window immediately 5' of the ngRNA nick, oriented per strand. Its sequence is
-    fixed by the genome, so the only free parameter is LENGTH. Fixing length (to
-    PBS1's lengths) and then rejecting on Tm made the whole candidate pool collapse
-    (all share ~one nick's window). Instead scan ``len_min..len_max`` and return the
-    valid PBS2 whose Tm is closest to the band centre; ``(None, why)`` if none fit
-    (that nick simply yields no priming-competent PBS2 — a per-nick miss, not a
-    whole-run failure).
+    rcPBS2 is the second-strand primer-binding site carried by the tj-pegRNA:
+    ``rcPBS2 = RC(TS)`` over the window immediately 5' of the ngRNA nick (ADR 0014).
+    The target-strand window is the captured sense window for a reverse-targeting
+    (``Rv``) pegRNA and its reverse complement for a forward (``Fw``) one; either way
+    the emitted rcPBS2 is :func:`orient_rcpbs2` of that target-strand window. Its
+    sequence is fixed by the genome, so the only free parameter is LENGTH. Fixing
+    length (to PBS1's lengths) and then rejecting on Tm made the whole candidate pool
+    collapse (all share ~one nick's window). Instead scan ``len_min..len_max`` and
+    return the valid rcPBS2 whose Tm is closest to the band centre; ``(None, why)`` if
+    none fit (that nick simply yields no priming-competent rcPBS2 — a per-nick miss,
+    not a whole-run failure). Tm(NN)/GC/repetitiveness are reverse-complement
+    invariant, so the length choice does not depend on the orientation.
     """
+    from Bio.Seq import Seq  # noqa: PLC0415
     from Bio.SeqUtils import MeltingTemp as mt  # noqa: PLC0415
 
     center = (tm_lo + tm_hi) / 2.0
-    best: Optional[Tuple[float, str, float]] = None  # (dist_to_center, pbs2, tm)
+    best: Optional[Tuple[float, str, float]] = None  # (dist_to_center, rcpbs2, tm)
     considered = 0
     for length in range(len_min, len_max + 1):
         start = nick_position - length
@@ -162,21 +167,27 @@ def _select_pbs2(
         captured = genome[start:nick_position].upper()
         if len(captured) < length:
             continue
-        pbs2 = orient_pbs2(captured, pegrna_strand=pegrna_strand)
-        gc = _gc_content(pbs2)
+        if set(captured) - {"A", "C", "G", "T"}:
+            # Non-ACGT window (e.g. an assembly-gap N-run) is a non-priming site;
+            # Tm_NN silently ignores N, so reject the alphabet explicitly (per-nick miss).
+            continue
+        # Target-strand window at the capture locus, then rcPBS2 = RC(TS) (ADR 0014).
+        ts_window = captured if pegrna_strand == "Rv" else str(Seq(captured).reverse_complement())
+        rcpbs2 = orient_rcpbs2(ts_window)
+        gc = _gc_content(rcpbs2)
         if not (gc_lo <= gc <= gc_hi):
             continue
-        if _is_repetitive(pbs2):
+        if _is_repetitive(rcpbs2):
             continue
-        tm = float(mt.Tm_NN(pbs2))
+        tm = float(mt.Tm_NN(rcpbs2))
         considered += 1
         if tm_lo <= tm <= tm_hi:
             d = abs(tm - center)
             if best is None or d < best[0]:
-                best = (d, pbs2, tm)
+                best = (d, rcpbs2, tm)
     if best is None:
         return None, (
-            f"no PBS2 length in [{len_min},{len_max}] hit Tm [{tm_lo},{tm_hi}] "
+            f"no rcPBS2 length in [{len_min},{len_max}] hit Tm [{tm_lo},{tm_hi}] "
             f"with GC [{gc_lo},{gc_hi}] at nick {nick_position} "
             f"({considered} GC/repeat-valid lengths, none in Tm band)"
         )
@@ -189,7 +200,7 @@ class RecodedTJPEResult:
 
     pegRNA_sequence: str
     spacer: str
-    pbs2: str
+    rcpbs2: str
     rtt: str
     pbs1: str
     polyu: str
@@ -463,7 +474,7 @@ def run_recoded_tjpe(
     """Ranked-pool-walk orchestrator (decisions 0-15).
 
     Builds a ranked candidate pool once; for each candidate runs the gates in
-    cheap->expensive order (recode + INV-0 + PBS2 + ViennaRNA-class structure;
+    cheap->expensive order (recode + INV-0 + rcPBS2 + ViennaRNA-class structure;
     then splice; then AlphaFold importance; then RiNALMo 2D structure; then
     Boltz-2 docking LAST). The first candidate passing every gate wins. The
     insert site ``site_s`` NEVER moves. Exhausting the pool raises
@@ -548,10 +559,10 @@ def run_recoded_tjpe(
             )
             continue
 
-        # PBS2 depends only on the nick (not the RTT variant): choose its LENGTH
+        # rcPBS2 depends only on the nick (not the RTT variant): choose its LENGTH
         # once per nick to hit the Tm band (decision 8), decoupled from PBS1's
         # length. A per-nick miss here skips this nick, not the whole run.
-        pbs2, pbs2_why = _select_pbs2(
+        rcpbs2, rcpbs2_why = _select_rcpbs2(
             genome,
             nick_position=pos,
             pegrna_strand=pegrna_strand,
@@ -562,8 +573,8 @@ def run_recoded_tjpe(
             len_min=THRESHOLDS.pbs2_len_min,
             len_max=THRESHOLDS.pbs2_len_max,
         )
-        if pbs2 is None:
-            diagnostics.append(f"nick {pos}: PBS2 select: {pbs2_why}")
+        if rcpbs2 is None:
+            diagnostics.append(f"nick {pos}: rcPBS2 select: {rcpbs2_why}")
             continue
 
         for variant in variants:
@@ -624,7 +635,7 @@ def run_recoded_tjpe(
             )
             peg = assemble_tj_pegrna_v2(
                 spacer=spacer,
-                pbs2=pbs2,
+                pbs2=rcpbs2,
                 rtt=rtt,
                 pbs1=pbs1,
                 polyu="UUU",
@@ -687,7 +698,7 @@ def run_recoded_tjpe(
                     )
                     continue
 
-            regions = _regions_for(spacer, pbs2, rtt, pbs1)
+            regions = _regions_for(spacer, rcpbs2, rtt, pbs1)
             try:
                 pairing = functional_region_pairing(
                     peg,
@@ -732,7 +743,7 @@ def run_recoded_tjpe(
             return RecodedTJPEResult(
                 pegRNA_sequence=peg,
                 spacer=spacer,
-                pbs2=pbs2,
+                rcpbs2=rcpbs2,
                 rtt=rtt,
                 pbs1=pbs1,
                 polyu="UUU",
@@ -758,20 +769,20 @@ def run_recoded_tjpe(
     )
 
 
-def _regions_for(spacer: str, pbs2: str, rtt: str, pbs1: str) -> Dict[str, Tuple[int, int]]:
+def _regions_for(spacer: str, rcpbs2: str, rtt: str, pbs1: str) -> Dict[str, Tuple[int, int]]:
     """Region offsets in the assembled pegRNA (authoritative order, scaffold excluded
     from cross-region scoring by name)."""
     scaf = len(STANDARD_SGRNA_SCAFFOLD)
     i0 = 0
     i1 = i0 + len(spacer)
     i2 = i1 + scaf
-    i3 = i2 + len(pbs2)
+    i3 = i2 + len(rcpbs2)
     i4 = i3 + len(rtt)
     i5 = i4 + len(pbs1)
     return {
         "spacer": (i0, i1),
         "scaffold": (i1, i2),
-        "pbs2": (i2, i3),
+        "rcpbs2": (i2, i3),
         "rtt": (i3, i4),
         "pbs1": (i4, i5),
     }
