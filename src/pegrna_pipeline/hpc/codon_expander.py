@@ -458,3 +458,180 @@ def optimise_bulk(aa_sequence: str) -> str:
         dna_parts.append(best_codon)
 
     return "".join(dna_parts)
+
+
+# ------------------------------------------ Stage B: scalable top-N by CAI (ADR 0015)
+#
+# Ranking synonymous variants by CAI is separable: CAI = exp((1/K) * sum_i log w_i)
+# with K (count of non-excluded codons) fixed by the aa sequence, so CAI-descending
+# order == descending sum of per-codon log-w. The top-N is therefore a k-best-over-
+# independent-choices problem (best-first / Lawler-style k-best on the codon-index
+# lattice), solved lazily so a 40 bp end (~10^5-10^7 combos) or a 500 bp middle never
+# needs full enumeration. Quality filters (stop/CpG/restriction/homopolymer) are
+# non-separable, so they gate YIELDING (not exploration) as a lazy post-filter; since
+# the stream is CAI-descending, filtering preserves order.
+
+
+def _cai_weight(codon: str) -> float:
+    """Floored relative adaptiveness used for CAI ordering. Excluded codons
+    (single-codon families, stops) are CAI-neutral (weight 1.0 -> log 0), matching
+    :func:`human_cai`, which drops them from the geometric mean."""
+    cu = codon.upper()
+    if cu in _CAI_EXCLUDED:
+        return 1.0
+    return max(_CAI_REL_ADAPT.get(cu, 0.0), _CAI_ZERO_FLOOR)
+
+
+def _cai_choices(aa_sequence: str) -> Tuple[List[List[str]], List[List[float]]]:
+    """Per-position codon lists sorted by CAI weight desc (codon asc tiebreak), with
+    the matching per-choice log-weights. Raises :class:`KeyError` on an unknown aa."""
+    choices: List[List[str]] = []
+    logws: List[List[float]] = []
+    for aa in aa_sequence:
+        key = aa.upper()
+        if key not in CODONS_BY_AA:
+            raise KeyError(aa)
+        ordered = sorted(CODONS_BY_AA[key], key=lambda c: (-_cai_weight(c), c))
+        choices.append(ordered)
+        logws.append([math.log(_cai_weight(c)) for c in ordered])
+    return choices, logws
+
+
+def _cai_kbest(
+    aa_sequence: str, *, max_examined: int, max_states: int, stats: "dict | None" = None
+) -> Iterator[Tuple[str, int, float]]:
+    """Lazily yield ``(dna, c_count, gc)`` for filter-passing synonymous variants of
+    ``aa_sequence`` in CAI-descending order, via best-first (Lawler-style) k-best over
+    the codon-index lattice.
+
+    The heap key is ``(-score, state)``; ``score`` (sum of per-codon log-w) is carried
+    incrementally (child = parent - old_logw + new_logw, clamped non-increasing so pop
+    order stays monotone under float round-off), and the DNA is materialised only when a
+    state is popped (for the filter check and yield) -- so a pushed successor costs no
+    full rebuild. ``state`` is unique per variant, giving a total, deterministic order.
+    Exploration is bounded by ``max_examined`` (time) and ``max_states`` (memory, = size
+    of the visited set); when either cap is hit, ``stats['truncated']`` is set (if
+    ``stats`` is given) and the generator stops, so a filter-hostile locus terminates
+    instead of walking the whole lattice.
+    """
+    if not aa_sequence:
+        return
+    choices, logws = _cai_choices(aa_sequence)
+    length = len(choices)
+    start = (0,) * length
+    start_score = math.fsum(logws[i][0] for i in range(length))
+    heap: List[Tuple[float, Tuple[int, ...]]] = [(-start_score, start)]
+    visited = {start}
+    examined = 0
+    while heap:
+        neg_score, state = heapq.heappop(heap)
+        examined += 1
+        parent_score = -neg_score
+        # Explore successors regardless of this state's filter outcome (a filtered state
+        # may sit between two passing ones on the lattice). Score is incremental.
+        for i in range(length):
+            nxt = state[i] + 1
+            if nxt < len(choices[i]):
+                child = state[:i] + (nxt,) + state[i + 1 :]
+                if child not in visited:
+                    visited.add(child)
+                    # Non-increasing by construction (choices sorted by weight desc);
+                    # clamp guards float round-up so the heap pops in monotone CAI order.
+                    child_score = min(
+                        parent_score, parent_score - logws[i][state[i]] + logws[i][nxt]
+                    )
+                    heapq.heappush(heap, (-child_score, child))
+        dna = "".join(choices[i][state[i]] for i in range(length))
+        if not (
+            _has_internal_stop(dna)
+            or _has_cpg(dna)
+            or _has_restriction_site(dna)
+            or _has_homopolymer(dna)
+        ):
+            yield dna, dna.count("C"), _gc_content(dna)
+        if examined >= max_examined or len(visited) >= max_states:
+            if stats is not None:
+                stats["truncated"] = 1
+            return
+
+
+def rank_insert_variants_by_cai(
+    aa_sequence: str,
+    *,
+    max_variants: int = 2000,
+    max_examined: int | None = None,
+    max_states: int | None = None,
+) -> List[CodonVariant]:
+    """Return up to ``max_variants`` synonymous variants of ``aa_sequence`` in
+    CAI-descending order (most human-adapted **filter-passing** variant first) via the
+    lazy k-best search (no full enumeration). Within an exact CAI tie the order is a
+    deterministic function of the codon indices (not a c-count/GC preference).
+
+    ``max_examined`` (default ``max(200_000, 200*max_variants)``, time) and ``max_states``
+    (default scales inversely with insert length to bound memory) cap exploration; under
+    very restrictive quality filters the result may contain fewer than ``max_variants``
+    and a warning is logged. Empty input -> ``[]``. Raises :class:`KeyError` on an unknown
+    amino-acid letter (validated up front, independent of ``max_variants``).
+    """
+    if not aa_sequence:
+        return []
+    _cai_choices(aa_sequence)  # validate the aa alphabet up front (raises KeyError)
+    if max_variants <= 0:
+        return []
+    length = len(aa_sequence)
+    if max_examined is None:
+        max_examined = max(200_000, 200 * max_variants)
+    if max_states is None:
+        max_states = max(100_000, 20_000_000 // max(length, 1))
+    stats = {"truncated": 0}
+    out: List[CodonVariant] = []
+    for dna, c_count, gc in _cai_kbest(
+        aa_sequence, max_examined=max_examined, max_states=max_states, stats=stats
+    ):
+        out.append(CodonVariant(dna=dna, c_count=c_count, gc_content=gc, rank=len(out)))
+        if len(out) >= max_variants:
+            break
+    if len(out) < max_variants and stats["truncated"]:
+        import logging  # noqa: PLC0415
+
+        logging.getLogger(__name__).warning(
+            "rank_insert_variants_by_cai: returned %d < %d requested for a %d-codon "
+            "insert; exploration cap hit under restrictive filters. Raise max_examined/"
+            "max_states or relax the insert if more variants are needed.",
+            len(out),
+            max_variants,
+            length,
+        )
+    return out
+
+
+def select_top_n_for_pridict(
+    ranked: List[CodonVariant], n: int = 2000, *, lo: int = 1000, hi: int = 5000
+) -> List[CodonVariant]:
+    """Select the top ``n`` CAI-ranked variants to hand to PRIDICT2, with ``n`` clamped
+    to ``[lo, hi]`` (default 1000-5000, 2000). Never invents variants: returns at most
+    ``len(ranked)``. Assumes ``ranked`` is already CAI-ordered (from
+    :func:`rank_insert_variants_by_cai`)."""
+    n = max(lo, min(hi, int(n)))
+    return list(ranked[:n])
+
+
+def split_insert(insert_dna: str, *, end_len: int = 40) -> Tuple[str, str, str]:
+    """Split an insert into ``(first_end, middle, last_end)`` such that
+    ``first_end + middle + last_end == insert_dna`` exactly.
+
+    The two ends (up to ``end_len`` nt, PRIDICT2's practical reach) are the parts a
+    PRIDICT design touches; the middle is CAI-ranked independently (PRIDICT never sees
+    it). For an insert shorter than ``2 * end_len`` the middle is empty and the ends do
+    not overlap; for one ``<= end_len`` the whole insert is the first end. This is a
+    plain byte split. The middle's reading frame within the insert is
+    ``len(first_end) % 3`` -- 0 only when ``end_len`` is a multiple of 3; the default
+    ``end_len=40`` is NOT, so the middle is generally frame-shifted. A caller CAI-ranking
+    the middle MUST translate it at that frame (handled in Stage C) or it will silently
+    score the wrong reading frame."""
+    n = len(insert_dna)
+    if n <= end_len:
+        return insert_dna, "", ""
+    if n <= 2 * end_len:
+        return insert_dna[:end_len], "", insert_dna[end_len:]
+    return insert_dna[:end_len], insert_dna[end_len : n - end_len], insert_dna[n - end_len :]
