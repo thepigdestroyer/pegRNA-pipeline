@@ -29,6 +29,7 @@ text report + parsed CSV components.
   `$NVIDIA_API_KEY` or the file `$NVIDIA_KEY_FILE`
   (default `~/.config/pegrna/nvidia.key`). It is never committed. Without it,
   `api` mode runs every other gate for real and stubs docking.
+  **→ See [KEYS.md](KEYS.md) for how to obtain and install this key.**
 
 ## Running locally
 
