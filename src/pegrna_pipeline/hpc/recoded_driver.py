@@ -118,6 +118,9 @@ def design_recoded(
     rnaformer_model_dir: Optional[str] = None,
     pam: str = "NGG",
     max_mismatches: int = 3,
+    protein_length: Optional[int] = None,
+    structure_threshold: float = 0.5,
+    progress_cb=None,
 ) -> RecodedDesignOutput:
     """Run the recoded TJ-PE design end-to-end and (optionally) write a report.
 
@@ -147,7 +150,7 @@ def design_recoded(
             pam=pam,
             max_mismatches=max_mismatches,
         )
-        if mode == "real"
+        if mode in ("real", "api")
         else {}
     )
     scorers = make_scorers(mode=mode, **scorer_kwargs)
@@ -174,6 +177,9 @@ def design_recoded(
         dock_scorer=scorers.dock_scorer,
         offtarget_scorer=scorers.offtarget_scorer,
         maxent_scorer=scorers.maxent_scorer,
+        protein_length=protein_length,
+        structure_threshold=structure_threshold,
+        on_gate=progress_cb,
     )
 
     manifest = dict(manifest or {})
@@ -193,6 +199,20 @@ def design_recoded(
         cpath = out / "recoded_tjpe_components.csv"
         cpath.write_text(csv_text)
         csv_path = str(cpath)
+        # Machine-readable per-gate info for the web flowchart (each step's score).
+        import json as _json
+
+        (out / "recoded_tjpe_gates.json").write_text(
+            _json.dumps(
+                {
+                    "gate_results": result.gate_results,
+                    "recode_edits": result.recode_edits,
+                    "deletion_size": result.deletion_size,
+                    "candidates_tried": result.candidates_tried,
+                    "warnings": result.warnings,
+                }
+            )
+        )
         # Colour-annotated manual-verification DOCX (sections 1-4). Guarded: if
         # python-docx is not installed the run still succeeds with text + CSV.
         try:

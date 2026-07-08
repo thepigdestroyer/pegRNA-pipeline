@@ -1,0 +1,6 @@
+# Web-layer dependencies only. The design pipeline + its model/api stack
+# (ViennaRNA, spliceai, tensorflow, biotite, boltz, ...) come from the CLI
+# package — install it with `pip install -e ..` (see ../pyproject.toml).
+fastapi>=0.110
+uvicorn[standard]>=0.29
+pydantic>=2

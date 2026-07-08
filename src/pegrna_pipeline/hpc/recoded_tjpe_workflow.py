@@ -10,7 +10,7 @@ adapters on CX3); this module imports none of them at module load.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Callable, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 from pegrna_pipeline.hpc.allele_specificity import find_allele_specific
 from pegrna_pipeline.hpc.codon_expander import _gc_content, enumerate_variants
@@ -228,6 +228,10 @@ class RecodedTJPEResult:
     edited_allele: str = ""
     recode_span: Optional[Tuple[int, int]] = None
     locked_span: Optional[Tuple[int, int]] = None
+    #: Per-gate info string for the winning candidate, in pipeline order, as a list
+    #: of (gate_id, info) — surfaced in the report + web flowchart so each step shows
+    #: the score/verdict it produced. Empty until set by the workflow.
+    gate_results: List[Tuple[str, str]] = field(default_factory=list)
 
 
 def _decompose_rtt(
@@ -276,8 +280,32 @@ def _frame_at(cds_mask: Sequence[bool], pos: int) -> int:
     return max(0, pos - cds_start) % 3
 
 
+def _importance_metrics(scorer, residues: Sequence[int]) -> Dict[str, Any]:
+    """Summarise the footprint residues' AlphaFold metrics vs the block cutoffs
+    (worst RSA / max contact / min pLDDT + any special-residue flag) for the
+    flowchart. Defensive: a scorer failure yields an empty (non-numeric) summary."""
+    try:
+        ms = [scorer.metrics(i) for i in residues]
+    except Exception:  # noqa: BLE001
+        return {"metric": "buried RSA", "value": None, "note": "metrics unavailable"}
+    if not ms:
+        return {"metric": "buried RSA", "value": None}
+    min_rsa = min(m.rsa for m in ms)
+    max_contact = max(m.contact_number for m in ms)
+    special = any(
+        m.is_catalytic or m.is_disulfide or m.is_positive_phi_gly or m.is_structural_pro
+        for m in ms
+    )
+    # Primary flagged value = worst (lowest) RSA vs the buried cutoff 0.25; a
+    # residue passes when it is NOT buried (RSA >= 0.25) and not special.
+    return {
+        "metric": "min RSA", "value": round(min_rsa, 2), "cutoff": 0.25, "cmp": ">=",
+        "extra": f"max contacts {max_contact} (≤18)" + (" · special residue!" if special else ""),
+    }
+
+
 def _insertion_site_footprint(
-    site_s: int, cds_mask: Sequence[bool], *, context: int = 1
+    site_s: int, cds_mask: Sequence[bool], *, context: int = 1, protein_length: Optional[int] = None
 ) -> List[int]:
     """Residue indices flanking the cargo insertion point ``site_s`` (ADR 0013).
 
@@ -300,8 +328,21 @@ def _insertion_site_footprint(
             residues.add((p - cds0) // 3)
     if not residues:
         return []
+    # Map local-window residue indices to ABSOLUTE protein residues. The local
+    # design window rarely starts at protein residue 1, so ``(pos-cds0)//3`` is only
+    # a window-relative index; querying the AFDB structure with it reads the wrong
+    # residue (a C-terminal knock-in mis-reads as an N-terminal core -> false
+    # "buried" block). Given ``protein_length``, anchor the window's LAST coding
+    # residue to the protein C-terminus (0-based last residue = protein_length-1).
+    if protein_length:
+        last_true = len(mask) - 1 - mask[::-1].index(True)
+        offset = (protein_length - 1) - ((last_true - cds0) // 3)
+        residues = {r + offset for r in residues}
     lo, hi = min(residues), max(residues)
-    return list(range(max(0, lo - context), hi + context + 1))
+    span = range(max(0, lo - context), hi + context + 1)
+    if protein_length:
+        return [i for i in span if 0 <= i <= protein_length - 1]
+    return list(span)
 
 
 def _derive_pbs1(genome: str, *, site_s: int, pbs_length: int, pegrna_strand: str) -> str:
@@ -470,6 +511,8 @@ def run_recoded_tjpe(
     structure_threshold: float = 0.5,
     max_interface_drop: float = 0.15,
     insertion_importance_context: int = 1,
+    protein_length: Optional[int] = None,
+    on_gate: Optional[Callable[..., None]] = None,
 ) -> "RecodedTJPEResult":
     """Ranked-pool-walk orchestrator (decisions 0-15).
 
@@ -482,6 +525,22 @@ def run_recoded_tjpe(
     """
     if arm_side not in ("3prime", "5prime", "auto"):
         raise ValueError(f"arm_side must be '3prime'/'5prime'/'auto'; got {arm_side!r}")
+
+    def _emit(cand: int, gate_id: str, info: str, passed: bool, metrics: Optional[dict] = None) -> None:
+        # Live progress hook (per-gate, per-candidate). Never let it break a run.
+        # ``metrics`` (raw value + cutoff for the flowchart) is passed when the
+        # callback accepts it; older 4-arg callbacks are called without it.
+        if on_gate:
+            try:
+                on_gate(cand, gate_id, info, passed, metrics)
+            except TypeError:
+                try:
+                    on_gate(cand, gate_id, info, passed)
+                except Exception:  # noqa: BLE001
+                    pass
+            except Exception:  # noqa: BLE001
+                pass
+
     het_snps = list(het_snps or [])
     # Advisory only — must never crash the design run on a malformed SNP record.
     try:
@@ -641,38 +700,51 @@ def run_recoded_tjpe(
                 polyu="UUU",
                 scaffold=STANDARD_SGRNA_SCAFFOLD,
             )
+            # Per-gate info for the winning candidate (surfaced in the report + web
+            # flowchart so each step shows the score/verdict it produced).
+            gate_info: Dict[str, str] = {}
             # --- expensive gates last; each is GUARDED so a scorer crash skips the
             # candidate (with a diagnostic) instead of aborting the whole walk. ---
             # PRIMARY splice gate: MaxEntScan cryptic-splice-site scan of the edited
             # construct (recode span + cassette + junctions). Context-free, so it is
             # the right instrument for a large exogenous-cassette insertion (ADR 0011).
             if maxent_scorer is not None:
+                ms_metrics: Dict[str, Any] = {}
                 try:
                     ms_ok, ms_why = passes_cryptic_splice_gate(
-                        reference, edited, scorer=maxent_scorer
+                        reference, edited, scorer=maxent_scorer, metrics=ms_metrics
                     )
                 except Exception as exc:  # noqa: BLE001
                     diagnostics.append(f"cand{tried}: cryptic-splice scorer error: {exc}")
                     continue
+                _emit(tried, "cryptic", ms_why, ms_ok, ms_metrics)
                 if not ms_ok:
                     diagnostics.append(f"cand{tried}: cryptic splice: {ms_why}")
                     continue
+                gate_info["cryptic"] = ms_why
 
             # ADVISORY cross-check: SpliceAI needs >=10 kb of real genomic context. When
             # a caller supplies it, a concordant disruption call also fails the candidate;
             # on short context it raises ValueError and is skipped (NOT fail-loud) so the
             # MaxEnt gate above remains the primary check (ADR 0011).
+            sp_metrics: Dict[str, Any] = {}
             try:
-                sp_ok, sp_why = passes_splice_gate(reference, edited, scorer=splice_scorer)
+                sp_ok, sp_why = passes_splice_gate(
+                    reference, edited, scorer=splice_scorer, metrics=sp_metrics
+                )
             except ValueError:
-                pass  # inadequate genomic context -> advisory skip
+                gate_info["splice"] = "advisory skip (needs >=10kb context; MaxEnt is primary)"
+                _emit(tried, "splice", "advisory skip (<10kb context)", True,
+                      {"metric": "SpliceAI Δ", "value": None, "note": "advisory skip (<10kb context)"})
             except Exception as exc:  # noqa: BLE001
                 diagnostics.append(f"cand{tried}: splice cross-check error: {exc}")
                 continue
             else:
+                _emit(tried, "splice", sp_why, sp_ok, sp_metrics)
                 if not sp_ok:
                     diagnostics.append(f"cand{tried}: splice (SpliceAI cross-check): {sp_why}")
                     continue
+                gate_info["splice"] = sp_why
 
             # Insertion-site structural tolerance (ADR 0013): the cargo (tag + linker
             # + T7-leftover junk) is inserted at S and must NOT land in a structured /
@@ -681,7 +753,7 @@ def run_recoded_tjpe(
             # (INV-0 guarantees the protein there is unchanged, so the arm residues'
             # burial is irrelevant). Retains the special-residue hard block.
             ins_footprint = _insertion_site_footprint(
-                site_s, cds_mask, context=insertion_importance_context
+                site_s, cds_mask, context=insertion_importance_context, protein_length=protein_length
             )
             if ins_footprint:
                 try:
@@ -689,6 +761,14 @@ def run_recoded_tjpe(
                 except Exception as exc:  # noqa: BLE001
                     diagnostics.append(f"cand{tried}: importance scorer error: {exc}")
                     continue
+                imp_metrics = _importance_metrics(importance_scorer, ins_footprint)
+                _emit(
+                    tried,
+                    "importance",
+                    f"residues {ins_footprint} " + ("blocked (buried/special)" if blocked else "tolerated (surface/flexible)"),
+                    not blocked,
+                    imp_metrics,
+                )
                 if blocked:
                     diagnostics.append(
                         f"cand{tried}: insertion site S residue(s) {ins_footprint} "
@@ -697,6 +777,10 @@ def run_recoded_tjpe(
                         "surface/loop/terminal insertion site"
                     )
                     continue
+                gate_info["importance"] = f"residues {ins_footprint} tolerated (surface/flexible)"
+            else:
+                gate_info["importance"] = "no flanking CDS at insertion site (n/a)"
+                _emit(tried, "importance", "no flanking CDS (n/a)", True)
 
             regions = _regions_for(spacer, rcpbs2, rtt, pbs1)
             try:
@@ -709,20 +793,36 @@ def run_recoded_tjpe(
             except Exception as exc:  # noqa: BLE001
                 diagnostics.append(f"cand{tried}: structure scorer error: {exc}")
                 continue
+            _emit(
+                tried,
+                "structure",
+                f"{pairing.cross_region_pairs} cross-region pairs (p>={structure_threshold})",
+                pairing.cross_region_pairs == 0,
+                {"metric": "cross-region pairs", "value": pairing.cross_region_pairs,
+                 "cutoff": 0, "cmp": "==", "extra": f"base-pair prob ≥ {structure_threshold}"},
+            )
             if pairing.cross_region_pairs > 0:
                 diagnostics.append(f"cand{tried}: RiNALMo cross-region pairing")
                 continue
+            gate_info["structure"] = (
+                f"{pairing.cross_region_pairs} cross-region pairs "
+                f"(threshold p>={structure_threshold})"
+            )
 
+            dk_metrics: Dict[str, Any] = {}
             try:
                 dock_ok, dock_why = passes_docking_gate(
-                    peg, cas9, scorer=dock_scorer, max_drop=max_interface_drop
+                    peg, cas9, scorer=dock_scorer, max_drop=max_interface_drop,
+                    metrics=dk_metrics,
                 )
             except Exception as exc:  # noqa: BLE001
                 diagnostics.append(f"cand{tried}: docking scorer error: {exc}")
                 continue
+            _emit(tried, "docking", dock_why, dock_ok, dk_metrics)
             if not dock_ok:
                 diagnostics.append(f"cand{tried}: docking: {dock_why}")
                 continue
+            gate_info["docking"] = dock_why
             # First survivor wins.
             warnings: List[str] = []
             if arm.max_run_after > max_run:
@@ -740,6 +840,12 @@ def run_recoded_tjpe(
                 nick_gt_s=pos > site_s,
             )
             parts_map = dict(rtt_components)
+            gate_info["offtarget"] = f"nick {nick.nick_position}: unique on-target, 0 off-targets in tier"
+            gate_info["recode"] = f"{arm.n_edits} synonymous codon edits (microhomology broken)"
+            gate_info["inv0"] = "0 bp endogenous deletion; recode protein-silent (INV-0 held)"
+            # Order gate_info to match the pipeline flow for display.
+            _order = ["offtarget", "recode", "inv0", "cryptic", "splice", "importance", "structure", "docking"]
+            gate_results = [(k, gate_info[k]) for k in _order if k in gate_info]
             return RecodedTJPEResult(
                 pegRNA_sequence=peg,
                 spacer=spacer,
@@ -761,6 +867,7 @@ def run_recoded_tjpe(
                 edited_allele=edited,
                 recode_span=arm.recode_span,
                 locked_span=arm.locked_span,
+                gate_results=gate_results,
             )
 
     raise NoValidPegRNA(

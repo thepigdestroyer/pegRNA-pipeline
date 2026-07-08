@@ -28,7 +28,7 @@ MaxEntScan conventions (Yeo & Burge 2004):
 
 from __future__ import annotations
 
-from typing import List, Protocol, Tuple
+from typing import List, Optional, Protocol, Tuple
 
 __all__ = [
     "MaxEntScorer",
@@ -171,6 +171,7 @@ def passes_cryptic_splice_gate(
     *,
     scorer: MaxEntScorer,
     strong_threshold: float = STRONG_MAXENT,
+    metrics: Optional[dict] = None,
 ) -> Tuple[bool, str]:
     """HARD GATE: reject if the edit creates/strengthens a strong cryptic splice site.
 
@@ -195,6 +196,17 @@ def passes_cryptic_splice_gate(
     for _kind, _start, _end, _anchor, sc in _scan_sites(ref_seq, scorer):
         if sc > ref_best:
             ref_best = sc
+
+    # Strongest MaxEnt motif the edit introduces in/over the variant region
+    # (regardless of threshold) — the raw value surfaced to the progress display.
+    var_scores = [sc for (_k, s, e, _a, sc) in edited_sites if _overlaps_variant(s, e)]
+    observed_max = max(var_scores) if var_scores else 0.0
+    if metrics is not None:
+        metrics.update({
+            "metric": "MaxEnt", "value": round(observed_max, 1),
+            "cutoff": round(strong_threshold, 1), "cmp": "<",
+            "extra": f"ref best {ref_best:.1f}",
+        })
 
     created = [
         (kind, start, end, anchor, sc)

@@ -12,7 +12,7 @@ RoseTTAFold2NA.
 
 from __future__ import annotations
 
-from typing import Protocol, Tuple
+from typing import Optional, Protocol, Tuple
 
 __all__ = ["ComplexDockScorer", "DockFake", "Boltz2DockScorer", "passes_docking_gate"]
 
@@ -194,6 +194,7 @@ def passes_docking_gate(
     scorer: ComplexDockScorer,
     max_drop: float = 0.2,
     min_iptm: float = 0.6,
+    metrics: Optional[dict] = None,
 ) -> Tuple[bool, str]:
     """HARD GATE on scaffold-Cas9 docking (interface ipTM).
 
@@ -202,10 +203,22 @@ def passes_docking_gate(
     than ``max_drop`` (one full confidence band, 0.2) relative to the apo
     scaffold-Cas9 baseline. Defaults are literature-derived (see
     gate_thresholds.THRESHOLDS: Evans 2022, Abramson 2024).
+
+    If ``metrics`` is supplied it is populated with the raw values and cutoffs
+    (interface ipTM vs the min-ipTM floor, plus apo baseline / drop vs max-drop)
+    for the caller's progress display; it never changes the return value.
     """
     apo = scorer.apo_interface_iptm(cas9)
     cand = scorer.interface_iptm(pegrna, cas9)
     drop = apo - cand
+    if metrics is not None:
+        metrics.update({
+            "metric": "interface ipTM",
+            "value": round(cand, 3),
+            "cutoff": min_iptm,
+            "cmp": ">=",
+            "extra": f"apo {apo:.2f}→{cand:.2f}, drop {drop:.2f} (max {max_drop})",
+        })
     if cand < min_iptm - 1e-9:
         return False, (
             f"scaffold-Cas9 interface ipTM {cand:.2f} < {min_iptm} "

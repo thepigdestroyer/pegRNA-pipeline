@@ -1,0 +1,520 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>pegRNA design · prime editing</title>
+<style>
+  :root {
+    --bg:#eef2f5; --panel:#ffffff; --panel2:#f7fafc; --line:#c3d0dd;
+    --fg:#1b2733; --mut:#5a6b7b; --accent:#2c5c8f; --link:#2a6496;
+    --sec:#e5edf4; --secfg:#1c4a73; --ok:#0ca30c; --err:#d03b3b;
+    --mono: ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg);
+    font:14px/1.5 Arial,Helvetica,"Segoe UI",system-ui,sans-serif; }
+  a { color:var(--link); }
+  /* NCBI Primer-BLAST-style banner */
+  header { background:linear-gradient(180deg,#3a6ea5,#2c5c8f); color:#fff; padding:13px 24px; border-bottom:3px solid #17385a; }
+  header h1 { margin:0; font-size:20px; font-weight:700; }
+  header h1 small { font-weight:400; opacity:.85; font-size:14px; }
+  header p { margin:4px 0 0; color:#dce8f3; font-size:12.5px; max-width:1000px; }
+  .wrap { display:grid; grid-template-columns:minmax(430px,1.3fr) minmax(300px,.85fr); gap:16px; padding:16px 24px; align-items:start; }
+  @media (max-width:1000px){ .wrap{ grid-template-columns:1fr; } }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:4px; box-shadow:0 1px 2px rgba(0,0,0,.06); }
+  .card h2 { margin:0; padding:8px 14px; font-size:13px; font-weight:700; background:var(--sec); color:var(--secfg);
+    border-bottom:1px solid var(--line); border-radius:4px 4px 0 0; }
+  .body { padding:14px 16px; }
+  .subhead { font-size:12px; font-weight:700; color:var(--secfg); background:var(--sec);
+    padding:5px 10px; margin:16px -16px 8px; border-top:1px solid var(--line); border-bottom:1px solid var(--line); }
+  .subhead:first-child { margin-top:-4px; }
+  label { display:block; font-size:12px; color:var(--mut); margin:9px 0 3px; font-weight:600; }
+  input, select, textarea { width:100%; background:#fff; color:var(--fg);
+    border:1px solid #7f9db9; border-radius:3px; padding:6px 8px; font-size:13.5px; font-family:inherit; }
+  input:focus, select:focus, textarea:focus { outline:none; border-color:var(--accent); box-shadow:0 0 0 2px rgba(44,92,143,.2); }
+  textarea { font-family:var(--mono); font-size:12px; resize:vertical; }
+  .row { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+  .row3 { display:grid; grid-template-columns:1fr 1fr 1fr; gap:10px; }
+  .actions { display:flex; gap:10px; align-items:center; margin-top:16px; flex-wrap:wrap; }
+  button { cursor:pointer; border:1px solid #8a9bad; background:linear-gradient(#fff,#e9eef3); color:#1b2733;
+    border-radius:3px; padding:7px 13px; font-size:13.5px; }
+  button:hover { background:linear-gradient(#fff,#dbe3ea); }
+  button.primary { background:linear-gradient(#4a80b8,#2c5c8f); border-color:#22496f; color:#fff; font-weight:700; padding:8px 20px; }
+  button.primary:hover { background:linear-gradient(#3f74ac,#254f7c); }
+  button:disabled { opacity:.5; cursor:default; }
+  .hint { color:var(--mut); font-size:12px; margin-top:4px; }
+  .badge { display:inline-block; padding:2px 9px; border-radius:3px; font-size:12px; font-weight:700; }
+  .badge.ok { background:#e4f5e4; color:#0a7d0a; border:1px solid #b6e0b6; }
+  .badge.err { background:#fbe4e4; color:#b52a2a; border:1px solid #eec2c2; }
+  pre { background:#f5f7f9; border:1px solid var(--line); border-radius:3px; padding:12px; color:#1b2733;
+    overflow:auto; font-family:var(--mono); font-size:12.5px; white-space:pre-wrap; word-break:break-word; max-height:560px; }
+  table { border-collapse:collapse; width:100%; font-size:12.5px; }
+  th,td { border:1px solid var(--line); padding:6px 8px; text-align:left; vertical-align:top; }
+  th { color:var(--secfg); font-weight:700; background:#eef4f9; }
+  tr:nth-child(even) td { background:#f7fafc; }
+  td.seq { font-family:var(--mono); word-break:break-all; max-width:320px; }
+  /* components table: fixed layout so the long sequence column wraps instead of
+     ballooning a neighbour; numeric columns right-aligned. */
+  table.comp-table { table-layout:fixed; }
+  table.comp-table td, table.comp-table th { overflow-wrap:anywhere; }
+  table.comp-table td.seq { max-width:none; }
+  table.comp-table .num { text-align:right; font-variant-numeric:tabular-nums; }
+  details summary { cursor:pointer; color:var(--link); font-size:13px; margin-top:12px; }
+  a.dl { color:var(--link); font-size:13px; margin-right:14px; font-weight:600; }
+  .spinner { display:none; }
+  .spinner.on { display:inline; color:var(--mut); }
+  /* pipeline flowchart (vertical, sidebar) */
+  .full { margin:0 24px 24px; }
+  .flow { display:flex; flex-direction:column; gap:0; padding:12px 10px; }
+  .fnode { background:var(--panel2); border:1px solid var(--line);
+    border-left:3px solid #c3d0dd; border-radius:3px; padding:8px 10px; position:relative; }
+  .fnode .ft { font-size:13px; font-weight:700; }
+  .fnode .fe { font-size:11px; color:var(--mut); margin-top:2px; font-family:var(--mono); }
+  .fnode .fv { font-size:11px; color:#24557f; margin-top:3px; line-height:1.45; }
+  .fnode.crit .fv { color:#8a2a2a; }
+  .fnode .fv:empty { display:none; }
+  .fnode .fv .mval { font-family:var(--mono); font-weight:700; }
+  .fnode .fv .cut { color:#6b7f92; }
+  .fnode .fv .extra { color:#6b7f92; display:block; font-size:10.5px; margin-top:1px; }
+  .fnode .fv .flag { display:inline-block; margin-left:5px; padding:0 5px; border-radius:8px;
+    font-size:10px; font-weight:700; }
+  .fnode .fv .flag.bad { background:#fbe4e4; color:#b52a2a; border:1px solid #eec2c2; }
+  .fnode .fv .flag.ok  { background:#e4f5e4; color:#0a7d0a; border:1px solid #b6e0b6; }
+  .fnode .fs { position:absolute; top:7px; right:9px; font-size:12px; font-weight:700; }
+  .fnode.gate .ft::before { content:"▸ "; color:var(--mut); }
+  .fnode.good { border-left-color:var(--ok); background:#f2fbf2; }
+  .fnode.good .fs { color:var(--ok); }
+  .fnode.crit { border-left-color:var(--err); background:#fbeeee; }
+  .fnode.crit .fs { color:var(--err); }
+  .fnode.pend { opacity:.5; }
+  .fnode.run { border-left-color:var(--accent); background:#e7f0fa; }
+  .fnode.run .fs { color:var(--accent); }
+  @keyframes pulse { 0%,100%{ box-shadow:0 0 0 0 rgba(44,92,143,.35);} 50%{ box-shadow:0 0 0 4px rgba(44,92,143,0);} }
+  .fnode.run { animation:pulse 1.1s ease-in-out infinite; }
+  .fnode.done { border-left-color:#8fb3d6; }
+  .fnode.done .fs { color:#8fb3d6; }
+  .runsp { display:inline-block; width:11px; height:11px; border:2px solid #b9cbe0; border-top-color:var(--accent);
+    border-radius:50%; animation:spin .8s linear infinite; vertical-align:-1px; margin-right:5px; }
+  @keyframes spin { to { transform:rotate(360deg); } }
+  .farrow { align-self:center; color:#9fb0c0; padding:2px 0; font-size:14px; }
+  .flegend { display:flex; gap:16px; flex-wrap:wrap; padding:0 12px 12px; color:var(--mut); font-size:12px; }
+  .flegend span b { font-weight:700; }
+  .fmode { padding:2px 12px 8px; color:var(--mut); font-size:12px; }
+  /* cargo motif builder */
+  .cargolist { list-style:none; margin:8px 0; padding:0; }
+  .cargolist li { display:flex; align-items:center; gap:8px; background:var(--panel2);
+    border:1px solid var(--line); border-radius:3px; padding:5px 8px; margin:4px 0; font-size:13px; }
+  .cargolist .cn { font-weight:700; white-space:nowrap; flex:0 0 auto; }
+  .cargolist .ca { color:var(--link); font-family:var(--mono); font-size:11.5px;
+    flex:1 1 auto; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .cargolist .cl { color:var(--mut); font-size:11px; flex:0 0 auto; white-space:nowrap; }
+  .cargolist .cc { flex:0 0 auto; white-space:nowrap; }
+  .cargolist .cc button { padding:2px 7px; font-size:12px; margin-left:3px; }
+  #cargo { white-space:pre-wrap; word-break:break-all; }
+  .warn { color:#9a6a00; }
+</style>
+</head>
+<body>
+<header>
+  <h1>pegRNA-BLAST <small>· prime-editing C-terminal knock-in designer</small></h1>
+  <p>Finds pegRNAs for C-terminal tagging (recoded TJ-PE, <code>neurogenomics/prime-editing</code>).
+  Fill in the template and cargo, choose parameters, and click <strong>Design pegRNA</strong>.
+  <strong>fake</strong> = design logic with stand-in scorers; <strong>api</strong> = real gates (CPU + hosted-model APIs).</p>
+</header>
+
+<div class="wrap">
+  <!-- INPUT -->
+  <div class="card">
+    <h2>Design parameters</h2>
+    <div class="body">
+      <div class="subhead">Target template</div>
+      <div class="row3">
+        <div><label>Gene</label><input id="gene" placeholder="CTCF"></div>
+        <div><label>Transcript</label><input id="transcript" placeholder="ENST..."></div>
+        <div><label>UniProt acc</label><input id="uniprot_acc" placeholder="P49711"></div>
+      </div>
+      <div class="row">
+        <div><label>Spacer (20 nt)</label><input id="spacer"></div>
+        <div><label>RTT anchor aa (rtt_aa)</label><input id="rtt_aa" placeholder="L"></div>
+      </div>
+      <div class="subhead">Cargo (insert)</div>
+      <label>Add a motif — cargo is assembled 5′→3′ from the parts below</label>
+      <div class="row" style="grid-template-columns:1fr auto auto;">
+        <select id="motifpick"></select>
+        <button type="button" onclick="addMotif()">+ add</button>
+        <button type="button" id="cargorawbtn" onclick="toggleCargoRaw()">edit raw DNA</button>
+      </div>
+      <ul id="cargolist" class="cargolist"></ul>
+      <div class="hint" id="cargohint"></div>
+      <textarea id="cargo" rows="3" readonly></textarea>
+      <div class="subhead">Genomic context &amp; pegRNA parameters</div>
+      <label>Genome context (local window, 5′→3′)</label>
+      <textarea id="genome" rows="3"></textarea>
+      <div class="row3">
+        <div><label>Site S</label><input id="site_s" type="number"></div>
+        <div><label>pegRNA strand</label><select id="pegrna_strand"><option>Fw</option><option>Rv</option></select></div>
+        <div><label>Arm side</label><select id="arm_side"><option value="5prime">5prime</option><option value="3prime">3prime</option></select></div>
+      </div>
+      <div class="row3">
+        <div><label>PBS lengths (csv)</label><input id="pbs_lengths" placeholder="13,15,17"></div>
+        <div><label>ngRNA dist min</label><input id="ngrna_distance_min" type="number"></div>
+        <div><label>ngRNA dist max</label><input id="ngrna_distance_max" type="number"></div>
+      </div>
+      <div class="row">
+        <div><label>Max homopolymer run</label><input id="max_run" type="number" placeholder="8"></div>
+        <div><label>Mode</label><select id="mode"></select></div>
+      </div>
+
+      <div class="hint" id="maskhint"></div>
+
+      <details>
+        <summary>Advanced — full config JSON (authoritative on submit if edited)</summary>
+        <textarea id="rawjson" rows="12" style="margin-top:8px"></textarea>
+        <div class="hint">Edit here for keys not shown above (het_snps, manifest, _comment…). Click “Sync ← fields” to regenerate from the form.</div>
+        <div class="actions">
+          <button onclick="syncRawFromFields()">Sync ← fields</button>
+          <button onclick="loadFieldsFromRaw()">Fields ← JSON</button>
+        </div>
+      </details>
+
+      <div class="actions">
+        <button onclick="loadExample()">Load CTCF example (fake)</button>
+        <button onclick="loadRealExample()">Load working example (real · api)</button>
+        <button class="primary" id="runbtn" onclick="runDesign()">Design pegRNA</button>
+        <span class="spinner" id="spin">running…</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- PIPELINE (right column) -->
+  <div class="card">
+    <h2>Processing pipeline</h2>
+    <div class="fmode" id="fmode">The recoded TJ-PE design flow. Run a design to light up which stage each candidate reaches.</div>
+    <div class="flow" id="flow"></div>
+    <div class="flegend">
+      <span>✓ <b>passed</b></span>
+      <span>✕ <b>blocked</b></span>
+      <span>○ <b>not reached</b></span>
+    </div>
+  </div>
+</div>
+
+<!-- RESULTS (full width, bottom) -->
+<div class="card full">
+  <h2>Result</h2>
+  <div class="body" id="result">
+    <p class="hint">Load the example or fill the form, then <em>Run design</em>. Output appears here.</p>
+  </div>
+</div>
+
+<script>
+const FIELDS = ["gene","transcript","uniprot_acc","spacer","rtt_aa","cargo","genome",
+  "site_s","pegrna_strand","arm_side","max_run"];
+let baseConfig = {};   // last-loaded full config, preserves unknown keys
+
+async function initModes(){
+  const r = await fetch("/api/modes"); const j = await r.json();
+  const sel = document.getElementById("mode");
+  sel.innerHTML = "";
+  j.modes.forEach(m => {
+    const o = document.createElement("option"); o.value=m; o.textContent=m; sel.appendChild(o);
+  });
+  sel.value = j.default;
+}
+
+function setFields(cfg){
+  baseConfig = JSON.parse(JSON.stringify(cfg));
+  FIELDS.forEach(k => { if(k in cfg && document.getElementById(k)) document.getElementById(k).value = cfg[k]; });
+  document.getElementById("pbs_lengths").value = (cfg.pbs_lengths||[]).join(",");
+  document.getElementById("ngrna_distance_min").value = cfg.ngrna_distance_min ?? "";
+  document.getElementById("ngrna_distance_max").value = cfg.ngrna_distance_max ?? "";
+  document.getElementById("rawjson").value = JSON.stringify(cfg, null, 2);
+  // A loaded config carries raw cargo DNA (not motif names), so show raw cargo.
+  if(cfg.cargo) setCargoMode("raw");
+  updateMaskHint();
+}
+
+function buildConfig(){
+  const cfg = JSON.parse(JSON.stringify(baseConfig));  // keep pass-through keys
+  FIELDS.forEach(k => {
+    const el = document.getElementById(k); if(!el) return;
+    let v = el.value;
+    if(k==="site_s"||k==="max_run"){ if(v!=="") cfg[k]=Number(v); else delete cfg[k]; }
+    else if(v!=="") cfg[k]=v;
+  });
+  const pbs = document.getElementById("pbs_lengths").value.trim();
+  if(pbs) cfg.pbs_lengths = pbs.split(",").map(s=>Number(s.trim())).filter(n=>!isNaN(n));
+  const dmin = document.getElementById("ngrna_distance_min").value;
+  const dmax = document.getElementById("ngrna_distance_max").value;
+  if(dmin!=="") cfg.ngrna_distance_min = Number(dmin);
+  if(dmax!=="") cfg.ngrna_distance_max = Number(dmax);
+  {
+    const s = Number(document.getElementById("site_s").value||0);
+    const glen = (document.getElementById("genome").value||"").length;
+    cfg.cds_mask = Array.from({length:glen}, (_,i)=> i < s);   // coding up to S, then non-coding
+  }
+  return cfg;
+}
+
+function syncRawFromFields(){ document.getElementById("rawjson").value = JSON.stringify(buildConfig(), null, 2); }
+function loadFieldsFromRaw(){
+  try { setFields(JSON.parse(document.getElementById("rawjson").value)); }
+  catch(e){ alert("Invalid JSON: "+e.message); }
+}
+
+function updateMaskHint(){
+  const glen=(document.getElementById("genome").value||"").length;
+  const s = Number(document.getElementById("site_s").value||0);
+  const el = document.getElementById("maskhint");
+  el.textContent = `cds_mask auto-derived from site S: ${glen} positions · coding [0:${s}] · non-coding [${s}:${glen}]`;
+  el.style.color = "var(--mut)";
+}
+["genome","site_s"].forEach(id=>document.addEventListener("input", e=>{ if(e.target.id===id) updateMaskHint(); }));
+
+// ---- cargo motif builder ----
+let MOTIFS = {};            // name -> {dna, aa, description}
+let cargoSel = [];          // ordered motif names
+let cargoMode = "builder";  // "builder" | "raw"
+
+async function loadMotifs(){
+  const r = await fetch("/api/motifs"); const j = await r.json();
+  const sel = document.getElementById("motifpick"); sel.innerHTML = "";
+  Object.keys(j.groups).sort().forEach(cat=>{
+    const og = document.createElement("optgroup"); og.label = cat.replace(/_/g," ");
+    j.groups[cat].forEach(m=>{
+      MOTIFS[m.name] = m;
+      const o = document.createElement("option"); o.value = m.name;
+      const aa = m.aa ? " ("+(m.aa.length>14?m.aa.slice(0,14)+"…":m.aa)+")" : "";
+      o.textContent = m.name + aa;
+      og.appendChild(o);
+    });
+    sel.appendChild(og);
+  });
+}
+function assembledCargo(){ return cargoSel.map(n=>(MOTIFS[n]&&MOTIFS[n].dna)||"").join(""); }
+function addMotif(){ const n=document.getElementById("motifpick").value; if(n){ cargoSel.push(n); renderCargo(); } }
+function removeMotif(i){ cargoSel.splice(i,1); renderCargo(); }
+function moveMotif(i,d){ const j=i+d; if(j<0||j>=cargoSel.length) return;
+  [cargoSel[i],cargoSel[j]]=[cargoSel[j],cargoSel[i]]; renderCargo(); }
+function renderCargo(){
+  const ul=document.getElementById("cargolist"); ul.innerHTML="";
+  cargoSel.forEach((n,i)=>{
+    const m=MOTIFS[n]||{aa:"",dna:""};
+    const li=document.createElement("li");
+    li.innerHTML=`<span class="cn">${esc(n)}</span><span class="ca" title="${esc(m.aa||"")}">${esc(m.aa||"—")}</span>`
+      +`<span class="cl">${(m.dna||"").length} nt</span>`
+      +`<span class="cc"><button type="button" onclick="moveMotif(${i},-1)">↑</button>`
+      +`<button type="button" onclick="moveMotif(${i},1)">↓</button>`
+      +`<button type="button" onclick="removeMotif(${i})">✕</button></span>`;
+    ul.appendChild(li);
+  });
+  const dna=assembledCargo();
+  document.getElementById("cargo").value=dna;
+  const h=document.getElementById("cargohint");
+  h.textContent = `assembled cargo: ${dna.length} nt` + (dna.length%3===0 ? " · in-frame (×3)" : ` · ⚠ not a multiple of 3 (frame +${dna.length%3})`);
+  h.className = "hint" + (dna.length%3===0 ? "" : " warn");
+}
+function setCargoMode(mode){
+  cargoMode = mode;
+  const raw = mode==="raw";
+  document.getElementById("cargo").readOnly = !raw;
+  document.getElementById("motifpick").disabled = raw;
+  document.getElementById("cargolist").style.display = raw ? "none" : "";
+  document.getElementById("cargorawbtn").textContent = raw ? "use motif builder" : "edit raw DNA";
+  if(!raw) renderCargo();  // rebuild from motif list (discards manual edits)
+  else document.getElementById("cargohint").textContent = "raw DNA mode — cargo is edited directly below";
+}
+function toggleCargoRaw(){ setCargoMode(cargoMode==="builder" ? "raw" : "builder"); }
+
+async function loadExample(){
+  const r = await fetch("/api/example");
+  if(!r.ok){ alert("example not found"); return; }
+  setFields(await r.json());
+}
+
+async function loadRealExample(){
+  const r = await fetch("/api/example/real");
+  if(!r.ok){ alert("real example not found"); return; }
+  setFields(await r.json());
+  const sel = document.getElementById("mode");
+  if([...sel.options].some(o=>o.value==="api")) sel.value = "api";  // this preset passes all real gates
+}
+
+function esc(s){ return (s||"").replace(/[&<>]/g, c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c])); }
+
+function renderResult(j){
+  const badge = j.ok ? '<span class="badge ok">success</span>' : '<span class="badge err">failed</span>';
+  let html = `<div>${badge} &nbsp;<span class="hint">run ${esc(j.run_id)} · mode ${esc(j.mode)} · exit ${j.returncode}</span></div>`;
+  if(j.docking_stub) html += `<div class="hint" style="margin-top:6px">⚠ api mode ran the CPU-real gates, but the Boltz-2 docking gate is a stand-in (no NVIDIA API key configured). Add a key to enable real docking.</div>`;
+  if(!j.ok && j.mode==="api") html += `<div class="hint" style="margin-top:6px">Note: in <b>api</b> mode a "no candidate survived" result is a real gate verdict (e.g. the AlphaFold structural-importance gate rejecting a buried site), not a crash.</div>`;
+  if(j.has_csv){
+    html += `<div style="margin:10px 0"><a class="dl" href="/api/runs/${j.run_id}/recoded_tjpe_report.txt">⬇ report.txt</a>`
+          + `<a class="dl" href="/api/runs/${j.run_id}/recoded_tjpe_components.csv">⬇ components.csv</a></div>`;
+  }
+  if(j.report) html += `<pre>${esc(j.report)}</pre>`;
+  if(j.components && j.components.length){
+    const cols = Object.keys(j.components[0]);
+    // Fixed layout + explicit per-column widths so the long `sequence` column
+    // wraps instead of stealing/donating width to its neighbours.
+    const CW = {index:"52px", component:"150px", role:"120px", part_of:"120px", sequence:"auto", length:"64px"};
+    const numeric = new Set(["index","length"]);
+    const colgroup = `<colgroup>`+cols.map(c=>`<col style="width:${CW[c]||"auto"}">`).join("")+`</colgroup>`;
+    html += `<details open><summary>Components (${j.components.length})</summary><div style="overflow-x:auto"><table class="comp-table">`
+          + colgroup + `<tr>`
+          + cols.map(c=>`<th class="${numeric.has(c)?'num':''}">${esc(c)}</th>`).join("") + `</tr>`
+          + j.components.map(row=>`<tr>`+cols.map(c=>`<td class="${c==='sequence'?'seq':''}${numeric.has(c)?' num':''}">${esc(row[c])}</td>`).join("")+`</tr>`).join("")
+          + `</table></div></details>`;
+  }
+  if(!j.ok && j.stderr) html += `<details open><summary>stderr</summary><pre>${esc(j.stderr)}</pre></details>`;
+  else if(j.stderr) html += `<details><summary>stderr</summary><pre>${esc(j.stderr)}</pre></details>`;
+  document.getElementById("result").innerHTML = html;
+  updatePipeline(j);
+}
+
+// ---- processing pipeline flowchart ----
+const PIPELINE = [
+  {id:'input',      title:'Design input',       engine:'config',              gate:false},
+  {id:'offtarget',  title:'Nick + off-target',  engine:'cas-offinder · CPU',  gate:true, kw:['off-target','offtarget']},
+  {id:'enum',       title:'Enumerate cands',    engine:'codon pool',          gate:false},
+  {id:'recode',     title:'Recode arm',         engine:'synonymous recode',   gate:false},
+  {id:'inv0',       title:'INV-0',              engine:'logic gate',          gate:true, kw:['inv-0','microhomology','byte-exact','locked']},
+  {id:'cryptic',    title:'Cryptic splice',     engine:'MaxEntScan · CPU',    gate:true, kw:['cryptic']},
+  {id:'splice',     title:'Splice',             engine:'SpliceAI · CPU',      gate:true, kw:['splice delta']},
+  {id:'importance', title:'Importance',         engine:'AlphaFold-DB · API',  gate:true, kw:['structurally important','buried']},
+  {id:'structure',  title:'2D structure',       engine:'ViennaRNA · CPU',     gate:true, kw:['cross-region','pairing']},
+  {id:'docking',    title:'Docking',            engine:'Boltz-2 · NVIDIA API',gate:true, kw:['interface iptm','docking']},
+  {id:'report',     title:'Report',             engine:'txt + CSV',           gate:false},
+];
+
+function renderPipeline(){
+  const flow=document.getElementById("flow"); flow.innerHTML="";
+  PIPELINE.forEach((p,i)=>{
+    if(i>0){ const a=document.createElement("div"); a.className="farrow"; a.textContent="↓"; flow.appendChild(a); }
+    const n=document.createElement("div"); n.className="fnode"+(p.gate?" gate":""); n.id="fn-"+p.id;
+    n.innerHTML=`<div class="fs"></div><div class="ft">${p.title}</div><div class="fe">${p.engine}</div><div class="fv"></div>`;
+    flow.appendChild(n);
+  });
+}
+
+function blockReason(j){
+  const m=(j.stderr||"").match(/cand\d+:\s*([^;]+)/);
+  return m ? m[1].trim().slice(0,140) : "";
+}
+// Live per-gate metrics, keyed by gate id, captured from the stream so the final
+// render can keep showing the raw value + cutoff (gates.json only has prose).
+let LIVEMETRICS={};
+const CMPSYM={">=":"≥","<=":"≤","==":"=","<":"<",">":">"};
+// Render a gate's raw output value + the cutoff it is checked against, and flag
+// (red) when the value is on the failing side of that cutoff. Falls back to the
+// plain info string for gates with no numeric metric.
+function fmtMetric(m, info, passed){
+  if(m && m.value!=null && m.cutoff!=null){
+    const sym=CMPSYM[m.cmp]||m.cmp||"";
+    const flag = passed
+      ? `<span class="flag ok">within cutoff</span>`
+      : `<span class="flag bad">${m.cmp==="=="?"nonzero":(m.cmp&&m.cmp.startsWith(">")?"below":"above")} cutoff</span>`;
+    const extra = m.extra ? `<span class="extra">${esc(m.extra)}</span>` : "";
+    return `${esc(m.metric)} <span class="mval">${esc(String(m.value))}</span> `
+         + `<span class="cut">(${sym}${esc(String(m.cutoff))})</span>${flag}${extra}`;
+  }
+  if(m && m.note) return esc(m.note);
+  return esc(info||"");
+}
+function updatePipeline(j){
+  const gmap={}; ((j.gates && j.gates.gate_results) || []).forEach(([id,info])=>{ gmap[id]=info; });
+  PIPELINE.forEach(p=>{ const el=document.getElementById("fn-"+p.id);
+    el.classList.remove("good","crit","pend","run","done");
+    el.querySelector(".fs").textContent="";
+    el.querySelector(".fv").textContent=""; });
+  const fmode=document.getElementById("fmode");
+  const text=((j.stderr||"")+" "+(j.report||"")).toLowerCase();
+  let blockIdx=-1;
+  if(!j.ok){
+    for(let i=0;i<PIPELINE.length;i++){
+      if(PIPELINE[i].kw && PIPELINE[i].kw.some(k=>text.includes(k))){ blockIdx=i; break; }
+    }
+  }
+  PIPELINE.forEach((p,i)=>{
+    const el=document.getElementById("fn-"+p.id), s=el.querySelector(".fs"), v=el.querySelector(".fv");
+    // Prefer the streamed raw value + cutoff (LIVEMETRICS); fall back to the
+    // gates.json prose for gates that don't stream a numeric metric.
+    if(LIVEMETRICS[p.id]) v.innerHTML = LIVEMETRICS[p.id].html;
+    else if(gmap[p.id]) v.textContent = gmap[p.id];
+    if(j.ok){ el.classList.add("good"); s.textContent="✓"; }
+    else if(blockIdx<0){ el.classList.add("pend"); }
+    else if(i<blockIdx){ el.classList.add("good"); s.textContent="✓"; }
+    else if(i===blockIdx){ el.classList.add("crit"); s.textContent="✕"; if(!v.textContent) v.textContent = blockReason(j); }
+    else { el.classList.add("pend"); s.textContent="○"; }
+  });
+  let m="Last run: mode="+esc(j.mode);
+  if(j.mode==="fake") m+=" — gates use stand-in scorers (design logic only).";
+  else { m+=" — CPU/API real gates."+(j.docking_stub?" Docking = stand-in (no NVIDIA key).":" Docking = live Boltz-2."); }
+  if(!j.ok && blockIdx<0) m+=" (run error — see stderr).";
+  fmode.textContent=m;
+}
+
+// ---- LIVE progress: stream real per-gate scores as they are computed ----
+function resetPipelineRunning(){
+  LIVEMETRICS={};
+  PIPELINE.forEach(p=>{ const el=document.getElementById("fn-"+p.id);
+    el.classList.remove("good","crit","pend","run","done");
+    el.querySelector(".fs").textContent=""; el.querySelector(".fv").textContent=""; });
+  document.getElementById("fmode").innerHTML='<span class="runsp"></span>Running the pipeline… the raw value at each step is shown below, flagged red if it fails its cutoff.';
+}
+// Each streamed event: {cand, gate, info, passed, metrics}. Highlight the active
+// gate and show its raw output value + cutoff live; mark earlier gates visited.
+function onProgress(ev){
+  const idx = PIPELINE.findIndex(p=>p.id===ev.gate);
+  if(idx<0) return;
+  const html = "cand "+esc(String(ev.cand))+" · "+fmtMetric(ev.metrics, ev.info, ev.passed);
+  LIVEMETRICS[ev.gate] = {html, passed:ev.passed};
+  PIPELINE.forEach((p,i)=>{
+    const el=document.getElementById("fn-"+p.id);
+    if(i===idx){
+      el.classList.remove("pend","done"); el.classList.add("run");
+      el.querySelector(".fs").textContent = ev.passed ? "✓" : "✕";
+      el.querySelector(".fv").innerHTML = html;
+    } else if(i<idx){
+      el.classList.remove("run");
+      if(!el.classList.contains("good") && !el.classList.contains("crit")) el.classList.add("done");
+    }
+  });
+}
+
+async function runDesign(){
+  const btn=document.getElementById("runbtn"), spin=document.getElementById("spin");
+  let cfg;
+  try { cfg = buildConfig(); } catch(e){ alert(e.message); return; }
+  btn.disabled=true; spin.classList.add("on");
+  document.getElementById("result").innerHTML='<p class="hint">Running the pipeline… live per-step scores are shown in the Processing pipeline panel.</p>';
+  resetPipelineRunning();
+  try {
+    const r = await fetch("/api/design/stream", {method:"POST", headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({config:cfg, mode:document.getElementById("mode").value})});
+    if(!r.ok || !r.body){ const t=await r.text(); throw new Error("stream failed: "+t.slice(0,200)); }
+    const reader=r.body.getReader(), dec=new TextDecoder(); let buf="", finalObj=null;
+    while(true){
+      const {done,value}=await reader.read(); if(done) break;
+      buf += dec.decode(value,{stream:true});
+      let nl;
+      while((nl=buf.indexOf("\n"))>=0){
+        const line=buf.slice(0,nl).trim(); buf=buf.slice(nl+1);
+        if(!line) continue;
+        let obj; try{ obj=JSON.parse(line); }catch(e){ continue; }
+        if(obj.type==="result") finalObj=obj; else onProgress(obj);
+      }
+    }
+    if(finalObj) renderResult(finalObj);
+    else document.getElementById("result").innerHTML = `<span class="badge err">error</span><pre>stream ended with no result</pre>`;
+  } catch(e){
+    document.getElementById("result").innerHTML = `<span class="badge err">error</span><pre>${esc(e.message)}</pre>`;
+  } finally { btn.disabled=false; spin.classList.remove("on"); }
+}
+
+initModes();
+renderPipeline();
+loadMotifs().then(()=>{ cargoSel = ["mEGFP","P2A","PuroR"]; setCargoMode("builder"); });
+</script>
+</body>
+</html>

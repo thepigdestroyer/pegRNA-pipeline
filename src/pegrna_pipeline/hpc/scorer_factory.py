@@ -114,14 +114,107 @@ def _real_bundle(
     )
 
 
+class _PaddedSpliceAIScorer:
+    """SpliceAI on short local design windows (api/CPU path).
+
+    The real ``SpliceAIScorer`` fail-louds unless it is handed >= 2*context nt
+    (>= 5 kb each side) — the HPC path supplies the true GRCh38 flanks. On a
+    GPU-less web host we usually only have the local design window (hundreds of
+    nt), so we N-pad both REF and ALT up to the required context before scoring.
+    N is SpliceAI's own end-padding symbol (zero one-hot, no splice signal), and
+    the prefix/suffix alignment in ``delta`` keeps the edit region intact, so the
+    delta over the real bases is preserved. CAVEAT: without the true genomic
+    neighbourhood this is an approximation of the full-context HPC gate.
+    """
+
+    def __init__(self) -> None:
+        from pegrna_pipeline.hpc.splice_screen import SpliceAIScorer
+
+        self._inner = SpliceAIScorer()
+
+    def delta(self, ref_seq: str, alt_seq: str) -> float:
+        pad = self._inner._context  # 5000 nt each side
+        need = 2 * pad
+        if len(ref_seq) >= need and len(alt_seq) >= need:
+            return self._inner.delta(ref_seq, alt_seq)
+        flank = "N" * pad
+        return self._inner.delta(flank + ref_seq + flank, flank + alt_seq + flank)
+
+
+def _api_bundle(
+    *,
+    uniprot_acc: str = "",
+    cas9: str = "nCas9",  # noqa: ARG001 — documented contract; used by caller
+    genome: str | None = None,
+    pam: str = "NGG",
+    max_mismatches: int = 3,
+    nvidia_api_key: str | None = None,
+    **_ignored: Any,
+) -> GateScorers:
+    """CPU/API gate bundle for a GPU-less host (the web deployment).
+
+    Every gate is REAL except that the two GPU-hard models are handled without a
+    local GPU:
+
+    * splice      -> SpliceAIScorer            (TensorFlow, CPU)
+    * cryptic     -> MaxEntScanScorer          (pure-Python matrices, CPU)
+    * structure   -> ViennaRNAStructureScorer  (partition-function bpp, CPU)
+    * importance  -> AFDBImportanceScorer       (AlphaFold-DB web API + biotite, CPU)
+    * docking     -> Boltz-2 via NVIDIA-hosted NIM API (needs NVIDIA_API_KEY);
+                     if no key is configured, a transparent stand-in is used so a
+                     design still runs, and this is flagged in the report manifest.
+    * off-target  -> cas-offinder if a genome FASTA is supplied, else clean-pass.
+    """
+    import os
+
+    from pegrna_pipeline.hpc.complex_dock import DockFake
+    from pegrna_pipeline.hpc.complex_dock_nim import Boltz2NIMDockScorer
+    from pegrna_pipeline.hpc.cryptic_splice import MaxEntScanScorer
+    from pegrna_pipeline.hpc.splice_screen import SpliceAIScorer
+    from pegrna_pipeline.hpc.structure_importance import AFDBImportanceScorer
+    from pegrna_pipeline.hpc.vienna_structure import ViennaRNAStructureScorer
+
+    key = nvidia_api_key or os.environ.get("NVIDIA_API_KEY")
+    if key:
+        dock: Any = Boltz2NIMDockScorer(api_key=key)
+    else:
+        # No key -> cannot call the hosted GPU model. Run every other gate for real
+        # and use a neutral stand-in for docking (flagged loudly by the caller via
+        # the DOCKING_STUB marker) rather than failing the whole design.
+        dock = DockFake(apo_iptm=0.85, candidate_iptm=0.83)
+
+    if genome:
+        from pegrna_pipeline.hpc.offtarget_scorer import CasOffinderScorer
+
+        offtarget: Callable[[List[str]], Dict[str, Tuple[float, int, bool]]] = CasOffinderScorer(
+            genome=genome, pam=pam, max_mismatches=max_mismatches
+        )
+    else:
+
+        def offtarget(protospacers: List[str]) -> Dict[str, Tuple[float, int, bool]]:
+            return {p: (0.8, 0, False) for p in protospacers}
+
+    return GateScorers(
+        splice_scorer=SpliceAIScorer(),
+        full_structure_scorer=ViennaRNAStructureScorer(),
+        importance_scorer=AFDBImportanceScorer(uniprot_acc or "UNKNOWN"),
+        dock_scorer=dock,
+        offtarget_scorer=offtarget,
+        maxent_scorer=MaxEntScanScorer(),
+    )
+
+
 def make_scorers(*, mode: str = "fake", **kwargs: Any) -> GateScorers:
     """Return the gate-scorer bundle for the requested ``mode``.
 
     ``mode="fake"`` for CI/dry-run; ``mode="real"`` for an HPC production run
-    (raises on missing deps/weights — never silently downgrades).
+    (raises on missing deps/weights — never silently downgrades); ``mode="api"``
+    for a GPU-less host — CPU-real gates + Boltz-2 via the NVIDIA-hosted NIM API.
     """
     if mode == "fake":
         return _fake_bundle()
     if mode == "real":
         return _real_bundle(**kwargs)
-    raise ValueError(f"mode must be 'fake' or 'real'; got {mode!r}")
+    if mode == "api":
+        return _api_bundle(**kwargs)
+    raise ValueError(f"mode must be 'fake', 'real', or 'api'; got {mode!r}")

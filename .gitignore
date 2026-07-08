@@ -14,3 +14,9 @@ build/
 # Pipeline run outputs (per-run design artifacts, reports, logs) — not source.
 results/
 *.log
+
+# Web app per-run outputs (configs + reports written at request time).
+web/runs/
+
+# AlphaFold-DB structures fetched/cached at runtime — not source.
+AF-*.cif

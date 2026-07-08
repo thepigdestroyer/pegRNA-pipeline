@@ -13,7 +13,7 @@ absent — it is never silently skipped.
 
 from __future__ import annotations
 
-from typing import Protocol, Tuple
+from typing import Optional, Protocol, Tuple
 
 __all__ = ["SpliceScorer", "SpliceFake", "SpliceAIScorer", "passes_splice_gate"]
 
@@ -161,10 +161,19 @@ class SpliceAIScorer:
 
 
 def passes_splice_gate(
-    ref_seq: str, alt_seq: str, *, scorer: SpliceScorer, max_delta: float = 0.2
+    ref_seq: str, alt_seq: str, *, scorer: SpliceScorer, max_delta: float = 0.2,
+    metrics: Optional[dict] = None,
 ) -> Tuple[bool, str]:
-    """HARD GATE: reject (False) if predicted splice delta >= ``max_delta``."""
+    """HARD GATE: reject (False) if predicted splice delta >= ``max_delta``.
+
+    Populates ``metrics`` (if given) with the raw SpliceAI delta and cutoff for
+    the caller's progress display; the return value is unchanged.
+    """
     d = scorer.delta(ref_seq, alt_seq)
+    if metrics is not None:
+        metrics.update({
+            "metric": "SpliceAI Δ", "value": round(d, 3), "cutoff": max_delta, "cmp": "<",
+        })
     if d >= max_delta:
         return False, f"splice delta {d:.3f} >= {max_delta} (predicted disruption)"
     return True, f"splice delta {d:.3f} ok"

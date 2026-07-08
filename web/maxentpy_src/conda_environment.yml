@@ -1,0 +1,10 @@
+name: maxentpy
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - msgpack-python
+  - pytest
+  - pytest-cov
+  - pytest-flake8
+  - coveralls

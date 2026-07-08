@@ -62,7 +62,12 @@ def residue_blocked(
         return True
     if m.plddt >= plddt_min and m.rsa < rsa_buried:
         return True
-    if m.contact_number > contact_max:
+    # "Densely-packed core" contact rule: only meaningful for a BURIED residue.
+    # The heavy-atom contact count trivially exceeds 18 even for solvent-exposed
+    # residues (e.g. a disordered C-terminus at RSA>0.7), so gating on contact
+    # number ALONE flags surface residues as structural cores — a false positive
+    # that made every candidate fail. Require the residue to also be buried.
+    if m.rsa < rsa_buried and m.contact_number > contact_max:
         return True
     return False
 

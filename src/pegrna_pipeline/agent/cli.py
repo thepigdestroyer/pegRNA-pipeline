@@ -378,9 +378,10 @@ def setup_cmd() -> None:
 
 @cli.command("design-recoded")
 @click.option("--config", "config_path", required=True, type=click.Path(exists=True))
-@click.option("--mode", type=click.Choice(["fake", "real"]), default="fake")
+@click.option("--mode", type=click.Choice(["fake", "real", "api"]), default="fake")
 @click.option("--output-dir", default="results", type=click.Path())
-def design_recoded_cmd(config_path: str, mode: str, output_dir: str) -> None:
+@click.option("--progress", is_flag=True, default=False, help="Emit @@P NDJSON per-gate progress lines to stdout (for the web streamer).")
+def design_recoded_cmd(config_path: str, mode: str, output_dir: str, progress: bool) -> None:
     """Run the recoded TJ-PE design pipeline from a JSON config.
 
     The config supplies the design inputs (spacer, rtt_aa, cargo, genome,
@@ -406,8 +407,22 @@ def design_recoded_cmd(config_path: str, mode: str, output_dir: str) -> None:
         manifest[key.lstrip("_")] = cfg.pop(key)
     if cfg.get("uniprot_acc"):
         manifest.setdefault("uniprot", cfg["uniprot_acc"])
+
+    progress_cb = None
+    if progress:
+        def progress_cb(cand: int, gate_id: str, info: str, passed: bool, metrics=None) -> None:  # noqa: F811
+            sys.stdout.write(
+                "@@P " + json.dumps({
+                    "cand": cand, "gate": gate_id, "info": info,
+                    "passed": passed, "metrics": metrics or {},
+                }) + "\n"
+            )
+            sys.stdout.flush()
+
     try:
-        out = design_recoded(mode=mode, output_dir=output_dir, manifest=manifest, **cfg)
+        out = design_recoded(
+            mode=mode, output_dir=output_dir, manifest=manifest, progress_cb=progress_cb, **cfg
+        )
     except Exception as exc:  # fail loud with a clear message
         click.echo(f"design-recoded failed: {type(exc).__name__}: {exc}", err=True)
         sys.exit(1)

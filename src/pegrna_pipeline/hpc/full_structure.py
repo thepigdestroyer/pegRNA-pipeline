@@ -65,7 +65,16 @@ def functional_region_pairing(
     threshold: float = 0.5,
 ) -> StructureScore:
     """Count pairings (prob ≥ ``threshold``) that couple two DISTINCT functional
-    regions, excluding any pair touching the scaffold."""
+    regions, excluding any pair touching the scaffold.
+
+    The spacer↔PBS interaction is EXPECTED, not a misfold: the primer-binding site
+    is designed complementary to the (nicked) protospacer strand, so a
+    thermodynamic folder (ViennaRNA) predicts a strong spacer–PBS stem for every
+    pegRNA. Counting it as disruptive cross-region structure would reject every
+    real candidate, so this intrinsic pair is excluded here (a learned model like
+    RiNALMo does not flag it either). Genuinely disruptive couplings — e.g. the
+    spacer sequestered by the RTT cargo — are still counted."""
+    expected = ({"spacer", "pbs1"},)  # intrinsic PBS–protospacer complementarity
     pairs = scorer.pair_probs(seq)
     count = 0
     for (i, j), p in pairs.items():
@@ -76,7 +85,7 @@ def functional_region_pairing(
             continue
         if ri == "scaffold" or rj == "scaffold":
             continue
-        if ri != rj:
+        if ri != rj and {ri, rj} not in expected:
             count += 1
     return StructureScore(cross_region_pairs=count)
 
