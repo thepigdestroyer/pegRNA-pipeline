@@ -33,9 +33,16 @@ per-spacer off-target-risk field, and the name of the column carrying the PBS-pa
 - **`offtarget_risk` defaults to `None`** — PRIDICT2 has no such field, so spacer specificity is
   gated by Cas-OFFinder (Stage D keeps the Cas-OFFinder path; the "replace with PRIDICT off-target
   risk" D1 branch is not available).
-- **`TwoPegPridictFake`** drives the pipeline in CI (deterministic, shaped like `parse_pegrna_csv`);
-  the **real adapter (C2)** wraps `submit_pridict_batches` + `pridict_parser` and is validated on CX3
-  in a real run (deferred).
+- **`TwoPegPridictFake`** drives the pipeline in CI (deterministic, shaped like `parse_pegrna_csv`).
+- **`TwoPegPridictReal` (C2)** submits two bracket-notation editseqs through `submit_pridict_batches`,
+  parses each PRIDICT output with `pridict_parser`, and selects the best pegRNA per end using the
+  shared `data_types._score_attr` policy. The default score column is the project default
+  `DEFAULT_SCORE_CELL_LINE = "k562"`; callers may opt into `"hek293t"`. Fixed submit fields
+  (`ssh`, `variants`, remote path, install path, conda env) cannot be overridden through passthrough
+  kwargs, so user kwargs cannot silently retarget the batch.
+- **RTgDNA exclusion (C5)** operates on the tail inside `RTrevcomp`: `split_rt_genomic_tail` separates
+  the intended insert end from the genomic tail; `exclude_rtgdna_tail` removes only the tail prefix
+  that overlaps the separately recoded between-nicks arm and preserves any non-overlapping tail suffix.
 
 ## Alternatives considered
 
@@ -43,26 +50,30 @@ per-spacer off-target-risk field, and the name of the column carrying the PBS-pa
 |---|---|
 | Use a PRIDICT off-target-risk field for spacer QC (plan D1) | The field does not exist in PRIDICT2 (CX3-verified); Cas-OFFinder is the real specificity gate |
 | Parse a dedicated "RTgDNA" column for C5 exclusion | No such column exists; the genomic tail lives inside `RTrevcomp`, so C5 must operate on `RTrevcomp` |
+| Drop the entire RT tail unconditionally | Over-trims when PRIDICT's homology tail extends beyond the recoded arm; only the arm-overlap prefix should be removed |
+| Let `submit_kwargs` override fixed submit fields | Makes the adapter hard to audit and can submit the wrong variants or remote path; fail loud instead |
 | Re-orient pegRNA#1 as well | PRIDICT already emits pegRNA#1 as RC(TS); re-complementing would double-invert it |
 
 ## Consequences
 
-- Positive: the two-pegRNA design is a small, testable transform. The RC(TS) property is asserted
-  at the **unit level** (the transform + fake); the *biological* rule that PRIDICT-on-opposite-strand
-  emits `PBSrevcomp = RC(OS) = TS` is verified against **real PRIDICT output in C2** (not here). The
-  ngRNA is structurally bound (cannot drift from its tj-pegRNA). `TwoPegDesign` is a design
-  representation only and is **not** wired into real construct assembly until C5 + C2 land.
+- Positive: the two-pegRNA design remains a small, testable transform. The RC(TS) property is
+  asserted at the **unit level** (the transform + fake); the *biological* rule that
+  PRIDICT-on-opposite-strand emits `PBSrevcomp = RC(OS) = TS` is validated by the real C2 run.
+  The ngRNA is structurally bound and cannot drift from its tj-pegRNA.
+- Positive: C2 and C5 are now represented as explicit, unit-tested adapter surfaces: real PRIDICT
+  submission and score selection are mock-tested; RT tail trimming is geometry-aware once callers
+  provide the overlap length.
 - Positive: the off-target and RTgDNA unknowns are resolved from the real tool, not guessed.
-- Follow-up (this Stage C, next sub-PR): **C5** RT-tail (RTgDNA) exclusion — where the genomic tail
-  of `RTrevcomp` overlaps the recoded between-nicks arm, defer to the arm (it covers that span to
-  the nucleotide). **C2** real adapter execution — validated on CX3.
-- Neutral: `TwoPegPridict.design_pair` takes pre-split windows for now; the real adapter's editseq
-  construction from an insert + locus is C2.
+- Follow-up: run the live C2 PRIDICT job on CX3 and store the output evidence. `TwoPegDesign` is a
+  design representation only and is **not** wired into real construct assembly until later Stage F/H.
+- Neutral: `TwoPegPridict.design_pair` still takes pre-split windows for the fake path; the real
+  adapter takes bracket-notation editseqs because that is what PRIDICT2 actually consumes.
 
 ## References
 
 - CX3: `/rds/general/user/mj1824/home/PRIDICT2` (grep: no offtarget/RTgDNA refs).
 - `src/pegrna_pipeline/hpc/recoded_pridict.py` (`TwoPegDesign`, `TwoPegPridictFake`,
-  `combine_two_peg`); `pridict_parser.py`, `pridict_submitter.py`, `data_types.PegRNADesign`.
+  `TwoPegPridictReal`, `combine_two_peg`, `split_rt_genomic_tail`, `exclude_rtgdna_tail`);
+  `pridict_parser.py`, `pridict_submitter.py`, `data_types.PegRNADesign`.
 - `tests/test_recoded_pridict.py`. Builds on ADR 0014 (target-strand convention). Plan Stage C
   in `docs/superpowers/plans/2026-07-02-unified-tjpe-target-strand.md`.

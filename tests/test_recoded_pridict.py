@@ -20,6 +20,8 @@ from pegrna_pipeline.hpc.recoded_pridict import (
     TwoPegDesign,
     TwoPegPridictFake,
     combine_two_peg,
+    exclude_rtgdna_tail,
+    split_rt_genomic_tail,
 )
 
 SCAF = "GTTTTAGAGCTAGAAATAGCAAG"  # stand-in scaffold for tests
@@ -170,3 +172,343 @@ def test_twopegdesign_is_frozen():
     )
     with pytest.raises(dataclasses.FrozenInstanceError):
         d.rcpbs2 = "AAAA"  # type: ignore[misc]
+
+
+# ---------------------------------------------------- C5: RTgDNA / RT-tail exclusion
+def test_split_rt_genomic_tail_separates_insert_and_tail():
+    insert_part = "ACGTACGTAC"
+    tail = "GGGGCCCCAA"  # genomic-homology tail PRIDICT appended past the insert
+    ins, got_tail = split_rt_genomic_tail(insert_part + tail, insert_part)
+    assert ins == insert_part and got_tail == tail
+
+
+def test_split_rt_genomic_tail_empty_when_no_tail():
+    insert_part = "ACGTACGTAC"
+    ins, tail = split_rt_genomic_tail(insert_part, insert_part)
+    assert ins == insert_part and tail == ""
+
+
+def test_split_rt_genomic_tail_raises_when_misaligned():
+    # The RT must start with the intended insert part; otherwise the RT and insert are
+    # misaligned -> fail loud rather than silently mis-trim.
+    with pytest.raises(ValueError):
+        split_rt_genomic_tail("TTTTACGTACGT", "ACGTACGTAC")
+
+
+def test_split_rt_genomic_tail_rejects_empty_insert_part():
+    # Regression: an empty intended insert starts every string and would silently mark the
+    # whole RT as genomic tail, deleting the insert end instead of failing loud.
+    with pytest.raises(ValueError, match="insert_part"):
+        split_rt_genomic_tail("ACGTACGT", "")
+
+
+def test_exclude_rtgdna_tail_drops_the_genomic_tail():
+    # C5: the recoded between-nicks arm authoritatively covers the genomic span, so the
+    # RT's genomic-homology tail is excluded -- only the insert part remains.
+    insert_part = "ACGTACGTAC"
+    rt = insert_part + "GGGGCCCCAA"
+    assert exclude_rtgdna_tail(rt, insert_part) == insert_part
+
+
+def test_exclude_rtgdna_tail_noop_when_no_tail():
+    insert_part = "ACGTACGTAC"
+    assert exclude_rtgdna_tail(insert_part, insert_part) == insert_part
+
+
+def test_exclude_rtgdna_tail_keeps_non_overlapping_tail_after_arm_overlap():
+    # C5 excludes only the portion of PRIDICT's genomic tail that overlaps the separately
+    # recoded between-nicks arm. If the tail extends past that arm, the non-overlapping suffix
+    # must stay so the RT template is not over-trimmed.
+    insert_part = "ACGTACGTAC"
+    overlap = "GGGG"
+    outside_arm = "CCCC"
+    rt = insert_part + overlap + outside_arm
+    assert (
+        exclude_rtgdna_tail(rt, insert_part, overlap_len=len(overlap)) == insert_part + outside_arm
+    )
+
+
+def test_exclude_rtgdna_tail_overlap_len_zero_keeps_full_tail():
+    # overlap_len=0 is the explicit inverse of the default (None -> drop whole tail): keep it all.
+    # Guards a "overlap_len = overlap_len or len(tail)" refactor that would treat 0 as falsy.
+    insert_part = "ACGTACGTAC"
+    tail = "GGGGCCCC"
+    assert exclude_rtgdna_tail(insert_part + tail, insert_part, overlap_len=0) == insert_part + tail
+
+
+def test_exclude_rtgdna_tail_overlap_len_equals_tail_len_drops_whole_tail():
+    insert_part = "ACGTACGTAC"
+    tail = "GGGGCCCC"
+    assert (
+        exclude_rtgdna_tail(insert_part + tail, insert_part, overlap_len=len(tail)) == insert_part
+    )
+
+
+def test_exclude_rtgdna_tail_rejects_out_of_range_overlap_len():
+    insert_part = "ACGTACGTAC"
+    rt = insert_part + "GGGG"  # tail length 4
+    with pytest.raises(ValueError, match="overlap_len"):
+        exclude_rtgdna_tail(rt, insert_part, overlap_len=-1)
+    with pytest.raises(ValueError, match="overlap_len"):
+        exclude_rtgdna_tail(rt, insert_part, overlap_len=5)
+
+
+# ---------------------------------------------------------- C2: real adapter (mocked I/O)
+class _FakeSSH:
+    def __init__(self):
+        self.downloads = []
+
+    def download(self, remote, local):
+        self.downloads.append((remote, local))
+
+    def exec(self, *a, **k):
+        return ("", "", 0)
+
+    def upload(self, *a, **k):
+        pass
+
+
+def _pegp(name: str, pe2: float, *, k562: float | None = None) -> PegRNADesign:
+    return PegRNADesign(
+        sequence_name=name,
+        spacer="G" * 20,
+        pbs="ACGT",
+        rt="TTTT",
+        pbs_length=4,
+        rt_length=4,
+        target_strand="Rv",
+        editing_position=5,
+        pe2_hek293t=pe2,
+        pe2_k562=pe2 if k562 is None else k562,
+        pegrna_full="",
+    )
+
+
+def test_real_adapter_submits_and_picks_top_pe2_per_end(monkeypatch):
+    from pegrna_pipeline.hpc import pridict_submitter as ps
+    from pegrna_pipeline.hpc.pridict_submitter import BatchResult
+    from pegrna_pipeline.hpc.recoded_pridict import TwoPegPridictReal
+
+    monkeypatch.setattr(
+        ps,
+        "submit_pridict_batches",
+        lambda **kw: BatchResult(submitted=[object()], failed=[], output_dirs=["/out"]),
+    )
+    loaded = {
+        "e1": [_pegp("e1", 10.0), _pegp("e1", 90.0)],
+        "e2": [_pegp("e2", 30.0), _pegp("e2", 70.0)],
+    }
+    adapter = TwoPegPridictReal(
+        ssh=_FakeSSH(), remote_run_dir="/run", pridict_install_path="/PRIDICT2"
+    )
+    monkeypatch.setattr(adapter, "_load_designs", lambda output_dir, name: loaded[name])
+    peg1, peg2 = adapter.design_pair(
+        editseq1="ACGT(+GG)AC", editseq2="TTTT(+CC)AC", name1="e1", name2="e2"
+    )
+    assert peg1.pe2_hek293t == 90.0 and peg2.pe2_hek293t == 70.0  # top PE2 per end
+
+
+def test_real_adapter_defaults_to_project_score_cell_line_k562(monkeypatch):
+    from pegrna_pipeline.hpc import pridict_submitter as ps
+    from pegrna_pipeline.hpc.pridict_submitter import BatchResult
+    from pegrna_pipeline.hpc.recoded_pridict import TwoPegPridictReal
+
+    monkeypatch.setattr(
+        ps,
+        "submit_pridict_batches",
+        lambda **kw: BatchResult(submitted=[object()], failed=[], output_dirs=["/out"]),
+    )
+    loaded = {
+        # HEK would pick the first row; K562 must pick the second row by default.
+        "e1": [_pegp("e1", 90.0, k562=10.0), _pegp("e1", 20.0, k562=99.0)],
+        "e2": [_pegp("e2", 80.0, k562=15.0), _pegp("e2", 30.0, k562=88.0)],
+    }
+    adapter = TwoPegPridictReal(
+        ssh=_FakeSSH(), remote_run_dir="/run", pridict_install_path="/PRIDICT2"
+    )
+    monkeypatch.setattr(adapter, "_load_designs", lambda output_dir, name: loaded[name])
+    peg1, peg2 = adapter.design_pair(editseq1="x", editseq2="y", name1="e1", name2="e2")
+    assert peg1.pe2_k562 == 99.0 and peg2.pe2_k562 == 88.0
+
+
+def test_real_adapter_can_rank_by_hek293t_when_explicit(monkeypatch):
+    from pegrna_pipeline.hpc import pridict_submitter as ps
+    from pegrna_pipeline.hpc.pridict_submitter import BatchResult
+    from pegrna_pipeline.hpc.recoded_pridict import TwoPegPridictReal
+
+    monkeypatch.setattr(
+        ps,
+        "submit_pridict_batches",
+        lambda **kw: BatchResult(submitted=[object()], failed=[], output_dirs=["/out"]),
+    )
+    loaded = {
+        "e1": [_pegp("e1", 91.0, k562=10.0), _pegp("e1", 20.0, k562=99.0)],
+        "e2": [_pegp("e2", 81.0, k562=15.0), _pegp("e2", 30.0, k562=88.0)],
+    }
+    adapter = TwoPegPridictReal(
+        ssh=_FakeSSH(),
+        remote_run_dir="/run",
+        pridict_install_path="/PRIDICT2",
+        score_cell_line="hek293t",
+    )
+    monkeypatch.setattr(adapter, "_load_designs", lambda output_dir, name: loaded[name])
+    peg1, peg2 = adapter.design_pair(editseq1="x", editseq2="y", name1="e1", name2="e2")
+    assert peg1.pe2_hek293t == 91.0 and peg2.pe2_hek293t == 81.0
+
+
+def test_real_adapter_rejects_invalid_score_cell_line_at_construction():
+    # Fail fast: an invalid score column must raise when the adapter is built, NOT after a
+    # multi-hour CX3 batch has already run (reviewers flagged the late-validation trap).
+    from pegrna_pipeline.hpc.recoded_pridict import TwoPegPridictReal
+
+    with pytest.raises(ValueError, match="score_cell_line"):
+        TwoPegPridictReal(
+            ssh=_FakeSSH(),
+            remote_run_dir="/run",
+            pridict_install_path="/PRIDICT2",
+            score_cell_line="cho",
+        )
+
+
+def test_real_adapter_revalidates_score_cell_line_before_submitting(monkeypatch):
+    # __post_init__ fails fast, but the dataclass is mutable: reassigning score_cell_line after
+    # construction must not slip an invalid column past submit and only fail post-batch.
+    from pegrna_pipeline.hpc import pridict_submitter as ps
+    from pegrna_pipeline.hpc.pridict_submitter import BatchResult
+    from pegrna_pipeline.hpc.recoded_pridict import TwoPegPridictReal
+
+    calls = {"n": 0}
+
+    def _spy(**kw):
+        calls["n"] += 1
+        return BatchResult(submitted=[object()], failed=[], output_dirs=["/out"])
+
+    monkeypatch.setattr(ps, "submit_pridict_batches", _spy)
+    adapter = TwoPegPridictReal(
+        ssh=_FakeSSH(), remote_run_dir="/run", pridict_install_path="/PRIDICT2"
+    )
+    adapter.score_cell_line = "cho"  # mutate past the __post_init__ guard
+    with pytest.raises(ValueError, match="score_cell_line"):
+        adapter.design_pair(editseq1="x", editseq2="y", name1="e1", name2="e2")
+    assert calls["n"] == 0  # never submitted a batch with an invalid score column
+
+
+def test_real_adapter_validates_names_before_submitting(monkeypatch):
+    # design_pair must reject bad/duplicate names BEFORE the expensive submit runs.
+    from pegrna_pipeline.hpc import pridict_submitter as ps
+    from pegrna_pipeline.hpc.pridict_submitter import BatchResult
+    from pegrna_pipeline.hpc.recoded_pridict import TwoPegPridictReal
+
+    calls = {"n": 0}
+
+    def _spy(**kw):
+        calls["n"] += 1
+        return BatchResult(submitted=[object()], failed=[], output_dirs=["/out"])
+
+    monkeypatch.setattr(ps, "submit_pridict_batches", _spy)
+    adapter = TwoPegPridictReal(
+        ssh=_FakeSSH(), remote_run_dir="/run", pridict_install_path="/PRIDICT2"
+    )
+    # Equal names would collide on one PRIDICT CSV -> identical pair.
+    with pytest.raises(ValueError, match="must differ"):
+        adapter.design_pair(editseq1="x", editseq2="y", name1="dup", name2="dup")
+    # Path-traversal / shell-metachar names are rejected.
+    with pytest.raises(ValueError, match=r"\[A-Za-z0-9_-\]"):
+        adapter.design_pair(editseq1="x", editseq2="y", name1="../evil", name2="e2")
+    assert calls["n"] == 0  # never submitted a batch for an invalid request
+
+
+def test_real_adapter_rejects_submit_kwargs_that_override_fixed_fields():
+    from pegrna_pipeline.hpc.recoded_pridict import TwoPegPridictReal
+
+    adapter = TwoPegPridictReal(
+        ssh=_FakeSSH(), remote_run_dir="/run", pridict_install_path="/PRIDICT2"
+    )
+    with pytest.raises(ValueError, match="submit_kwargs.*remote_run_dir"):
+        adapter.design_pair(
+            editseq1="x",
+            editseq2="y",
+            name1="e1",
+            name2="e2",
+            remote_run_dir="/clobber",
+        )
+    # `variants` is the most dangerous collision (it would silently retarget the whole batch)
+    # and is a distinct guarded field, so cover it too.
+    with pytest.raises(ValueError, match="submit_kwargs.*variants"):
+        adapter.design_pair(
+            editseq1="x",
+            editseq2="y",
+            name1="e1",
+            name2="e2",
+            variants=[{"sequence_name": "z", "editseq": "z"}],
+        )
+
+
+def test_real_adapter_forwards_extra_submit_kwargs(monkeypatch):
+    # The exclusion guard must NOT block legitimate passthrough kwargs (e.g. a walltime override):
+    # they should reach submit_pridict_batches unchanged.
+    from pegrna_pipeline.hpc import pridict_submitter as ps
+    from pegrna_pipeline.hpc.pridict_submitter import BatchResult
+    from pegrna_pipeline.hpc.recoded_pridict import TwoPegPridictReal
+
+    seen = {}
+
+    def _spy(**kw):
+        seen.update(kw)
+        return BatchResult(submitted=[object()], failed=[], output_dirs=["/out"])
+
+    monkeypatch.setattr(ps, "submit_pridict_batches", _spy)
+    adapter = TwoPegPridictReal(
+        ssh=_FakeSSH(), remote_run_dir="/run", pridict_install_path="/PRIDICT2"
+    )
+    monkeypatch.setattr(adapter, "_load_designs", lambda output_dir, name: [_pegp(name, 1.0)])
+    adapter.design_pair(editseq1="x", editseq2="y", name1="e1", name2="e2", walltime_hours=12)
+    assert seen.get("walltime_hours") == 12
+
+
+def test_real_adapter_raises_on_failed_batch(monkeypatch):
+    from pegrna_pipeline.hpc import pridict_submitter as ps
+    from pegrna_pipeline.hpc.pridict_submitter import BatchResult
+    from pegrna_pipeline.hpc.recoded_pridict import TwoPegPridictReal
+
+    monkeypatch.setattr(
+        ps,
+        "submit_pridict_batches",
+        lambda **kw: BatchResult(submitted=[], failed=[object()], output_dirs=["/out"]),
+    )
+    adapter = TwoPegPridictReal(
+        ssh=_FakeSSH(), remote_run_dir="/run", pridict_install_path="/PRIDICT2"
+    )
+    with pytest.raises(RuntimeError, match="PRIDICT batch failed"):
+        adapter.design_pair(editseq1="x", editseq2="y", name1="e1", name2="e2")
+
+
+def test_real_adapter_raises_when_no_designs_found(monkeypatch):
+    from pegrna_pipeline.hpc import pridict_submitter as ps
+    from pegrna_pipeline.hpc.pridict_submitter import BatchResult
+    from pegrna_pipeline.hpc.recoded_pridict import TwoPegPridictReal
+
+    monkeypatch.setattr(
+        ps,
+        "submit_pridict_batches",
+        lambda **kw: BatchResult(submitted=[object()], failed=[], output_dirs=["/out"]),
+    )
+    adapter = TwoPegPridictReal(
+        ssh=_FakeSSH(), remote_run_dir="/run", pridict_install_path="/PRIDICT2"
+    )
+    monkeypatch.setattr(adapter, "_load_designs", lambda output_dir, name: [])
+    with pytest.raises(RuntimeError, match="no PRIDICT pegRNA designs"):
+        adapter.design_pair(editseq1="x", editseq2="y", name1="e1", name2="e2")
+
+
+def test_real_adapter_load_designs_returns_empty_when_output_csv_missing():
+    from pegrna_pipeline.hpc.recoded_pridict import TwoPegPridictReal
+
+    class MissingCSVSSH(_FakeSSH):
+        def download(self, remote, local):
+            raise FileNotFoundError(remote)
+
+    adapter = TwoPegPridictReal(
+        ssh=MissingCSVSSH(), remote_run_dir="/run", pridict_install_path="/PRIDICT2"
+    )
+    assert adapter._load_designs("/out", "e1") == []
