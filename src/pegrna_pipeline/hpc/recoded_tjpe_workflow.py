@@ -293,13 +293,15 @@ def _importance_metrics(scorer, residues: Sequence[int]) -> Dict[str, Any]:
     min_rsa = min(m.rsa for m in ms)
     max_contact = max(m.contact_number for m in ms)
     special = any(
-        m.is_catalytic or m.is_disulfide or m.is_positive_phi_gly or m.is_structural_pro
-        for m in ms
+        m.is_catalytic or m.is_disulfide or m.is_positive_phi_gly or m.is_structural_pro for m in ms
     )
     # Primary flagged value = worst (lowest) RSA vs the buried cutoff 0.25; a
     # residue passes when it is NOT buried (RSA >= 0.25) and not special.
     return {
-        "metric": "min RSA", "value": round(min_rsa, 2), "cutoff": 0.25, "cmp": ">=",
+        "metric": "min RSA",
+        "value": round(min_rsa, 2),
+        "cutoff": 0.25,
+        "cmp": ">=",
         "extra": f"max contacts {max_contact} (≤18)" + (" · special residue!" if special else ""),
     }
 
@@ -526,7 +528,9 @@ def run_recoded_tjpe(
     if arm_side not in ("3prime", "5prime", "auto"):
         raise ValueError(f"arm_side must be '3prime'/'5prime'/'auto'; got {arm_side!r}")
 
-    def _emit(cand: int, gate_id: str, info: str, passed: bool, metrics: Optional[dict] = None) -> None:
+    def _emit(
+        cand: int, gate_id: str, info: str, passed: bool, metrics: Optional[dict] = None
+    ) -> None:
         # Live progress hook (per-gate, per-candidate). Never let it break a run.
         # ``metrics`` (raw value + cutoff for the flowchart) is passed when the
         # callback accepts it; older 4-arg callbacks are called without it.
@@ -734,8 +738,17 @@ def run_recoded_tjpe(
                 )
             except ValueError:
                 gate_info["splice"] = "advisory skip (needs >=10kb context; MaxEnt is primary)"
-                _emit(tried, "splice", "advisory skip (<10kb context)", True,
-                      {"metric": "SpliceAI Δ", "value": None, "note": "advisory skip (<10kb context)"})
+                _emit(
+                    tried,
+                    "splice",
+                    "advisory skip (<10kb context)",
+                    True,
+                    {
+                        "metric": "SpliceAI Δ",
+                        "value": None,
+                        "note": "advisory skip (<10kb context)",
+                    },
+                )
             except Exception as exc:  # noqa: BLE001
                 diagnostics.append(f"cand{tried}: splice cross-check error: {exc}")
                 continue
@@ -753,7 +766,10 @@ def run_recoded_tjpe(
             # (INV-0 guarantees the protein there is unchanged, so the arm residues'
             # burial is irrelevant). Retains the special-residue hard block.
             ins_footprint = _insertion_site_footprint(
-                site_s, cds_mask, context=insertion_importance_context, protein_length=protein_length
+                site_s,
+                cds_mask,
+                context=insertion_importance_context,
+                protein_length=protein_length,
             )
             if ins_footprint:
                 try:
@@ -765,7 +781,8 @@ def run_recoded_tjpe(
                 _emit(
                     tried,
                     "importance",
-                    f"residues {ins_footprint} " + ("blocked (buried/special)" if blocked else "tolerated (surface/flexible)"),
+                    f"residues {ins_footprint} "
+                    + ("blocked (buried/special)" if blocked else "tolerated (surface/flexible)"),
                     not blocked,
                     imp_metrics,
                 )
@@ -798,8 +815,13 @@ def run_recoded_tjpe(
                 "structure",
                 f"{pairing.cross_region_pairs} cross-region pairs (p>={structure_threshold})",
                 pairing.cross_region_pairs == 0,
-                {"metric": "cross-region pairs", "value": pairing.cross_region_pairs,
-                 "cutoff": 0, "cmp": "==", "extra": f"base-pair prob ≥ {structure_threshold}"},
+                {
+                    "metric": "cross-region pairs",
+                    "value": pairing.cross_region_pairs,
+                    "cutoff": 0,
+                    "cmp": "==",
+                    "extra": f"base-pair prob ≥ {structure_threshold}",
+                },
             )
             if pairing.cross_region_pairs > 0:
                 diagnostics.append(f"cand{tried}: RiNALMo cross-region pairing")
@@ -812,7 +834,10 @@ def run_recoded_tjpe(
             dk_metrics: Dict[str, Any] = {}
             try:
                 dock_ok, dock_why = passes_docking_gate(
-                    peg, cas9, scorer=dock_scorer, max_drop=max_interface_drop,
+                    peg,
+                    cas9,
+                    scorer=dock_scorer,
+                    max_drop=max_interface_drop,
                     metrics=dk_metrics,
                 )
             except Exception as exc:  # noqa: BLE001
@@ -840,11 +865,22 @@ def run_recoded_tjpe(
                 nick_gt_s=pos > site_s,
             )
             parts_map = dict(rtt_components)
-            gate_info["offtarget"] = f"nick {nick.nick_position}: unique on-target, 0 off-targets in tier"
+            gate_info["offtarget"] = (
+                f"nick {nick.nick_position}: unique on-target, 0 off-targets in tier"
+            )
             gate_info["recode"] = f"{arm.n_edits} synonymous codon edits (microhomology broken)"
             gate_info["inv0"] = "0 bp endogenous deletion; recode protein-silent (INV-0 held)"
             # Order gate_info to match the pipeline flow for display.
-            _order = ["offtarget", "recode", "inv0", "cryptic", "splice", "importance", "structure", "docking"]
+            _order = [
+                "offtarget",
+                "recode",
+                "inv0",
+                "cryptic",
+                "splice",
+                "importance",
+                "structure",
+                "docking",
+            ]
             gate_results = [(k, gate_info[k]) for k in _order if k in gate_info]
             return RecodedTJPEResult(
                 pegRNA_sequence=peg,

@@ -202,11 +202,15 @@ def passes_cryptic_splice_gate(
     var_scores = [sc for (_k, s, e, _a, sc) in edited_sites if _overlaps_variant(s, e)]
     observed_max = max(var_scores) if var_scores else 0.0
     if metrics is not None:
-        metrics.update({
-            "metric": "MaxEnt", "value": round(observed_max, 1),
-            "cutoff": round(strong_threshold, 1), "cmp": "<",
-            "extra": f"ref best {ref_best:.1f}",
-        })
+        metrics.update(
+            {
+                "metric": "MaxEnt",
+                "value": round(observed_max, 1),
+                "cutoff": round(strong_threshold, 1),
+                "cmp": "<",
+                "extra": f"ref best {ref_best:.1f}",
+            }
+        )
 
     created = [
         (kind, start, end, anchor, sc)
