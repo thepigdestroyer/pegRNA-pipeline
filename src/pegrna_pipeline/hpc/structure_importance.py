@@ -56,7 +56,9 @@ def residue_blocked(
 
     Block (any true): catalytic / disulfide-Cys / positive-φ Gly / structural
     Pro; OR (pLDDT ≥ ``plddt_min`` AND RSA < ``rsa_buried``) buried core; OR
-    contact number > ``contact_max``. High pLDDT alone never blocks.
+    (RSA < ``rsa_buried`` AND contact number > ``contact_max``) densely-packed
+    buried core. High pLDDT alone — or a high contact count on a solvent-exposed
+    residue — never blocks on its own.
     """
     if m.is_catalytic or m.is_disulfide or m.is_positive_phi_gly or m.is_structural_pro:
         return True
