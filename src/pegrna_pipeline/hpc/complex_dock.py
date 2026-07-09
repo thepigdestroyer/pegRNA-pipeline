@@ -212,13 +212,15 @@ def passes_docking_gate(
     cand = scorer.interface_iptm(pegrna, cas9)
     drop = apo - cand
     if metrics is not None:
-        metrics.update({
-            "metric": "interface ipTM",
-            "value": round(cand, 3),
-            "cutoff": min_iptm,
-            "cmp": ">=",
-            "extra": f"apo {apo:.2f}→{cand:.2f}, drop {drop:.2f} (max {max_drop})",
-        })
+        metrics.update(
+            {
+                "metric": "interface ipTM",
+                "value": round(cand, 3),
+                "cutoff": min_iptm,
+                "cmp": ">=",
+                "extra": f"apo {apo:.2f}→{cand:.2f}, drop {drop:.2f} (max {max_drop})",
+            }
+        )
     if cand < min_iptm - 1e-9:
         return False, (
             f"scaffold-Cas9 interface ipTM {cand:.2f} < {min_iptm} "

@@ -380,7 +380,12 @@ def setup_cmd() -> None:
 @click.option("--config", "config_path", required=True, type=click.Path(exists=True))
 @click.option("--mode", type=click.Choice(["fake", "real", "api"]), default="fake")
 @click.option("--output-dir", default="results", type=click.Path())
-@click.option("--progress", is_flag=True, default=False, help="Emit @@P NDJSON per-gate progress lines to stdout (for the web streamer).")
+@click.option(
+    "--progress",
+    is_flag=True,
+    default=False,
+    help="Emit @@P NDJSON per-gate progress lines to stdout (for the web streamer).",
+)
 def design_recoded_cmd(config_path: str, mode: str, output_dir: str, progress: bool) -> None:
     """Run the recoded TJ-PE design pipeline from a JSON config.
 
@@ -410,12 +415,22 @@ def design_recoded_cmd(config_path: str, mode: str, output_dir: str, progress: b
 
     progress_cb = None
     if progress:
-        def progress_cb(cand: int, gate_id: str, info: str, passed: bool, metrics=None) -> None:  # noqa: F811
+
+        def progress_cb(
+            cand: int, gate_id: str, info: str, passed: bool, metrics=None
+        ) -> None:  # noqa: F811
             sys.stdout.write(
-                "@@P " + json.dumps({
-                    "cand": cand, "gate": gate_id, "info": info,
-                    "passed": passed, "metrics": metrics or {},
-                }) + "\n"
+                "@@P "
+                + json.dumps(
+                    {
+                        "cand": cand,
+                        "gate": gate_id,
+                        "info": info,
+                        "passed": passed,
+                        "metrics": metrics or {},
+                    }
+                )
+                + "\n"
             )
             sys.stdout.flush()
 

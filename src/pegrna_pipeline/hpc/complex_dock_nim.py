@@ -169,8 +169,7 @@ class Boltz2NIMDockScorer:
             self.last_metric_source = "confidence_scores(proxy)"
             return float(scores[0])
         raise RuntimeError(
-            "Boltz-2 NIM response had no usable confidence metric "
-            f"(keys: {sorted(body.keys())})"
+            "Boltz-2 NIM response had no usable confidence metric " f"(keys: {sorted(body.keys())})"
         )
 
     # -- ComplexDockScorer interface ----------------------------------------

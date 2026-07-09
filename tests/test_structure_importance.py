@@ -45,8 +45,12 @@ def test_high_plddt_alone_does_not_block():
     assert residue_blocked(_m(plddt=95, rsa=0.5, contact_number=4)) is False
 
 
-def test_high_contact_number_blocks():
-    assert residue_blocked(_m(contact_number=20)) is True
+def test_high_contact_number_blocks_only_when_buried():
+    # A densely-packed BURIED core blocks, but a high heavy-atom contact count on a
+    # solvent-EXPOSED residue must NOT block -- that false positive (contact-count
+    # alone) flagged every surface residue and failed every candidate.
+    assert residue_blocked(_m(contact_number=20, rsa=0.10)) is True
+    assert residue_blocked(_m(contact_number=20, rsa=0.50)) is False
 
 
 def test_span_blocked_is_or_over_residues():
