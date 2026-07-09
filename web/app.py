@@ -12,23 +12,38 @@ import csv
 import io
 import json
 import os
+import shutil
 import subprocess
 import sys
+import threading
 import time
 import uuid
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 # --- paths ------------------------------------------------------------------
 HERE = Path(__file__).resolve().parent
-REPO = Path(os.environ.get("PEGRNA_REPO", "/mnt/data3/jmoore3/prime-editing"))
-RUNS = HERE / "runs"
+
+
+def _default_repo() -> Path:
+    """Repo root: ``PEGRNA_REPO`` if set, else the parent of ``web/`` when it
+    looks like the checkout, else the historical deployment path."""
+    env = os.environ.get("PEGRNA_REPO")
+    if env:
+        return Path(env)
+    if (HERE.parent / "pyproject.toml").exists():
+        return HERE.parent
+    return Path("/mnt/data3/jmoore3/prime-editing")
+
+
+REPO = _default_repo()
 STATIC = HERE / "static"
+RUNS = Path(os.environ.get("PEGRNA_RUNS_DIR", str(HERE / "runs")))
 EXAMPLE_CONFIG = REPO / "examples" / "ctcf_cterm" / "config.json"
 RUNS.mkdir(parents=True, exist_ok=True)
 
@@ -37,17 +52,33 @@ RUNS.mkdir(parents=True, exist_ok=True)
 # Boltz-2 docking via the NVIDIA-hosted NIM API. "real" (GPU/HPC) is not offered.
 SUPPORTED_MODES = ["fake", "api"]
 
-# Each mode runs in its own conda env: fake in the light web env, api in the
-# heavy env that has TensorFlow/biotite/ViennaRNA/maxentpy installed.
-CONDA = "/mnt/data3/jmoore3/miniconda3/envs"
+# Each mode runs in its own conda env. The env root and both interpreter paths
+# are env-overridable so this deploys on any host (not just the original box).
+CONDA_ENVS = os.environ.get("PEGRNA_CONDA_ENVS", "/mnt/data3/jmoore3/miniconda3/envs")
 MODE_PYTHON = {
-    "fake": sys.executable,
-    "api": f"{CONDA}/pegrna-real/bin/python",
+    "fake": os.environ.get("PEGRNA_WEB_PYTHON", sys.executable),
+    "api": os.environ.get("PEGRNA_API_PYTHON", f"{CONDA_ENVS}/pegrna-real/bin/python"),
 }
 
 # NVIDIA API key for the Boltz-2 NIM docking gate. Read from (in order) the
 # environment or a key file, so it never has to live in the systemd unit.
-NVIDIA_KEY_FILE = Path(os.environ.get("NVIDIA_KEY_FILE", "/home/jmoore3/.config/pegrna/nvidia.key"))
+NVIDIA_KEY_FILE = Path(
+    os.environ.get("NVIDIA_KEY_FILE", str(Path.home() / ".config" / "pegrna" / "nvidia.key"))
+).expanduser()
+
+# --- deployment / abuse guards (all env-tunable) ----------------------------
+# A public deployment must bound resource use: Boltz-2 NIM calls take minutes and
+# cost credits, so cap concurrent runs and reject (429) rather than queue-flood.
+MAX_CONCURRENCY = max(1, int(os.environ.get("PEGRNA_MAX_CONCURRENCY", "2")))
+MAX_CONFIG_BYTES = int(os.environ.get("PEGRNA_MAX_CONFIG_BYTES", "200000"))  # 200 KB
+MAX_GENOME_LEN = int(os.environ.get("PEGRNA_MAX_GENOME_LEN", "50000"))
+KEEP_RUNS = int(os.environ.get("PEGRNA_KEEP_RUNS", "200"))
+RUN_TIMEOUT = int(os.environ.get("PEGRNA_TIMEOUT", "1800"))
+# Optional shared-secret gate. Empty => open (anyone can design); set it to
+# require an `X-Access-Token` header (or `?token=`) on the design endpoints.
+ACCESS_TOKEN = os.environ.get("PEGRNA_ACCESS_TOKEN", "")
+
+_SLOTS = threading.BoundedSemaphore(MAX_CONCURRENCY)
 
 
 def _nvidia_key() -> str:
@@ -57,7 +88,79 @@ def _nvidia_key() -> str:
         return NVIDIA_KEY_FILE.read_text().strip()
     return ""
 
-app = FastAPI(title="pegRNA design", version="0.1.0")
+
+def _check_token(request: Request) -> None:
+    """401 unless the configured access token matches (no-op when unset)."""
+    if not ACCESS_TOKEN:
+        return
+    supplied = request.headers.get("X-Access-Token") or request.query_params.get("token") or ""
+    if supplied != ACCESS_TOKEN:
+        raise HTTPException(401, "missing or invalid access token")
+
+
+def _validate(req: "DesignRequest") -> None:
+    """Reject bad mode (400), oversized config (413), or an overlong genome (400)."""
+    if req.mode not in SUPPORTED_MODES:
+        raise HTTPException(400, f"mode must be one of {SUPPORTED_MODES}")
+    if not isinstance(req.config, dict):
+        raise HTTPException(400, "config must be a JSON object")
+    if len(json.dumps(req.config)) > MAX_CONFIG_BYTES:
+        raise HTTPException(413, f"config exceeds {MAX_CONFIG_BYTES} bytes")
+    genome = req.config.get("genome")
+    if isinstance(genome, str) and len(genome) > MAX_GENOME_LEN:
+        raise HTTPException(400, f"genome exceeds {MAX_GENOME_LEN} nt (api mode is CPU-bounded)")
+
+
+class _Slot:
+    """Non-blocking concurrency slot; raises 429 when the pool is full. Reads the
+    module-global ``_SLOTS`` at call time so it stays correct if reconfigured."""
+
+    def __enter__(self) -> "_Slot":
+        if not _SLOTS.acquire(blocking=False):
+            raise HTTPException(429, f"server busy (max {MAX_CONCURRENCY} concurrent designs)")
+        return self
+
+    def __exit__(self, *exc: object) -> bool:
+        _SLOTS.release()
+        return False
+
+
+def _cleanup_runs() -> None:
+    """Keep only the newest ``KEEP_RUNS`` run directories (best-effort)."""
+    try:
+        dirs = sorted(
+            (p for p in RUNS.iterdir() if p.is_dir()),
+            key=lambda p: p.stat().st_mtime,
+            reverse=True,
+        )
+        for old in dirs[KEEP_RUNS:]:
+            shutil.rmtree(old, ignore_errors=True)
+    except FileNotFoundError:
+        pass
+
+
+app = FastAPI(title="pegRNA design", version="0.2.0")
+
+
+@app.get("/api/health")
+def health() -> dict[str, Any]:
+    """Deployment health + capability probe (for systemd, monitoring, and the
+    Tailscale-Funnel smoke test)."""
+    api_py = MODE_PYTHON["api"]
+    return {
+        "status": "ok",
+        "version": app.version,
+        "modes": SUPPORTED_MODES,
+        "default_mode": "fake",
+        "repo": str(REPO),
+        "repo_ok": (REPO / "pyproject.toml").exists(),
+        "runs_dir": str(RUNS),
+        "api_python": api_py,
+        "api_python_ok": Path(api_py).exists(),
+        "nvidia_key": bool(_nvidia_key()),
+        "access_token_required": bool(ACCESS_TOKEN),
+        "concurrency": {"limit": MAX_CONCURRENCY},
+    }
 
 
 class DesignRequest(BaseModel):
@@ -134,8 +237,12 @@ def motifs() -> JSONResponse:
     # Frame-safe T7 promoters (from insert_elements) as a pickable category.
     for name, el in PROMOTERS.items():
         groups.setdefault("amplification", []).append(
-            {"name": name, "aa": "", "dna": el.sequence,
-             "description": f"{el.direction} T7 promoter for linear RNA amplification"}
+            {
+                "name": name,
+                "aa": "",
+                "dna": el.sequence,
+                "description": f"{el.direction} T7 promoter for linear RNA amplification",
+            }
         )
     for cat in groups:
         groups[cat].sort(key=lambda x: x["name"].lower())
@@ -143,104 +250,144 @@ def motifs() -> JSONResponse:
 
 
 @app.post("/api/design")
-def design(req: DesignRequest) -> JSONResponse:
-    if req.mode not in SUPPORTED_MODES:
-        raise HTTPException(400, f"mode must be one of {SUPPORTED_MODES}")
+def design(req: DesignRequest, request: Request) -> JSONResponse:
+    _check_token(request)
+    _validate(req)
+    with _Slot():
+        run_id = time.strftime("%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex[:6]
+        run_dir = RUNS / run_id
+        run_dir.mkdir(parents=True, exist_ok=True)
+        cfg_path = run_dir / "config.json"
+        cfg_path.write_text(json.dumps(req.config, indent=2))
 
-    run_id = time.strftime("%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex[:6]
-    run_dir = RUNS / run_id
-    run_dir.mkdir(parents=True, exist_ok=True)
-    cfg_path = run_dir / "config.json"
-    cfg_path.write_text(json.dumps(req.config, indent=2))
+        cmd = _pegrna_cli(req.mode) + [
+            "design-recoded",
+            "--config",
+            str(cfg_path),
+            "--mode",
+            req.mode,
+            "--output-dir",
+            str(run_dir),
+        ]
+        docking_stub = req.mode == "api" and not _nvidia_key()
+        error = ""
+        returncode, stdout, stderr = -1, "", ""
+        try:
+            proc = subprocess.run(
+                cmd,
+                cwd=str(REPO),
+                capture_output=True,
+                text=True,
+                env=_run_env(req.mode),
+                timeout=RUN_TIMEOUT,
+            )
+            returncode, stdout, stderr = proc.returncode, proc.stdout, proc.stderr
+        except subprocess.TimeoutExpired:
+            error = f"pipeline timed out after {RUN_TIMEOUT}s"
+        except Exception as exc:  # noqa: BLE001 - surface as structured error, not a 500
+            error = f"pipeline failed to launch: {exc}"
 
-    cmd = _pegrna_cli(req.mode) + [
-        "design-recoded",
-        "--config",
-        str(cfg_path),
-        "--mode",
-        req.mode,
-        "--output-dir",
-        str(run_dir),
-    ]
-    proc = subprocess.run(
-        cmd,
-        cwd=str(REPO),
-        capture_output=True,
-        text=True,
-        env=_run_env(req.mode),
-        timeout=int(os.environ.get("PEGRNA_TIMEOUT", "1800")),
-    )
-    docking_stub = req.mode == "api" and not _nvidia_key()
+        report_path = run_dir / "recoded_tjpe_report.txt"
+        csv_path = run_dir / "recoded_tjpe_components.csv"
+        report = report_path.read_text() if report_path.exists() else ""
+        components = _parse_csv(csv_path.read_text()) if csv_path.exists() else []
+        gates_path = run_dir / "recoded_tjpe_gates.json"
+        gates = json.loads(gates_path.read_text()) if gates_path.exists() else {}
+        _cleanup_runs()
 
-    report_path = run_dir / "recoded_tjpe_report.txt"
-    csv_path = run_dir / "recoded_tjpe_components.csv"
-    report = report_path.read_text() if report_path.exists() else ""
-    components = _parse_csv(csv_path.read_text()) if csv_path.exists() else []
-    gates_path = run_dir / "recoded_tjpe_gates.json"
-    gates = json.loads(gates_path.read_text()) if gates_path.exists() else {}
-
-    ok = proc.returncode == 0 and bool(report)
-    return JSONResponse(
-        {
-            "ok": ok,
-            "run_id": run_id,
-            "mode": req.mode,
-            "returncode": proc.returncode,
-            "stdout": proc.stdout,
-            "stderr": proc.stderr,
-            "report": report,
-            "components": components,
-            "has_csv": csv_path.exists(),
-            "docking_stub": docking_stub,
-            "gates": gates,
-        }
-    )
+        return JSONResponse(
+            {
+                "ok": returncode == 0 and bool(report) and not error,
+                "run_id": run_id,
+                "mode": req.mode,
+                "returncode": returncode,
+                "stdout": stdout,
+                "stderr": stderr,
+                "error": error,
+                "report": report,
+                "components": components,
+                "has_csv": csv_path.exists(),
+                "docking_stub": docking_stub,
+                "gates": gates,
+            }
+        )
 
 
 @app.post("/api/design/stream")
-def design_stream(req: DesignRequest) -> StreamingResponse:
+def design_stream(req: DesignRequest, request: Request) -> StreamingResponse:
     """Run the pipeline and stream per-gate progress as NDJSON, then a final
     `{"type":"result", ...}` line. Progress lines are `{cand,gate,info,passed}`
     emitted by the CLI's --progress hook as each gate is evaluated."""
-    if req.mode not in SUPPORTED_MODES:
-        raise HTTPException(400, f"mode must be one of {SUPPORTED_MODES}")
+    _check_token(request)
+    _validate(req)
+    # Acquire a slot up front so an over-capacity request is rejected (429)
+    # before any work starts; the generator releases it in a finally.
+    if not _SLOTS.acquire(blocking=False):
+        raise HTTPException(429, f"server busy (max {MAX_CONCURRENCY} concurrent designs)")
     run_id = time.strftime("%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex[:6]
     run_dir = RUNS / run_id
     run_dir.mkdir(parents=True, exist_ok=True)
     (run_dir / "config.json").write_text(json.dumps(req.config, indent=2))
     cmd = _pegrna_cli(req.mode) + [
-        "design-recoded", "--config", str(run_dir / "config.json"),
-        "--mode", req.mode, "--output-dir", str(run_dir), "--progress",
+        "design-recoded",
+        "--config",
+        str(run_dir / "config.json"),
+        "--mode",
+        req.mode,
+        "--output-dir",
+        str(run_dir),
+        "--progress",
     ]
     docking_stub = req.mode == "api" and not _nvidia_key()
 
     def gen():
-        # stderr merged into stdout so a full pipe never deadlocks; non-@@P lines
-        # (incl. the fail-loud NoValidPegRNA diagnostic) are collected as the log.
-        proc = subprocess.Popen(
-            cmd, cwd=str(REPO), env=_run_env(req.mode),
-            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1,
-        )
+        error = ""
+        returncode = -1
         log: list[str] = []
-        for line in proc.stdout:  # type: ignore[union-attr]
-            line = line.rstrip("\n")
-            if line.startswith("@@P "):
-                yield line[4:] + "\n"
-            elif line:
-                log.append(line)
-        proc.wait()
+        try:
+            # stderr merged into stdout so a full pipe never deadlocks; non-@@P lines
+            # (incl. the fail-loud NoValidPegRNA diagnostic) are collected as the log.
+            proc = subprocess.Popen(
+                cmd,
+                cwd=str(REPO),
+                env=_run_env(req.mode),
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                bufsize=1,
+            )
+            for line in proc.stdout:  # type: ignore[union-attr]
+                line = line.rstrip("\n")
+                if line.startswith("@@P "):
+                    yield line[4:] + "\n"
+                elif line:
+                    log.append(line)
+            proc.wait()
+            returncode = proc.returncode
+        except Exception as exc:  # noqa: BLE001 - surface as a result line, not a broken stream
+            error = f"pipeline failed to launch: {exc}"
+        finally:
+            _SLOTS.release()
         report_path = run_dir / "recoded_tjpe_report.txt"
         csv_path = run_dir / "recoded_tjpe_components.csv"
         gates_path = run_dir / "recoded_tjpe_gates.json"
         report = report_path.read_text() if report_path.exists() else ""
         components = _parse_csv(csv_path.read_text()) if csv_path.exists() else []
         gates = json.loads(gates_path.read_text()) if gates_path.exists() else {}
+        _cleanup_runs()
         final = {
             "type": "result",
-            "ok": proc.returncode == 0 and bool(report),
-            "run_id": run_id, "mode": req.mode, "returncode": proc.returncode,
-            "stderr": "\n".join(log[-60:]), "report": report, "components": components,
-            "has_csv": csv_path.exists(), "docking_stub": docking_stub, "gates": gates,
+            "ok": returncode == 0 and bool(report) and not error,
+            "run_id": run_id,
+            "mode": req.mode,
+            "returncode": returncode,
+            "error": error,
+            "stderr": "\n".join(log[-60:]),
+            "report": report,
+            "components": components,
+            "has_csv": csv_path.exists(),
+            "docking_stub": docking_stub,
+            "gates": gates,
         }
         yield json.dumps(final) + "\n"
 
