@@ -113,6 +113,44 @@
   .cargolist .cc button { padding:2px 7px; font-size:12px; margin-left:3px; }
   #cargo { white-space:pre-wrap; word-break:break-all; }
   .warn { color:#9a6a00; }
+  /* --- accessibility + responsive polish --- */
+  .sr-only { position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden;
+    clip:rect(0,0,0,0); white-space:nowrap; border:0; }
+  :focus-visible { outline:2px solid #1b4b7a; outline-offset:1px; }
+  input.invalid, textarea.invalid, select.invalid { border-color:var(--err); box-shadow:0 0 0 2px rgba(208,59,59,.18); }
+  .fielderr { color:var(--err); font-size:11.5px; margin-top:3px; }
+  .status-banner { padding:8px 12px; border-radius:3px; font-size:12.5px; margin-bottom:10px; }
+  .status-banner.busy { background:#fff4e0; border:1px solid #e8c77f; color:#7a5600; }
+  .status-banner.auth { background:#fbe4e4; border:1px solid #eec2c2; color:#b52a2a; }
+  /* health chip in the header */
+  .health { margin-top:6px; font-size:12px; color:#dce8f3; display:flex; gap:14px; flex-wrap:wrap; align-items:center; }
+  .health .chip { display:inline-flex; align-items:center; gap:5px; background:rgba(255,255,255,.12);
+    border:1px solid rgba(255,255,255,.25); border-radius:10px; padding:1px 9px; }
+  .health .dot { width:8px; height:8px; border-radius:50%; background:#9fb0c0; }
+  .health .dot.ok { background:#7fe07f; } .health .dot.warn { background:#ffcf6b; } .health .dot.err { background:#ff8a8a; }
+  a.copybtn { cursor:pointer; }
+  /* Tablet: collapse the 3-up rows to 2-up. */
+  @media (max-width:760px){
+    .row3 { grid-template-columns:1fr 1fr; }
+  }
+  /* Phone: single column everywhere, tighter chrome, larger touch targets. */
+  @media (max-width:560px){
+    header { padding:11px 15px; }
+    header h1 { font-size:17px; }
+    .wrap { padding:12px 14px; gap:12px; }
+    .full { margin:0 14px 16px; }
+    .row, .row3 { grid-template-columns:1fr; }
+    input, select, textarea { font-size:16px; padding:8px 10px; }  /* 16px stops iOS zoom */
+    button, button.primary { width:100%; }
+    .actions { flex-direction:column; align-items:stretch; }
+    .actions .spinner { text-align:center; }
+  }
+  /* Respect reduced-motion: kill the pulse/spin animations. */
+  @media (prefers-reduced-motion:reduce){
+    .fnode.run { animation:none; }
+    .runsp { animation:none; }
+    * { scroll-behavior:auto; }
+  }
 </style>
 </head>
 <body>
@@ -121,6 +159,7 @@
   <p>Finds pegRNAs for C-terminal tagging (recoded TJ-PE, <code>neurogenomics/prime-editing</code>).
   Fill in the template and cargo, choose parameters, and click <strong>Design pegRNA</strong>.
   <strong>fake</strong> = design logic with stand-in scorers; <strong>api</strong> = real gates (CPU + hosted-model APIs).</p>
+  <div class="health" id="health" aria-live="polite" aria-label="service status"></div>
 </header>
 
 <div class="wrap">
@@ -190,7 +229,7 @@
   <!-- PIPELINE (right column) -->
   <div class="card">
     <h2>Processing pipeline</h2>
-    <div class="fmode" id="fmode">The recoded TJ-PE design flow. Run a design to light up which stage each candidate reaches.</div>
+    <div class="fmode" id="fmode" role="status" aria-live="polite">The recoded TJ-PE design flow. Run a design to light up which stage each candidate reaches.</div>
     <div class="flow" id="flow"></div>
     <div class="flegend">
       <span>✓ <b>passed</b></span>
@@ -203,7 +242,7 @@
 <!-- RESULTS (full width, bottom) -->
 <div class="card full">
   <h2>Result</h2>
-  <div class="body" id="result">
+  <div class="body" id="result" role="region" aria-live="polite" aria-label="Design result">
     <p class="hint">Load the example or fill the form, then <em>Run design</em>. Output appears here.</p>
   </div>
 </div>
@@ -343,6 +382,61 @@ async function loadRealExample(){
 
 function esc(s){ return (s||"").replace(/[&<>]/g, c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c])); }
 
+// ---- accessibility: associate each <label> with its control ----
+function linkLabels(){
+  document.querySelectorAll("label").forEach(l=>{
+    if(l.htmlFor) return;
+    const c = l.parentElement && l.parentElement.querySelector("input,select,textarea");
+    if(c){ if(!c.id) c.id = "f_"+Math.random().toString(36).slice(2,8); l.htmlFor = c.id; }
+  });
+}
+
+// ---- header health chip (wired to /api/health) ----
+async function initHealth(){
+  try{
+    const j = await (await fetch("/api/health")).json();
+    const chip=(t,cls)=>`<span class="chip"><span class="dot ${cls}"></span>${esc(t)}</span>`;
+    const parts = [
+      chip("service: "+j.status, "ok"),
+      j.api_python_ok ? chip("api env: ready","ok") : chip("api env: not installed","warn"),
+      j.nvidia_key ? chip("docking: live Boltz-2","ok") : chip("docking: stand-in (no key)","warn"),
+    ];
+    if(j.access_token_required) parts.push(chip("access token required","warn"));
+    const el=document.getElementById("health"); if(el) el.innerHTML = parts.join("");
+  }catch(e){ /* health is best-effort; never block the UI */ }
+}
+
+// ---- client-side validation (mirrors the server guards, with inline errors) ----
+function validateInputs(cfg){
+  document.querySelectorAll(".invalid").forEach(e=>e.classList.remove("invalid"));
+  document.querySelectorAll(".fielderr").forEach(e=>e.remove());
+  const errs=[];
+  const g = cfg.genome || "";
+  if(!g) errs.push(["genome","Genome context is required."]);
+  if(cfg.spacer && cfg.spacer.length && cfg.spacer.length!==20)
+    errs.push(["spacer",`Spacer is usually 20 nt (got ${cfg.spacer.length}).`]);
+  if(cfg.site_s!=null && g && (cfg.site_s<0 || cfg.site_s>g.length))
+    errs.push(["site_s",`Site S must be within the genome window (0–${g.length}).`]);
+  errs.forEach(([id,msg])=>{ const el=document.getElementById(id); if(!el) return;
+    el.classList.add("invalid");
+    const d=document.createElement("div"); d.className="fielderr"; d.textContent=msg; el.after(d);
+  });
+  return errs.length===0;
+}
+
+function statusMessage(code){
+  return ({
+    429:"Server busy — too many designs are running right now. Please try again in a moment.",
+    401:"Access token required or invalid.",
+    413:"Config is too large.",
+    400:"Invalid input — check the genome window and parameters.",
+  })[code] || ("Request failed (HTTP "+code+").");
+}
+function showBanner(cls, msg){
+  document.getElementById("result").innerHTML =
+    `<div class="status-banner ${cls}">${esc(msg)}</div>`;
+}
+
 function renderResult(j){
   const badge = j.ok ? '<span class="badge ok">success</span>' : '<span class="badge err">failed</span>';
   let html = `<div>${badge} &nbsp;<span class="hint">run ${esc(j.run_id)} · mode ${esc(j.mode)} · exit ${j.returncode}</span></div>`;
@@ -350,7 +444,8 @@ function renderResult(j){
   if(!j.ok && j.mode==="api") html += `<div class="hint" style="margin-top:6px">Note: in <b>api</b> mode a "no candidate survived" result is a real gate verdict (e.g. the AlphaFold structural-importance gate rejecting a buried site), not a crash.</div>`;
   if(j.has_csv){
     html += `<div style="margin:10px 0"><a class="dl" href="/api/runs/${j.run_id}/recoded_tjpe_report.txt">⬇ report.txt</a>`
-          + `<a class="dl" href="/api/runs/${j.run_id}/recoded_tjpe_components.csv">⬇ components.csv</a></div>`;
+          + `<a class="dl" href="/api/runs/${j.run_id}/recoded_tjpe_components.csv">⬇ components.csv</a>`
+          + `<a class="dl copybtn" role="button" tabindex="0" onclick="copyReport(this)">⧉ copy report</a></div>`;
   }
   if(j.report) html += `<pre>${esc(j.report)}</pre>`;
   if(j.components && j.components.length){
@@ -486,13 +581,19 @@ async function runDesign(){
   const btn=document.getElementById("runbtn"), spin=document.getElementById("spin");
   let cfg;
   try { cfg = buildConfig(); } catch(e){ alert(e.message); return; }
+  validateInputs(cfg);  // inline hints only — the server enforces the hard limits
   btn.disabled=true; spin.classList.add("on");
   document.getElementById("result").innerHTML='<p class="hint">Running the pipeline… live per-step scores are shown in the Processing pipeline panel.</p>';
   resetPipelineRunning();
   try {
     const r = await fetch("/api/design/stream", {method:"POST", headers:{"Content-Type":"application/json"},
       body: JSON.stringify({config:cfg, mode:document.getElementById("mode").value})});
-    if(!r.ok || !r.body){ const t=await r.text(); throw new Error("stream failed: "+t.slice(0,200)); }
+    if(!r.ok){
+      let detail=""; try{ detail=(await r.json()).detail||""; }catch(_){ try{ detail=await r.text(); }catch(__){} }
+      showBanner(r.status===401?"auth":"busy", statusMessage(r.status)+(detail?" "+String(detail).slice(0,200):""));
+      return;
+    }
+    if(!r.body){ throw new Error("no response stream from the server"); }
     const reader=r.body.getReader(), dec=new TextDecoder(); let buf="", finalObj=null;
     while(true){
       const {done,value}=await reader.read(); if(done) break;
@@ -512,8 +613,18 @@ async function runDesign(){
   } finally { btn.disabled=false; spin.classList.remove("on"); }
 }
 
+function copyReport(el){
+  const pre = document.querySelector("#result pre");
+  if(!pre) return;
+  navigator.clipboard.writeText(pre.textContent||"").then(()=>{
+    const t = el.textContent; el.textContent = "✓ copied"; setTimeout(()=>{ el.textContent = t; }, 1500);
+  }).catch(()=>{});
+}
+
 initModes();
 renderPipeline();
+linkLabels();
+initHealth();
 loadMotifs().then(()=>{ cargoSel = ["mEGFP","P2A","PuroR"]; setCargoMode("builder"); });
 </script>
 </body>
