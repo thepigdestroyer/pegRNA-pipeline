@@ -69,16 +69,22 @@ curl -s http://127.0.0.1:8092/api/health            # local
 
 ## Config knobs (`~/.config/pegrna/pegrna.env`)
 
-`PEGRNA_REPO`, `PEGRNA_WEB_PYTHON`, `PEGRNA_API_PYTHON`, `PEGRNA_RUNS_DIR`,
-`PEGRNA_KEEP_RUNS`, `PEGRNA_PORT`, `NVIDIA_KEY_FILE`, `PEGRNA_MAX_CONCURRENCY`,
-`PEGRNA_TIMEOUT`, `PEGRNA_MAX_CONFIG_BYTES`, `PEGRNA_MAX_GENOME_LEN`,
-`PEGRNA_ACCESS_TOKEN`. See `pegrna.env` for defaults.
+`PEGRNA_REPO`, `PEGRNA_WEB_PYTHON`, `PEGRNA_API_PYTHON`, `PRIDICT2_DIR`,
+`PRIDICT2_PYTHON`, `PRIDICT2_CORES`, `PEGRNA_RUNS_DIR`, `PEGRNA_KEEP_RUNS`,
+`PEGRNA_PORT`, `NVIDIA_KEY_FILE`, `PEGRNA_MAX_CONCURRENCY`, `PEGRNA_TIMEOUT`,
+`PEGRNA_MAX_CONFIG_BYTES`, `PEGRNA_MAX_GENOME_LEN`, `PEGRNA_ACCESS_TOKEN`.
+See `pegrna.env` for defaults.
 
 ## Why this shape
 
 - **CPU/API only** — `api` mode needs no GPU: SpliceAI (TF-CPU), MaxEntScan (vendored),
   ViennaRNA (CPU), AlphaFold-DB (API), Boltz-2 (NVIDIA NIM API). `setup_envs.sh` installs
-  exactly this stack (no torch/boltz).
+  exactly this stack in `pegrna-real` (no torch/boltz there).
+- **Auto-spacer (PRIDICT2)** — `setup_envs.sh` also clones PRIDICT2 and builds a separate
+  `pridict2` env (python 3.10, CPU `torch==2.0.1`) used for `api`-mode pegRNA design. Its
+  location is carried by `pegrna.env` (`PRIDICT2_DIR` / `PRIDICT2_PYTHON` / `PRIDICT2_CORES`),
+  which `web/app.py` injects into the `api` subprocess. Torch lives only in this env, so
+  `pegrna-real` stays torch-free.
 - **No open ports** — uvicorn binds `127.0.0.1`; Funnel tunnels outbound. Nothing to
   firewall on the shared box.
 - **Bounded** — concurrency cap + payload/genome caps + run retention keep a public

@@ -175,13 +175,20 @@ def _pegrna_cli(mode: str) -> list[str]:
 
 
 def _run_env(mode: str) -> dict[str, str]:
-    """Environment for the pipeline subprocess (TF quiet + NVIDIA key for api)."""
+    """Environment for the pipeline subprocess (TF quiet + NVIDIA key and the
+    PRIDICT2 location for api)."""
     env = dict(os.environ)
     env["TF_CPP_MIN_LOG_LEVEL"] = "3"  # silence TensorFlow banner spam
     if mode == "api":
         key = _nvidia_key()
         if key:
             env["NVIDIA_API_KEY"] = key
+        # PRIDICT2 auto-spacer design (local CPU). Pass the designer's location
+        # through to the pipeline when configured (mirrors NVIDIA_API_KEY above).
+        for var in ("PRIDICT2_DIR", "PRIDICT2_PYTHON", "PRIDICT2_CORES"):
+            val = os.environ.get(var)
+            if val:
+                env[var] = val
     return env
 
 
