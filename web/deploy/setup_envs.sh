@@ -63,8 +63,9 @@ if [ ! -x "$REAL_ENV/bin/python" ]; then
 fi
 log "pegrna-real: install CLI + api model stack (CPU) + web layer"
 run "$REAL_ENV" python -m pip install -q --upgrade pip
-# TensorFlow-CPU first so spliceai doesn't drag in the CUDA build.
-run "$REAL_ENV" python -m pip install -q "tensorflow-cpu"
+# TensorFlow-CPU first so spliceai doesn't drag in the CUDA build. setuptools<81
+# restores pkg_resources (removed in setuptools>=81), which spliceai imports.
+run "$REAL_ENV" python -m pip install -q "tensorflow-cpu" "setuptools<81"
 # CLI + the api-relevant extras: splice (SpliceAI), importance (biotite),
 # scarless (ViennaRNA python bindings), recode (dnachisel). NOT complex/fullstructure.
 run "$REAL_ENV" python -m pip install -q -e "$PEGRNA_REPO[splice,importance,scarless,recode]"
