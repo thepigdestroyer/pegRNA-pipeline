@@ -156,9 +156,15 @@
 <body>
 <header>
   <h1>pegRNA-BLAST <small>· prime-editing C-terminal knock-in designer</small></h1>
-  <p>Finds pegRNAs for C-terminal tagging (recoded TJ-PE, <code>neurogenomics/prime-editing</code>).
-  Fill in the template and cargo, choose parameters, and click <strong>Design pegRNA</strong>.
-  <strong>fake</strong> = design logic with stand-in scorers; <strong>api</strong> = real gates (CPU + hosted-model APIs).</p>
+  <p>Designs pegRNAs for C-terminal tagging (recoded TJ-PE, <code>neurogenomics/prime-editing</code>).
+  You supply the <strong>target</strong> (genome window + insert site) and the <strong>cargo</strong>;
+  the pipeline designs the guides — <strong>PRIDICT2</strong> designs the pegRNA spacer (and the
+  ngRNA, PBS and RTT) on CPU, then a gate cascade (off-target · cryptic-splice · splice · structural
+  importance · 2D structure · docking) filters the candidates. Fill in the template and cargo and click
+  <strong>Design pegRNA</strong> — you do not type the guide (a spacer override lives under
+  <em>Advanced overrides</em> for the rare case you need one).
+  <strong>fake</strong> = design logic with stand-in scorers (and a fake PRIDICT runner);
+  <strong>api</strong> = real gates (CPU + hosted-model APIs; docking via NVIDIA Boltz-2).</p>
   <div class="health" id="health" aria-live="polite" aria-label="service status"></div>
 </header>
 
@@ -173,9 +179,9 @@
         <div><label>Transcript</label><input id="transcript" placeholder="ENST..."></div>
         <div><label>UniProt acc</label><input id="uniprot_acc" placeholder="P49711"></div>
       </div>
-      <div class="row">
-        <div><label>Spacer (20 nt)</label><input id="spacer"></div>
-        <div><label>RTT anchor aa (rtt_aa)</label><input id="rtt_aa" placeholder="L"></div>
+      <div>
+        <label for="rtt_aa">RTT anchor aa (rtt_aa)</label>
+        <input id="rtt_aa" placeholder="L">
       </div>
       <div class="subhead">Cargo (insert)</div>
       <label>Add a motif — cargo is assembled 5′→3′ from the parts below</label>
@@ -206,6 +212,26 @@
       </div>
 
       <div class="hint" id="maskhint"></div>
+
+      <details>
+        <summary>Advanced overrides (optional)</summary>
+        <label for="spacer">Spacer override (optional — leave blank and PRIDICT designs it)</label>
+        <input id="spacer" placeholder="leave blank → PRIDICT2 designs the spacer">
+        <div class="hint">The pipeline designs the pegRNA spacer (plus ngRNA / PBS / RTT) with PRIDICT2.
+          Fill this only to force a specific 20-nt spacer and skip auto-design.</div>
+      </details>
+
+      <details>
+        <summary>Heterozygous / allele-specific (optional)</summary>
+        <label for="het_snps">het_snps — JSON array of heterozygous SNPs</label>
+        <textarea id="het_snps" rows="3" placeholder='[{"pos": 1005, "ref": "A", "alt": "G", "phase": 1}]'></textarea>
+        <label for="het_edit" style="display:flex; align-items:center; gap:8px; margin-top:10px; font-weight:600;">
+          <input type="checkbox" id="het_edit" style="width:auto;"> design het-specific pair
+        </label>
+        <div class="hint">Optional. Provide phased heterozygous SNPs to enable allele-specific design.
+          Allele specificity is capped by natural heterozygosity — it is never manufactured.
+          The het-specific <em>pair</em> pass is wired in a later stage.</div>
+      </details>
 
       <details>
         <summary>Advanced — full config JSON (authoritative on submit if edited)</summary>
@@ -248,7 +274,10 @@
 </div>
 
 <script>
-const FIELDS = ["gene","transcript","uniprot_acc","spacer","rtt_aa","cargo","genome",
+// NB: `spacer` is intentionally NOT in FIELDS — it is an OPTIONAL override handled
+// explicitly (PRIDICT2 designs the spacer when it is left blank). The het-edit
+// inputs (het_snps / het_edit) are likewise handled explicitly in buildConfig/setFields.
+const FIELDS = ["gene","transcript","uniprot_acc","rtt_aa","cargo","genome",
   "site_s","pegrna_strand","arm_side","max_run"];
 let baseConfig = {};   // last-loaded full config, preserves unknown keys
 
@@ -268,6 +297,11 @@ function setFields(cfg){
   document.getElementById("pbs_lengths").value = (cfg.pbs_lengths||[]).join(",");
   document.getElementById("ngrna_distance_min").value = cfg.ngrna_distance_min ?? "";
   document.getElementById("ngrna_distance_max").value = cfg.ngrna_distance_max ?? "";
+  // Optional override / het-edit inputs (handled outside FIELDS). A loaded example
+  // may or may not carry a spacer; reflect it in the override box (blank when absent).
+  document.getElementById("spacer").value = cfg.spacer || "";
+  document.getElementById("het_snps").value = cfg.het_snps ? JSON.stringify(cfg.het_snps) : "";
+  document.getElementById("het_edit").checked = !!cfg.het_edit;
   document.getElementById("rawjson").value = JSON.stringify(cfg, null, 2);
   // A loaded config carries raw cargo DNA (not motif names), so show raw cargo.
   if(cfg.cargo) setCargoMode("raw");
@@ -288,6 +322,21 @@ function buildConfig(){
   const dmax = document.getElementById("ngrna_distance_max").value;
   if(dmin!=="") cfg.ngrna_distance_min = Number(dmin);
   if(dmax!=="") cfg.ngrna_distance_max = Number(dmax);
+  // Spacer is OPTIONAL: PRIDICT2 designs it unless the user types an override. A blank
+  // field must REMOVE any spacer carried over from a loaded example (baseConfig).
+  const spc = (document.getElementById("spacer").value||"").trim();
+  if(spc) cfg.spacer = spc; else delete cfg.spacer;
+  // Heterozygous / allele-specific (optional). het_snps flows to design_recoded;
+  // het_edit is a request flag (recorded now; pair-design wiring is a later stage).
+  const hetRaw = (document.getElementById("het_snps").value||"").trim();
+  if(hetRaw){
+    let parsed;
+    try { parsed = JSON.parse(hetRaw); }
+    catch(e){ throw new Error("het_snps must be a JSON array — "+e.message); }
+    if(!Array.isArray(parsed)) throw new Error('het_snps must be a JSON array, e.g. [{"pos":..,"ref":..,"alt":..,"phase":..}]');
+    cfg.het_snps = parsed;
+  } else { delete cfg.het_snps; }
+  if(document.getElementById("het_edit").checked) cfg.het_edit = true; else delete cfg.het_edit;
   {
     const s = Number(document.getElementById("site_s").value||0);
     const glen = (document.getElementById("genome").value||"").length;
@@ -469,7 +518,7 @@ function renderResult(j){
 
 // ---- processing pipeline flowchart ----
 const PIPELINE = [
-  {id:'input',      title:'Design input',       engine:'config',              gate:false},
+  {id:'input',      title:'Design + auto-spacer',engine:'PRIDICT2 · CPU',       gate:false},
   {id:'offtarget',  title:'Nick + off-target',  engine:'cas-offinder · CPU',  gate:true, kw:['off-target','offtarget']},
   {id:'enum',       title:'Enumerate cands',    engine:'codon pool',          gate:false},
   {id:'recode',     title:'Recode arm',         engine:'synonymous recode',   gate:false},

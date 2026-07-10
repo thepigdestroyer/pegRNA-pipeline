@@ -389,10 +389,13 @@ def setup_cmd() -> None:
 def design_recoded_cmd(config_path: str, mode: str, output_dir: str, progress: bool) -> None:
     """Run the recoded TJ-PE design pipeline from a JSON config.
 
-    The config supplies the design inputs (spacer, rtt_aa, cargo, genome,
-    site_s, cds_mask, pegrna_strand, pbs_lengths, het_snps, manifest, ...).
-    ``--mode fake`` runs the full design logic with stand-in scorers (dry-run /
-    smoke); ``--mode real`` uses the real models (CX3, GPU, staged weights).
+    The config supplies the design inputs (rtt_aa, cargo, genome, site_s,
+    cds_mask, pegrna_strand, pbs_lengths, het_snps, manifest, ...). The
+    ``spacer`` key is OPTIONAL: omit it and PRIDICT2 designs the pegRNA#1
+    spacer from the insert location (``site_s``); supply ``spacer`` only to
+    override with a fixed guide. ``--mode fake`` runs the full design logic
+    with stand-in scorers (dry-run / smoke); ``--mode real`` uses the real
+    models (CX3, GPU, staged weights).
     """
     import inspect
     import json

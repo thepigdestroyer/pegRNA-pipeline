@@ -70,7 +70,7 @@ design inputs; `_`-prefixed keys and provenance keys (`gene`, `transcript`,
 
 ```json
 {
-  "spacer": "….20nt fixed by site S….",
+  "spacer": "….20nt — OPTIONAL; omit to let PRIDICT2 auto-design from site_s….",
   "rtt_aa": "MKP…",
   "cargo": "<assemble via insert_elements.assemble_insert, may include T7/T7_rev>",
   "genome": "<T2T-KOLF locus window, sense 5'->3'>",
@@ -85,6 +85,9 @@ design inputs; `_`-prefixed keys and provenance keys (`gene`, `transcript`,
   "manifest": {"genome_build": "T2T-KOLF2.1Jv1.1", "git_commit": "…"}
 }
 ```
+
+`spacer` is **optional**: omit it and PRIDICT2 auto-designs the pegRNA#1 spacer
+from `site_s`; include it only to override with a fixed guide.
 
 `cargo` with a T7 promoter, e.g. `FLAG-GGGGS-T7-P2A-ZeoR` (forward T7 transcribes
 `P2A-ZeoR`) or `…-T7_rev-…` (transcribes `GGGGS-FLAG` upstream) — build with

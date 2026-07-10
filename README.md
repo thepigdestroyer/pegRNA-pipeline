@@ -157,10 +157,14 @@ qsub -v PEGRNA_DATA=$PEGRNA_DATA,CONFIG=examples/ctcf_cterm/config.json \
 pegrna design-recoded --config examples/ctcf_cterm/config.json --mode fake --output-dir results/dry
 ```
 
-The config is a JSON of the design inputs (`spacer`, `rtt_aa`, `cargo`, `genome`,
+The config is a JSON of the design inputs (`rtt_aa`, `cargo`, `genome`,
 `site_s`, `cds_mask`, `arm_side`, ...); keys starting with `_` or provenance keys
-(`gene`, `transcript`, `uniprot_acc`) are routed into the report manifest. See
-`examples/ctcf_cterm/config.json` for a complete, runnable CTCF C-terminal knock-in.
+(`gene`, `transcript`, `uniprot_acc`) are routed into the report manifest. The
+`spacer` is **optional** — omit it and PRIDICT2 auto-designs the pegRNA#1 spacer
+from `site_s`; include `spacer` only to pin a fixed guide. See
+`examples/ctcf_cterm/config.json` for a complete, runnable CTCF C-terminal knock-in
+(explicit spacer) and `examples/ctcf_cterm/config_autospacer.json` for the same
+design with the spacer auto-designed.
 
 ### How it runs (no AI agent required)
 
