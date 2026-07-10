@@ -12,9 +12,11 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional, Sequence, Tuple, Union
+from typing import Any, Optional, Sequence, Tuple, Union
 
 from pegrna_pipeline.hpc.allele_specificity import find_allele_specific
+from pegrna_pipeline.hpc.data_types import DEFAULT_SCORE_CELL_LINE, _score_attr
+from pegrna_pipeline.hpc.input_formatter import format_tjpe_insertion_editseq
 from pegrna_pipeline.hpc.recoded_tjpe_workflow import (
     NoValidPegRNA,
     RecodedTJPEResult,
@@ -91,9 +93,62 @@ def _real_scorer_kwargs(
     }
 
 
+def _select_top_pegrna(pegrnas: Sequence[Any]) -> Any:
+    """Pick the top pegRNA by PRIDICT PE2 (default cell line), else the first.
+
+    Mirrors the ranking policy used elsewhere (:data:`DEFAULT_SCORE_CELL_LINE` +
+    :func:`_score_attr`, i.e. ``pe2_k562``). If a design lacks that score attribute
+    the first pegRNA (PRIDICT's own top-ranked row) is used.
+    """
+    attr = _score_attr(DEFAULT_SCORE_CELL_LINE)
+    try:
+        return max(pegrnas, key=lambda d: float(getattr(d, attr)))
+    except (AttributeError, TypeError, ValueError):
+        return pegrnas[0]
+
+
+def _auto_design_spacer(
+    *,
+    genome: str,
+    site_s: int,
+    cargo: str,
+    auto_spacer: bool,
+    min_flank: int,
+    runner: Any,
+) -> str:
+    """Design the pegRNA#1 spacer at the insert site via the injected PRIDICT2 runner.
+
+    Builds the ``(+cargo)`` insertion editseq at ``site_s``, runs one PRIDICT batch,
+    and returns the top pegRNA's spacer. Fail-loud (never guesses a spacer): raises if
+    auto-design is disabled, no runner is available, or PRIDICT yields no pegRNA. The
+    runner is injected (fake in CI, local subprocess in real/api), so this never
+    imports or launches real PRIDICT2 itself.
+    """
+    if not auto_spacer:
+        raise ValueError(
+            "no spacer supplied and auto_spacer=False: pass spacer= or set auto_spacer=True"
+        )
+    if runner is None:
+        raise RuntimeError(
+            "auto_spacer requested but no PRIDICT runner is available: use mode='fake', "
+            "configure PRIDICT2_DIR/PRIDICT2_PYTHON for mode 'real'/'api', or pass "
+            "pridict_runner="
+        )
+    editseq = format_tjpe_insertion_editseq(genome, site_s, cargo, min_flank=min_flank)
+    batch = runner.run_batch([{"sequence_name": "peg1", "editseq": editseq}])
+    entry = batch.get("peg1") or {}
+    pegrnas = entry.get("pegrnas") or []
+    if not pegrnas:
+        raise RuntimeError(
+            f"PRIDICT returned no pegRNA for the auto-spacer pegRNA#1 editseq at "
+            f"site_s={site_s}; cannot auto-design a spacer"
+        )
+    return _select_top_pegrna(pegrnas).spacer
+
+
 def design_recoded(
     *,
-    spacer: str,
+    spacer: Optional[str] = None,
     rtt_aa: str,
     cargo: str,
     genome: str,
@@ -109,6 +164,9 @@ def design_recoded(
     allele_hunt: bool = False,
     het_snps: Optional[Sequence[dict]] = None,
     mode: str = "fake",
+    auto_spacer: bool = True,
+    pridict_min_flank: int = 40,
+    pridict_runner: Optional[Any] = None,
     output_dir: Optional[Union[str, Path]] = None,
     manifest: Optional[dict] = None,
     uniprot_acc: str = "",
@@ -123,6 +181,16 @@ def design_recoded(
     progress_cb=None,
 ) -> RecodedDesignOutput:
     """Run the recoded TJ-PE design end-to-end and (optionally) write a report.
+
+    The pegRNA ``spacer`` is optional. When omitted and ``auto_spacer`` is ``True``
+    (the default), PRIDICT2 designs pegRNA#1 at the insert site and the pipeline
+    adopts its spacer (``pridict_min_flank`` sets the required flank each side of the
+    editseq); the ngRNA-nick enumeration, recode arm, and gate cascade are unchanged.
+    Passing an explicit ``spacer`` keeps the historical fixed-spacer path and never
+    invokes PRIDICT. The runner is injected — an explicit ``pridict_runner`` wins,
+    else the scorer bundle's (``PridictRunnerFake`` in fake mode, a local-subprocess
+    ``PridictLocalRunner`` in real/api). Auto-spacer fails loud if no runner is
+    available or PRIDICT returns no pegRNA.
 
     Returns the :class:`RecodedTJPEResult`, the rendered report text, and the
     path it was written to (or ``None`` if ``output_dir`` was not supplied).
@@ -154,6 +222,21 @@ def design_recoded(
         else {}
     )
     scorers = make_scorers(mode=mode, **scorer_kwargs)
+
+    # Auto-spacer (wiring spec 2026-07-10): with no explicit spacer, PRIDICT2 designs
+    # pegRNA#1 at the insert site and the pipeline adopts its spacer. An explicit
+    # spacer keeps the historical fixed-spacer path unchanged (it never touches the
+    # runner). The runner is injected — an explicit ``pridict_runner`` wins, else the
+    # scorer bundle's (PridictRunnerFake in fake mode) — so CI never runs real PRIDICT.
+    if spacer is None:
+        spacer = _auto_design_spacer(
+            genome=genome,
+            site_s=site_s,
+            cargo=cargo,
+            auto_spacer=auto_spacer,
+            min_flank=pridict_min_flank,
+            runner=pridict_runner if pridict_runner is not None else scorers.pridict_runner,
+        )
 
     result = run_recoded_tjpe(
         spacer=spacer,

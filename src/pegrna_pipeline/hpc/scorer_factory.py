@@ -31,12 +31,37 @@ class GateScorers:
     dock_scorer: Any
     offtarget_scorer: Callable[[List[str]], Dict[str, Tuple[float, int, bool]]]
     maxent_scorer: Any = None
+    #: PRIDICT2 runner used by the auto-spacer design path (wiring spec 2026-07-10).
+    #: ``PridictRunnerFake`` in fake mode; a local-subprocess ``PridictLocalRunner``
+    #: in real/api mode when configured, else ``None`` (auto-spacer then fails loud
+    #: only when requested — the fixed-spacer path never touches it).
+    pridict_runner: Any = None
+
+
+def _local_pridict_runner_or_none() -> Any:
+    """Build the local (subprocess) PRIDICT2 runner for the auto-spacer path, or
+    ``None`` when it is not configured.
+
+    ``PridictLocalRunner`` fails loud at construction if ``PRIDICT2_DIR`` /
+    ``PRIDICT2_PYTHON`` are unset. On a real/api box that only uses the fixed-spacer
+    path (no auto-design), that would be a spurious failure, so a missing config
+    degrades to ``None`` here; ``design_recoded`` still fails loud with an actionable
+    message if auto-spacer is actually requested without a runner. The import is
+    light (no torch/TF) and lives here so real-mode heavy-import errors surface first.
+    """
+    from pegrna_pipeline.hpc.pridict_local import PridictLocalRunner
+
+    try:
+        return PridictLocalRunner()
+    except ValueError:
+        return None
 
 
 def _fake_bundle() -> GateScorers:
     from pegrna_pipeline.hpc.complex_dock import DockFake
     from pegrna_pipeline.hpc.cryptic_splice import MaxEntScanFake
     from pegrna_pipeline.hpc.full_structure import FullStructureFake
+    from pegrna_pipeline.hpc.pridict_local import PridictRunnerFake
     from pegrna_pipeline.hpc.splice_screen import SpliceFake
     from pegrna_pipeline.hpc.structure_importance import ResidueMetrics
 
@@ -62,6 +87,7 @@ def _fake_bundle() -> GateScorers:
         dock_scorer=DockFake(apo_iptm=0.85, candidate_iptm=0.83),
         offtarget_scorer=_clean_offtarget,
         maxent_scorer=MaxEntScanFake(),  # all motifs below threshold -> gate passes
+        pridict_runner=PridictRunnerFake(),  # deterministic auto-spacer source for CI
     )
 
 
@@ -111,6 +137,8 @@ def _real_bundle(
         offtarget_scorer=offtarget,
         # MaxEntScan cryptic-splice gate (maxentpy staged in the [splice] extra).
         maxent_scorer=MaxEntScanScorer(),
+        # Local-subprocess PRIDICT2 for the auto-spacer path (None if unconfigured).
+        pridict_runner=_local_pridict_runner_or_none(),
     )
 
 
@@ -201,6 +229,8 @@ def _api_bundle(
         dock_scorer=dock,
         offtarget_scorer=offtarget,
         maxent_scorer=MaxEntScanScorer(),
+        # Local-subprocess PRIDICT2 for the auto-spacer path (None if unconfigured).
+        pridict_runner=_local_pridict_runner_or_none(),
     )
 
 
