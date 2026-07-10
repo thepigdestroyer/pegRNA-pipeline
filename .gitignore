@@ -17,6 +17,9 @@ results/
 
 # Web app per-run outputs (configs + reports written at request time).
 web/runs/
+# never commit the NVIDIA NIM key (it lives in ~/.config/pegrna/, not the repo)
+nvidia.key
+**/nvidia.key
 
 # AlphaFold-DB structures fetched/cached at runtime — not source.
 AF-*.cif

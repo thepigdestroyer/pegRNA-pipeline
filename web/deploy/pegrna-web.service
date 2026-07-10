@@ -1,0 +1,35 @@
+# systemd --user unit for the pegRNA web app (uvicorn on loopback).
+#
+# Install (as mj1824 on the DSI box, NO root needed):
+#   loginctl enable-linger "$USER"                 # survive logout
+#   mkdir -p ~/.config/systemd/user ~/.config/pegrna
+#   cp web/deploy/pegrna-web.service ~/.config/systemd/user/
+#   cp web/deploy/pegrna.env         ~/.config/pegrna/pegrna.env   # edit paths/port
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now pegrna-web
+#   systemctl --user status pegrna-web
+#
+# Binds to 127.0.0.1 ONLY. Public access is via Tailscale Funnel (web/deploy/funnel.sh),
+# so NO inbound port is opened on the host — per DSI's security guidance.
+
+[Unit]
+Description=pegRNA design web app (FastAPI/uvicorn, loopback)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# All deployment paths/knobs live in this env file (never secrets in the unit).
+EnvironmentFile=%h/.config/pegrna/pegrna.env
+WorkingDirectory=%h
+# ${PEGRNA_WEB_PYTHON} runs uvicorn from the light env; app.py picks the api
+# interpreter (${PEGRNA_API_PYTHON}) per-request for api-mode designs.
+ExecStart=/bin/sh -lc '"$PEGRNA_WEB_PYTHON" -m uvicorn app:app --app-dir "$PEGRNA_REPO/web" --host 127.0.0.1 --port "$PEGRNA_PORT"'
+Restart=on-failure
+RestartSec=3
+# Light hardening (userspace; compatible with --user units).
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=default.target

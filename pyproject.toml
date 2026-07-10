@@ -29,6 +29,11 @@ dev = [
     "pytest-mock>=3",
     "ruff>=0.5",
     "black>=24",
+    # Web layer (FastAPI TestClient) so tests/test_web_app.py runs in CI. These
+    # are light; the heavy api-mode model stack is NOT needed for the web tests
+    # (they mock the pipeline subprocess).
+    "fastapi>=0.110",
+    "httpx>=0.27",
 ]
 scarless = [
     "ViennaRNA>=2.6",
