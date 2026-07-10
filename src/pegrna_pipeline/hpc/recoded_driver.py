@@ -165,7 +165,10 @@ def design_recoded(
     het_snps: Optional[Sequence[dict]] = None,
     mode: str = "fake",
     auto_spacer: bool = True,
-    pridict_min_flank: int = 40,
+    # PRIDICT2 rejects an edit with < 100 bp flanking sequence on either side
+    # ("Insufficient flanking sequence" — verified on the DSI box 2026-07-10), so
+    # the auto-spacer editseq must carry >= 100 bp each side of the insert site.
+    pridict_min_flank: int = 100,
     pridict_runner: Optional[Any] = None,
     output_dir: Optional[Union[str, Path]] = None,
     manifest: Optional[dict] = None,
