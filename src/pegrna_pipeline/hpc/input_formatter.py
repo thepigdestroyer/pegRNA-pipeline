@@ -19,14 +19,14 @@ from pegrna_pipeline.hpc.data_types import GeneRecord
 _ACGT_ONLY = re.compile(r"^[ACGT]+$")
 
 # PRIDICT2 editseq bracket conventions (batch mode): a deletion is written
-# ``FLANK(-DELETEDSEQ)FLANK``, a substitution ``FLANK(REF/ALT)FLANK``. For an
-# INSERTION the reference is empty, so the convention used here is
-# ``FLANK(/INSERTEDSEQ)FLANK``.
+# ``FLANK(-DELETEDSEQ)FLANK``, a substitution ``FLANK(REF/ALT)FLANK``, and an
+# INSERTION ``FLANK(+INSERTEDSEQ)FLANK``.
 #
-# NOTE: this ``(/...)`` insertion-bracket syntax is TO BE CONFIRMED against a
-# live PRIDICT2 run. It is intentionally isolated in the two constants below so
-# a single edit corrects every editseq the pipeline emits.
-_INSERTION_OPEN = "(/"
+# CONFIRMED against a live PRIDICT2 run on the DSI box (2026-07-10): ``(+SEQ)``
+# produces a valid pegRNA; ``(/SEQ)`` errors ("string index out of range"). This
+# matches the legacy ``format_bracket_insertion`` marker. Isolated in the two
+# constants below so a single edit corrects every editseq the pipeline emits.
+_INSERTION_OPEN = "(+"
 _INSERTION_CLOSE = ")"
 
 
@@ -64,8 +64,8 @@ def format_tjpe_insertion_editseq(
 ) -> str:
     """Return a PRIDICT2 insertion editseq for a tj-PE insertion at ``site_s``.
 
-    The result is ``genome[:site_s] + "(/" + insert + ")" + genome[site_s:]``,
-    uppercased — i.e. the ``(/INSERT)`` insertion bracket spliced into the
+    The result is ``genome[:site_s] + "(+" + insert + ")" + genome[site_s:]``,
+    uppercased — i.e. the ``(+INSERT)`` insertion bracket spliced into the
     local genome window at ``site_s`` (a half-open index: the insert lands
     *between* ``genome[site_s - 1]`` and ``genome[site_s]``).
 

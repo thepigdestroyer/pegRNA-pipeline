@@ -46,8 +46,9 @@ PRIDICT2 is installed and confirmed running on `.141` CPU:
   the CSV into `input/`.
 - **Quirk 2**: `--output-dir` is relative to the repo dir and must **pre-exist** (PRIDICT does not
   `mkdir` it).
-- Input CSV: `sequence_name,editseq` (editseq bracket notation: insertion `(/INSERT)`, sub `(A/G)`,
-  del `(-SEQ)`, with adequate flanks each side).
+- Input CSV: `sequence_name,editseq` (editseq bracket notation: insertion `(+INSERT)`, sub `(REF/ALT)`,
+  del `(-SEQ)`, with adequate flanks each side). CONFIRMED on the box 2026-07-10: `(+SEQ)` works,
+  `(/SEQ)` errors.
 - Outputs per row: `<name>_pegRNA_Pridict_full.csv` (parsed by `pridict_parser.parse_pegrna_csv`:
   `Spacer-Sequence, PBSrevcomp, RTrevcomp, PBSlength, RTlength, Target-Strand, Editing_Position,
   PRIDICT2_0_editing_Score_deep_HEK, …`) and `<name>_nicking_guides.csv` (`Nicking-Protospacer,
@@ -68,7 +69,7 @@ the SSH/PBS `submit_pridict_batches`, which is CX3-only):
 
 ### 4.2 Editseq construction (`input_formatter`, extend)
 - `format_bracket_insertion` already exists (referenced by the CX3 adapter). Add/verify:
-  - pegRNA#1 editseq = insertion `(/INSERT)` at `site_s` in the genome window (adequate flanks;
+  - pegRNA#1 editseq = insertion `(+INSERT)` at `site_s` in the genome window (adequate flanks;
     PRIDICT wants ≥ ~100 bp each side — validate window length, fail loud if too short).
   - pegRNA#2 editseq = the *nick-defining* edit at each pipeline-chosen nick position (a silent/marker
     edit that makes PRIDICT design a guide nicking there). Exact encoding to verify during

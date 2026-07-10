@@ -77,38 +77,37 @@ def test_format_accepts_long_insertion():
 # --------------------------------------------------------------------------
 # format_tjpe_insertion_editseq: tj-PE insertion editseq from a genome window.
 #
-# Bracket convention for an INSERTION is ``FLANK(/INSERT)FLANK`` (reference
-# empty, per PRIDICT2 spec 2026-07-10 §4.2). This differs from
-# format_bracket_insertion's legacy ``(+INSERT)`` marker; the two must not be
-# confused. The ``(/...)`` insertion syntax is TO BE CONFIRMED against a live
-# PRIDICT2 run (see the module-level note in input_formatter.py).
+# Bracket convention for an INSERTION is ``FLANK(+INSERT)FLANK`` (reference
+# empty), CONFIRMED against a live PRIDICT2 run on the DSI box (2026-07-10):
+# ``(+SEQ)`` yields a valid pegRNA, ``(/SEQ)`` errors. This matches the legacy
+# format_bracket_insertion marker.
 # --------------------------------------------------------------------------
 
 
 def test_tjpe_insertion_places_bracket_at_site_s():
     genome = "A" * 10 + "C" * 10  # len 20
     out = format_tjpe_insertion_editseq(genome, 10, "GGG", min_flank=5)
-    assert out == "A" * 10 + "(/GGG)" + "C" * 10
+    assert out == "A" * 10 + "(+GGG)" + "C" * 10
 
 
-def test_tjpe_insertion_uses_slash_not_plus():
+def test_tjpe_insertion_uses_plus_bracket():
     genome = "A" * 10 + "C" * 10
     out = format_tjpe_insertion_editseq(genome, 10, "GGG", min_flank=5)
-    assert "(/GGG)" in out
-    assert "(+GGG)" not in out
+    assert "(+GGG)" in out
+    assert "(/GGG)" not in out
 
 
 def test_tjpe_insertion_site_s_at_start_of_right_flank():
     # site_s slices genome into [:site_s] and [site_s:] verbatim.
     genome = "ACGT" * 30  # len 120
     out = format_tjpe_insertion_editseq(genome, 60, "TT", min_flank=10)
-    assert out == genome[:60] + "(/TT)" + genome[60:]
+    assert out == genome[:60] + "(+TT)" + genome[60:]
 
 
 def test_tjpe_insertion_uppercases_genome_and_insert():
     genome = ("a" * 10) + ("c" * 10)
     out = format_tjpe_insertion_editseq(genome, 10, "ggg", min_flank=5)
-    assert out == "A" * 10 + "(/GGG)" + "C" * 10
+    assert out == "A" * 10 + "(+GGG)" + "C" * 10
 
 
 def test_tjpe_insertion_empty_insert_raises():
@@ -150,13 +149,13 @@ def test_tjpe_insertion_default_min_flank_is_100():
         format_tjpe_insertion_editseq(genome, 75, "GGG")
     # 300 bp with site_s=150 gives exactly 150 bp each side → OK.
     ok = format_tjpe_insertion_editseq("A" * 300, 150, "GGG")
-    assert ok == "A" * 150 + "(/GGG)" + "A" * 150
+    assert ok == "A" * 150 + "(+GGG)" + "A" * 150
 
 
 def test_tjpe_insertion_exact_min_flank_boundary_ok():
     genome = "A" * 10  # len 10
     out = format_tjpe_insertion_editseq(genome, 5, "T", min_flank=5)
-    assert out == "A" * 5 + "(/T)" + "A" * 5
+    assert out == "A" * 5 + "(+T)" + "A" * 5
 
 
 def test_tjpe_insertion_site_s_out_of_range_raises():
