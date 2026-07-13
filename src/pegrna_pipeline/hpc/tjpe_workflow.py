@@ -1,6 +1,17 @@
-"""Tethered-junction prime editing (TJ-PE) workflow.
+"""Tethered-junction prime editing (TJ-PE) workflow — shared primitives + legacy orchestrator.
 
-Entry point: :func:`run_tjpe_workflow`. See Plan 2 v1.1 for the pipeline
+.. note:: SINGLE CANONICAL DESIGN WORKFLOW (Stage H, ADR 0021).
+   :func:`pegrna_pipeline.hpc.recoded_tjpe_workflow.run_recoded_tjpe` is the ONE canonical
+   tj-PE design workflow used by the CLI + web app on the DSI box (auto-spacer via PRIDICT2,
+   the full gate cascade, the recode arm, and the het-edit pair). :func:`run_tjpe_workflow`
+   below is the LEGACY variant-ranking design orchestrator (the HPC ``driver``/PBS path); it
+   is retained for backward compatibility and for the shared primitives this module exports
+   (``STANDARD_SGRNA_SCAFFOLD``, ``TJPEResult``, :func:`rank_variants_by_pe2`,
+   :func:`select_tjpe_ngrna`, :func:`derive_rc_pbs2`, :func:`assemble_tj_pegrna_v2`). Both
+   paths assemble through :func:`assemble_tj_pegrna_v2` in the authoritative
+   ``Spacer.Scaffold.rcPBS2.RTT.PBS1.PolyU`` layout (ADR 0014/0020), so they cannot drift.
+
+Legacy entry point: :func:`run_tjpe_workflow`. See Plan 2 v1.1 for the pipeline
 contract. Tasks here:
 
 * :func:`rank_variants_by_pe2` — T6
@@ -14,6 +25,7 @@ contract. Tasks here:
 from __future__ import annotations
 
 import re
+import warnings as _warnings  # aliased: run_tjpe_workflow has a local `warnings` list
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List, Optional, Sequence, Union
@@ -413,7 +425,12 @@ def run_tjpe_workflow(
     score_cell_line: str = DEFAULT_SCORE_CELL_LINE,
     scarless: bool = False,
 ) -> TJPEResult:
-    """Run the TJ-PE workflow end-to-end for one gene + insertion.
+    """Run the LEGACY TJ-PE design workflow end-to-end for one gene + insertion.
+
+    .. deprecated:: Stage H (ADR 0021)
+       Use :func:`pegrna_pipeline.hpc.recoded_tjpe_workflow.run_recoded_tjpe`, the single
+       canonical design workflow (auto-spacer + full gate cascade, used by the CLI/web).
+       This orchestrator is retained for the HPC ``driver`` path and the shared primitives.
 
     Exactly one of ``variant_fixtures_dir`` or ``variant_scores`` must be
     supplied. The former is used by the current test / fixture-driven
@@ -430,6 +447,14 @@ def run_tjpe_workflow(
                                     pbs2_length=pbs2_length,
                                 )
     """
+    _warnings.warn(
+        "run_tjpe_workflow is the LEGACY tj-PE design orchestrator; the single canonical "
+        "design workflow is recoded_tjpe_workflow.run_recoded_tjpe (auto-spacer + full gate "
+        "cascade, used by the CLI/web). This path is retained for the HPC driver + shared "
+        "primitives only (ADR 0021).",
+        DeprecationWarning,
+        stacklevel=2,
+    )
     # -------- input source contract --------
     if (variant_fixtures_dir is None) == (variant_scores is None):
         raise ValueError("exactly one of variant_fixtures_dir or variant_scores must be provided")
