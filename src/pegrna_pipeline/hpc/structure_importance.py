@@ -170,6 +170,22 @@ class AFDBImportanceScorer:
         cif = pdbx.CIFFile.read(path)
         self._struct = pdbx.get_structure(cif, model=1, extra_fields=["b_factor"])
 
+    def protein_length(self) -> int:  # pragma: no cover - CX3 only (biotite + AFDB)
+        """Residue count of the loaded AFDB model.
+
+        This is the AUTHORITATIVE length for mapping a local design-window residue
+        index onto the structure -- it is the very structure that :meth:`metrics`
+        indexes -- so the recoded workflow prefers it over a caller-supplied
+        ``protein_length`` to avoid a silent local-vs-absolute mis-index. Caveat:
+        for a multi-fragment AFDB entry only the F1 fragment is loaded, so for
+        proteins longer than the ~2700-residue fragment size this returns the
+        fragment length, not the full-sequence length.
+        """
+        import numpy as np
+
+        self._load()
+        return int(np.unique(self._struct.res_id).size)
+
     def metrics(self, residue_index: int) -> ResidueMetrics:  # pragma: no cover - CX3
         """Per-residue structural metrics from the AFDB model.
 
