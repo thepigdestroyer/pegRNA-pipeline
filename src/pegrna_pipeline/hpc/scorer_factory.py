@@ -184,7 +184,9 @@ def _api_bundle(
     Every gate is REAL except that the two GPU-hard models are handled without a
     local GPU:
 
-    * splice      -> SpliceAIScorer            (TensorFlow, CPU)
+    * splice      -> _PaddedSpliceAIScorer      (SpliceAIScorer on CPU, N-padded so
+                                                 the advisory cross-check runs on
+                                                 short local design windows)
     * cryptic     -> MaxEntScanScorer          (pure-Python matrices, CPU)
     * structure   -> ViennaRNAStructureScorer  (partition-function bpp, CPU)
     * importance  -> AFDBImportanceScorer       (AlphaFold-DB web API + biotite, CPU)
@@ -198,7 +200,6 @@ def _api_bundle(
     from pegrna_pipeline.hpc.complex_dock import DockFake
     from pegrna_pipeline.hpc.complex_dock_nim import Boltz2NIMDockScorer
     from pegrna_pipeline.hpc.cryptic_splice import MaxEntScanScorer
-    from pegrna_pipeline.hpc.splice_screen import SpliceAIScorer
     from pegrna_pipeline.hpc.structure_importance import AFDBImportanceScorer
     from pegrna_pipeline.hpc.vienna_structure import ViennaRNAStructureScorer
 
@@ -223,7 +224,10 @@ def _api_bundle(
             return {p: (0.8, 0, False) for p in protospacers}
 
     return GateScorers(
-        splice_scorer=SpliceAIScorer(),
+        # N-pad short web-host design windows up to SpliceAI's >=10 kb context so the
+        # advisory cross-check actually runs here; the raw SpliceAIScorer fail-louds
+        # below that and the workflow would silently record it as an "advisory skip".
+        splice_scorer=_PaddedSpliceAIScorer(),
         full_structure_scorer=ViennaRNAStructureScorer(),
         importance_scorer=AFDBImportanceScorer(uniprot_acc or "UNKNOWN"),
         dock_scorer=dock,
