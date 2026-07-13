@@ -223,14 +223,18 @@
 
       <details>
         <summary>Heterozygous / allele-specific (optional)</summary>
-        <label for="het_snps">het_snps — JSON array of heterozygous SNPs</label>
-        <textarea id="het_snps" rows="3" placeholder='[{"pos": 1005, "ref": "A", "alt": "G", "phase": 1}]'></textarea>
+        <label for="het_snps">het_snps — JSON array of phased hets, keyed by pegRNA/ngRNA element</label>
+        <textarea id="het_snps" rows="3" placeholder='[{"element": "pegrna_pam", "offset": 1, "haplotype": 1, "phased": true}]'></textarea>
         <label for="het_edit" style="display:flex; align-items:center; gap:8px; margin-top:10px; font-weight:600;">
           <input type="checkbox" id="het_edit" style="width:auto;"> design het-specific pair
         </label>
-        <div class="hint">Optional. Provide phased heterozygous SNPs to enable allele-specific design.
-          Allele specificity is capped by natural heterozygosity — it is never manufactured.
-          The het-specific <em>pair</em> pass is wired in a later stage.</div>
+        <div class="hint">Optional. Each SNP is located by the guide <em>element</em> it falls in, not a genomic
+          coordinate: <code>element</code> ∈ <code>pegrna_pam · spacer · pbs1 · pbs2 · ngrna_pam · ngrna_spacer</code>;
+          <code>offset</code> = nt within that element; <code>haplotype</code> = 1 or 2; <code>phased</code> must be
+          <code>true</code> to count. Discrimination is strongest in the PAM (1.0), then seed (0.7), PBS1 (0.4),
+          PBS2 (0.3); distal SNPs (0.0) do not discriminate. Tick <em>design het-specific pair</em> to also run the
+          allele-specific sense-window pass. Allele specificity is capped by natural heterozygosity — never
+          manufactured, so the pair is emitted only when a discriminating phased het is present.</div>
       </details>
 
       <details>
@@ -326,14 +330,15 @@ function buildConfig(){
   // field must REMOVE any spacer carried over from a loaded example (baseConfig).
   const spc = (document.getElementById("spacer").value||"").trim();
   if(spc) cfg.spacer = spc; else delete cfg.spacer;
-  // Heterozygous / allele-specific (optional). het_snps flows to design_recoded;
-  // het_edit is a request flag (recorded now; pair-design wiring is a later stage).
+  // Heterozygous / allele-specific (optional). het_snps flows to design_recoded; when
+  // het_edit is ticked (and >=1 discriminating phased het is present) the CLI runs the
+  // allele-specific sense-window pair pass (design_recoded_with_het_edit).
   const hetRaw = (document.getElementById("het_snps").value||"").trim();
   if(hetRaw){
     let parsed;
     try { parsed = JSON.parse(hetRaw); }
     catch(e){ throw new Error("het_snps must be a JSON array — "+e.message); }
-    if(!Array.isArray(parsed)) throw new Error('het_snps must be a JSON array, e.g. [{"pos":..,"ref":..,"alt":..,"phase":..}]');
+    if(!Array.isArray(parsed)) throw new Error('het_snps must be a JSON array, e.g. [{"element":"pegrna_pam","offset":1,"haplotype":1,"phased":true}]');
     cfg.het_snps = parsed;
   } else { delete cfg.het_snps; }
   if(document.getElementById("het_edit").checked) cfg.het_edit = true; else delete cfg.het_edit;
@@ -354,11 +359,25 @@ function loadFieldsFromRaw(){
 function updateMaskHint(){
   const glen=(document.getElementById("genome").value||"").length;
   const s = Number(document.getElementById("site_s").value||0);
+  const hasTx = !!(document.getElementById("transcript").value||"").trim();
   const el = document.getElementById("maskhint");
-  el.textContent = `cds_mask auto-derived from site S: ${glen} positions · coding [0:${s}] · non-coding [${s}:${glen}]`;
+  let msg = `cds_mask auto-derived from site S: ${glen} positions · coding [0:${s}] · non-coding [${s}:${glen}]`;
   el.style.color = "var(--mut)";
+  // PRIDICT2 auto-spacer needs >=100 bp of context each side of Site S; when the local
+  // window is shorter, the pipeline auto-fetches a wider GRCh38 window IF a Transcript is
+  // given, else it fails loud. Flag it here so the input is corrected before submit.
+  const left = s, right = glen - s;
+  if(glen && (left < 100 || right < 100)){
+    if(hasTx){
+      msg += ` · flanks ${left}/${right} bp (<100) — PRIDICT will auto-fetch wider context from the Transcript.`;
+    } else {
+      msg += ` · ⚠ flanks ${left}/${right} bp; PRIDICT auto-spacer needs ≥100 bp each side — widen the window or set a Transcript for auto-fetch.`;
+      el.style.color = "#9a6a00";
+    }
+  }
+  el.textContent = msg;
 }
-["genome","site_s"].forEach(id=>document.addEventListener("input", e=>{ if(e.target.id===id) updateMaskHint(); }));
+["genome","site_s","transcript"].forEach(id=>document.addEventListener("input", e=>{ if(e.target.id===id) updateMaskHint(); }));
 
 // ---- cargo motif builder ----
 let MOTIFS = {};            // name -> {dna, aa, description}
@@ -426,7 +445,9 @@ async function loadRealExample(){
   if(!r.ok){ alert("real example not found"); return; }
   setFields(await r.json());
   const sel = document.getElementById("mode");
-  if([...sel.options].some(o=>o.value==="api")) sel.value = "api";  // this preset passes all real gates
+  // Auto-spacer FLAG preset that exercises the full api cascade through the Boltz-2
+  // docking gate (docking pass is stochastic — Boltz-2 is a diffusion model).
+  if([...sel.options].some(o=>o.value==="api")) sel.value = "api";
 }
 
 function esc(s){ return (s||"").replace(/[&<>]/g, c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c])); }
