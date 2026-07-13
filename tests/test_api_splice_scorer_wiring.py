@@ -17,6 +17,9 @@ break real mode's fail-loud contract).
 
 from __future__ import annotations
 
+import numpy as np
+import pytest
+
 import pegrna_pipeline.hpc.splice_screen as splice_screen
 from pegrna_pipeline.hpc import scorer_factory
 from pegrna_pipeline.hpc.scorer_factory import _PaddedSpliceAIScorer
@@ -91,3 +94,46 @@ def test_real_bundle_keeps_raw_spliceai():
     bundle = scorer_factory.make_scorers(mode="real")
     assert type(bundle.splice_scorer) is SpliceAIScorer
     assert not isinstance(bundle.splice_scorer, _PaddedSpliceAIScorer)
+
+
+# ---------------------------------------------------------- SpliceAI indel delta
+# The real SpliceAIScorer.delta indel branch is CX3-only (needs TF weights), but its
+# coordinate logic is testable by injecting synthetic score tracks. These pin the fix
+# for the broadcast bug that made every tjPE insertion advisory-skip: the score tracks
+# cover the input minus the trimmed context, so prefix/suffix must align in TRACK
+# coordinates, not raw-input coordinates.
+
+
+def _spliceai_with_fake_tracks(monkeypatch, context, donor_spike_len=None, spike_pos=0):
+    from pegrna_pipeline.hpc.splice_screen import SpliceAIScorer
+
+    sc = SpliceAIScorer(context=context)
+
+    def _fake_tracks(seq):
+        n = len(seq) - 2 * context  # the model trims `context` from each end
+        acceptor = np.zeros(max(n, 0))
+        donor = np.zeros(max(n, 0))
+        if donor_spike_len is not None and n == donor_spike_len:
+            donor[spike_pos] = 0.9
+        return acceptor, donor
+
+    monkeypatch.setattr(sc, "_tracks", _fake_tracks)
+    return sc
+
+
+def test_spliceai_delta_indel_aligns_in_track_coordinates(monkeypatch):
+    # ref core "AC" (track len 2), alt core "GGGAC" (track len 5, a 3-nt insertion),
+    # each N-padded by context=3. On raw-input coords the common prefix is the 3 N's,
+    # which sliced the length-2 and length-5 tracks into a (2,) vs (3,) broadcast error.
+    sc = _spliceai_with_fake_tracks(monkeypatch, context=3)
+    ref = "NNN" + "AC" + "NNN"
+    alt = "NNN" + "GGGAC" + "NNN"
+    assert sc.delta(ref, alt) == 0.0  # aligns cleanly; zero tracks -> zero delta
+
+
+def test_spliceai_delta_indel_reports_gain_in_inserted_region(monkeypatch):
+    # A donor spike inside the inserted "GGG" region is reported as a splice GAIN.
+    sc = _spliceai_with_fake_tracks(monkeypatch, context=3, donor_spike_len=5, spike_pos=1)
+    ref = "NNN" + "AC" + "NNN"
+    alt = "NNN" + "GGGAC" + "NNN"
+    assert sc.delta(ref, alt) == pytest.approx(0.9)
