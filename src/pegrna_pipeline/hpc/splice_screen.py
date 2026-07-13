@@ -141,9 +141,21 @@ class SpliceAIScorer:
             return float(max(da, dd))
 
         # --- indel: align on common prefix/suffix, then gain/loss in the middle ---
-        lr, la = len(ref_seq), len(alt_seq)
-        p = self._common_prefix(ref_seq, alt_seq)
-        s = self._common_suffix(ref_seq, alt_seq, cap=min(lr, la) - p)
+        # The score tracks cover only the central bases the model scores (the input
+        # minus the context it trims from each end), so prefix/suffix alignment must be
+        # done in TRACK coordinates, not raw-input coordinates. Aligning on the raw input
+        # (which is longer, and longer still once _PaddedSpliceAIScorer N-pads a short
+        # window) indexes the tracks out of range and broadcast-errors, e.g. (264,) vs
+        # (240,), so every tjPE insertion silently degraded to "advisory skip". Trim each
+        # input to the region its track covers; robust to the model emitting full-length
+        # or context-trimmed output, and to the N-padding.
+        trim_r = (len(ref_seq) - len(a_ref)) // 2
+        trim_a = (len(alt_seq) - len(a_alt)) // 2
+        ref_core = ref_seq[trim_r : len(ref_seq) - trim_r] if trim_r else ref_seq
+        alt_core = alt_seq[trim_a : len(alt_seq) - trim_a] if trim_a else alt_seq
+        lr, la = len(a_ref), len(a_alt)
+        p = self._common_prefix(ref_core, alt_core)
+        s = self._common_suffix(ref_core, alt_core, cap=min(lr, la) - p)
         deltas = [0.0]
         if p > 0:  # aligned prefix flank
             deltas.append(float(np.abs(a_alt[:p] - a_ref[:p]).max()))
