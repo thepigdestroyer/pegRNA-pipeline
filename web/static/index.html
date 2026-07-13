@@ -486,6 +486,22 @@ function showBanner(cls, msg){
     `<div class="status-banner ${cls}">${esc(msg)}</div>`;
 }
 
+// Render a components list as the fixed-layout table (shared by the primary
+// design and the het-specific pass). Explicit per-column widths so the long
+// `sequence` column wraps instead of stealing width from its neighbours.
+function compTable(components){
+  if(!components || !components.length) return "";
+  const cols = Object.keys(components[0]);
+  const CW = {index:"52px", component:"150px", role:"120px", part_of:"120px", sequence:"auto", length:"64px"};
+  const numeric = new Set(["index","length"]);
+  const colgroup = `<colgroup>`+cols.map(c=>`<col style="width:${CW[c]||"auto"}">`).join("")+`</colgroup>`;
+  return `<div style="overflow-x:auto"><table class="comp-table">`
+       + colgroup + `<tr>`
+       + cols.map(c=>`<th class="${numeric.has(c)?'num':''}">${esc(c)}</th>`).join("") + `</tr>`
+       + components.map(row=>`<tr>`+cols.map(c=>`<td class="${c==='sequence'?'seq':''}${numeric.has(c)?' num':''}">${esc(row[c])}</td>`).join("")+`</tr>`).join("")
+       + `</table></div>`;
+}
+
 function renderResult(j){
   const badge = j.ok ? '<span class="badge ok">success</span>' : '<span class="badge err">failed</span>';
   let html = `<div>${badge} &nbsp;<span class="hint">run ${esc(j.run_id)} · mode ${esc(j.mode)} · exit ${j.returncode}</span></div>`;
@@ -498,17 +514,24 @@ function renderResult(j){
   }
   if(j.report) html += `<pre>${esc(j.report)}</pre>`;
   if(j.components && j.components.length){
-    const cols = Object.keys(j.components[0]);
-    // Fixed layout + explicit per-column widths so the long `sequence` column
-    // wraps instead of stealing/donating width to its neighbours.
-    const CW = {index:"52px", component:"150px", role:"120px", part_of:"120px", sequence:"auto", length:"64px"};
-    const numeric = new Set(["index","length"]);
-    const colgroup = `<colgroup>`+cols.map(c=>`<col style="width:${CW[c]||"auto"}">`).join("")+`</colgroup>`;
-    html += `<details open><summary>Components (${j.components.length})</summary><div style="overflow-x:auto"><table class="comp-table">`
-          + colgroup + `<tr>`
-          + cols.map(c=>`<th class="${numeric.has(c)?'num':''}">${esc(c)}</th>`).join("") + `</tr>`
-          + j.components.map(row=>`<tr>`+cols.map(c=>`<td class="${c==='sequence'?'seq':''}${numeric.has(c)?' num':''}">${esc(row[c])}</td>`).join("")+`</tr>`).join("")
-          + `</table></div></details>`;
+    html += `<details open><summary>Components (${j.components.length})</summary>`
+          + compTable(j.components) + `</details>`;
+  }
+  // Het-specific (allele-aware) sense-window pass (Stage 3c). Shown only when
+  // requested; the note is always surfaced, the pair only when actually produced
+  // (allele specificity is capped by natural heterozygosity — never manufactured).
+  if(j.het_edit && j.het_edit.requested){
+    const h = j.het_edit;
+    const b = h.produced
+      ? '<span class="badge ok">pair produced</span>'
+      : '<span class="badge">primary only</span>';
+    html += `<details ${h.produced?"open":""} style="margin-top:10px">`
+          + `<summary>Het-specific allele-aware pass ${b}</summary>`
+          + `<div class="hint" style="margin:6px 0">${esc(h.note)}</div>`;
+    if(h.produced && h.report) html += `<pre>${esc(h.report)}</pre>`;
+    if(h.produced && h.components && h.components.length)
+      html += `<div style="margin-top:6px">${compTable(h.components)}</div>`;
+    html += `</details>`;
   }
   if(!j.ok && j.stderr) html += `<details open><summary>stderr</summary><pre>${esc(j.stderr)}</pre></details>`;
   else if(j.stderr) html += `<details><summary>stderr</summary><pre>${esc(j.stderr)}</pre></details>`;

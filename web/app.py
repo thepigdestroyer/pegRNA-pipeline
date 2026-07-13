@@ -200,6 +200,32 @@ def _parse_csv(text: str) -> list[dict[str, str]]:
     return rows
 
 
+def _read_het_edit(run_dir: Path) -> dict[str, Any] | None:
+    """Het-edit dual-pass artifacts (Stage 3c), or None for a plain single pass.
+
+    When the config requested the het-edit pair, the CLI writes ``het_edit.json``
+    (requested / produced / note) at the run root and, if a het pair was designed,
+    its report + components under ``het_edit/``. A single-pass run has neither, so
+    this returns None and the response carries no het section."""
+    meta_path = run_dir / "het_edit.json"
+    if not meta_path.exists():
+        return None
+    try:
+        meta = json.loads(meta_path.read_text())
+    except (ValueError, OSError):
+        return None
+    het_dir = run_dir / "het_edit"
+    report_path = het_dir / "recoded_tjpe_report.txt"
+    csv_path = het_dir / "recoded_tjpe_components.csv"
+    return {
+        "requested": bool(meta.get("requested")),
+        "produced": bool(meta.get("produced")),
+        "note": meta.get("note", ""),
+        "report": report_path.read_text() if report_path.exists() else "",
+        "components": _parse_csv(csv_path.read_text()) if csv_path.exists() else [],
+    }
+
+
 @app.get("/", response_class=HTMLResponse)
 def index() -> HTMLResponse:
     return HTMLResponse((STATIC / "index.html").read_text())
@@ -300,6 +326,7 @@ def design(req: DesignRequest, request: Request) -> JSONResponse:
         components = _parse_csv(csv_path.read_text()) if csv_path.exists() else []
         gates_path = run_dir / "recoded_tjpe_gates.json"
         gates = json.loads(gates_path.read_text()) if gates_path.exists() else {}
+        het_edit = _read_het_edit(run_dir)
         _cleanup_runs()
 
         return JSONResponse(
@@ -316,6 +343,7 @@ def design(req: DesignRequest, request: Request) -> JSONResponse:
                 "has_csv": csv_path.exists(),
                 "docking_stub": docking_stub,
                 "gates": gates,
+                "het_edit": het_edit,
             }
         )
 
@@ -381,6 +409,7 @@ def design_stream(req: DesignRequest, request: Request) -> StreamingResponse:
         report = report_path.read_text() if report_path.exists() else ""
         components = _parse_csv(csv_path.read_text()) if csv_path.exists() else []
         gates = json.loads(gates_path.read_text()) if gates_path.exists() else {}
+        het_edit = _read_het_edit(run_dir)
         _cleanup_runs()
         final = {
             "type": "result",
@@ -395,6 +424,7 @@ def design_stream(req: DesignRequest, request: Request) -> StreamingResponse:
             "has_csv": csv_path.exists(),
             "docking_stub": docking_stub,
             "gates": gates,
+            "het_edit": het_edit,
         }
         yield json.dumps(final) + "\n"
 
