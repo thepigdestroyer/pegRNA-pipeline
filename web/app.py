@@ -44,7 +44,11 @@ def _default_repo() -> Path:
 REPO = _default_repo()
 STATIC = HERE / "static"
 RUNS = Path(os.environ.get("PEGRNA_RUNS_DIR", str(HERE / "runs")))
-EXAMPLE_CONFIG = REPO / "examples" / "ctcf_cterm" / "config.json"
+# Auto-spacer example (no manual `spacer`): matches the page's "PRIDICT designs the
+# guide" flow. The 503 bp FLAG-P2A-ZeoR cassette is realistic and passes in fake mode
+# (its large RTT is structure-gate-rejected in api mode -- see config_autospacer_flag
+# for a minimal FLAG preset that clears the real gates).
+EXAMPLE_CONFIG = REPO / "examples" / "ctcf_cterm" / "config_autospacer.json"
 RUNS.mkdir(parents=True, exist_ok=True)
 
 # Modes offered to the browser. "fake" = design logic + stand-in scorers (light
@@ -231,7 +235,11 @@ def index() -> HTMLResponse:
     return HTMLResponse((STATIC / "index.html").read_text())
 
 
-REAL_EXAMPLE = HERE / "examples" / "ctcf_flag_real.json"
+# Auto-spacer minimal-FLAG preset (24 bp cargo, no manual spacer): verified live on the
+# DSI box to run the full api cascade through the Boltz-2 docking gate. Docking pass is
+# stochastic (Boltz-2 is a diffusion model), so a given api run may or may not yield a
+# final design; importance / structure / splice pass reliably.
+REAL_EXAMPLE = REPO / "examples" / "ctcf_cterm" / "config_autospacer_flag.json"
 
 
 @app.get("/api/example")
@@ -243,8 +251,8 @@ def example() -> JSONResponse:
 
 @app.get("/api/example/real")
 def example_real() -> JSONResponse:
-    """CTCF C-terminal FLAG knock-in that passes ALL real gates (incl. live
-    Boltz-2 docking) in api mode."""
+    """CTCF C-terminal FLAG knock-in (auto-spacer) that runs the full api cascade
+    through the live Boltz-2 docking gate. Docking pass is stochastic."""
     if not REAL_EXAMPLE.exists():
         raise HTTPException(404, "real example config not found")
     return JSONResponse(json.loads(REAL_EXAMPLE.read_text()))
