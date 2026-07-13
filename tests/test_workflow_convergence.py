@@ -35,6 +35,7 @@ def test_both_workflows_share_the_authoritative_assembler_no_drift():
     # authoritative assembler (assemble_tj_pegrna_v2, Spacer.Scaffold.rcPBS2.RTT.PBS1.PolyU),
     # so they cannot silently diverge on construction again (ADR 0014/0020/0021).
     legacy_src = inspect.getsource(tjpe_workflow.run_tjpe_workflow)
-    canonical_src = inspect.getsource(recoded_tjpe_workflow.run_recoded_tjpe)
+    # run_recoded_tjpe is the thin INSERT-lever wrapper; the assembly lives in the core.
+    canonical_src = inspect.getsource(recoded_tjpe_workflow._run_recoded_tjpe_single)
     assert "assemble_tj_pegrna_v2" in legacy_src
     assert "assemble_tj_pegrna_v2" in canonical_src

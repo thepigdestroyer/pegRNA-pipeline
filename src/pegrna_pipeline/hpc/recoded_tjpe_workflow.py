@@ -40,7 +40,12 @@ __all__ = [
 
 class NoValidPegRNA(RuntimeError):
     """Raised (fail-loud) when no candidate survives all gates. Carries a
-    per-candidate diagnostic of which gate killed each one."""
+    per-candidate diagnostic of which gate killed each one (``.diagnostics``), which the
+    INSERT-lever wrapper inspects to decide whether a synonymous cargo swap could help."""
+
+    def __init__(self, message: str, diagnostics: Optional[Sequence[str]] = None) -> None:
+        super().__init__(message)
+        self.diagnostics: List[str] = list(diagnostics or [])
 
 
 @dataclass(frozen=True)
@@ -522,7 +527,7 @@ class _NickPlan:
     rcpbs2: Optional[str] = None
 
 
-def run_recoded_tjpe(
+def _run_recoded_tjpe_single(
     *,
     spacer: str,
     rtt_aa: str,
@@ -976,8 +981,82 @@ def run_recoded_tjpe(
 
     raise NoValidPegRNA(
         f"no candidate survived all gates after {tried} tried; "
-        f"diagnostics: {'; '.join(diagnostics[:10])}"
+        f"diagnostics: {'; '.join(diagnostics[:10])}",
+        diagnostics=diagnostics,
     )
+
+
+#: Diagnostic substrings that mean the failure is INSERT-side (the cargo SEQUENCE affects
+#: the gate): a synonymous cargo swap can change these. Everything else is cargo-independent
+#: -- importance (genomic insertion-site residues), off-target (spacer/PBS/ngRNA), INV-0 /
+#: TPRT / arm / nick -- so a swap cannot help and must not trigger a retry.
+_INSERT_SIDE_MARKERS = ("splice", "cryptic", "cross-region", "rinalmo", "structure")
+
+
+def _is_insert_side_failure(diagnostics: Sequence[str]) -> bool:
+    text = " ".join(diagnostics).lower()
+    return any(marker in text for marker in _INSERT_SIDE_MARKERS)
+
+
+def _cargo_variants(cargo: str, max_variants: int) -> List[str]:
+    """The original cargo first, then up to ``max_variants``-1 CAI-ranked SYNONYMOUS
+    variants of the whole cargo (the INSERT lever, Stage B/F). Variants are produced ONLY
+    when the cargo is a clean in-frame CDS (length a multiple of 3, translatable, no internal
+    stop); otherwise a synonymous swap is undefined and the lever no-ops (original only).
+    A trailing stop codon is preserved verbatim. ``site_s`` and the spacer are unaffected by
+    the swap (the spacer targets the genomic PAM, not the cargo)."""
+    out = [cargo]
+    if max_variants <= 1 or len(cargo) % 3 != 0:
+        return out
+    try:
+        from Bio.Seq import Seq  # noqa: PLC0415
+
+        aa = str(Seq(cargo).translate())
+    except Exception:  # noqa: BLE001
+        return out
+    core = aa[:-1] if aa.endswith("*") else aa
+    if not core or "*" in core:  # internal stop -> not a single clean CDS
+        return out
+    tail = cargo[len(core) * 3 :]  # trailing stop codon (if present), kept byte-exact
+    from pegrna_pipeline.hpc.codon_expander import rank_insert_variants_by_cai  # noqa: PLC0415
+
+    seen = {cargo}
+    for cv in rank_insert_variants_by_cai(core, max_variants=max_variants * 4):
+        dna = cv.dna + tail
+        if dna in seen:
+            continue
+        seen.add(dna)
+        out.append(dna)
+        if len(out) >= max_variants:
+            break
+    return out
+
+
+def run_recoded_tjpe(
+    *, cargo: str, max_insert_variants: int = 6, **kwargs: Any
+) -> "RecodedTJPEResult":
+    """Canonical recoded tj-PE design workflow (the CLI/web entrypoint).
+
+    Delegates to :func:`_run_recoded_tjpe_single` (the full gate cascade; see its docstring
+    for every parameter) and adds the **INSERT lever** (unified plan Stage B/F): on an
+    INSERT-side failure -- splice, cryptic-splice, or RNA structure, the gates a cargo
+    sequence can change -- it retries with the next CAI-ranked SYNONYMOUS cargo variant. The
+    edit site ``site_s`` and the spacer never change and the swap is protein-silent. A
+    cargo-INDEPENDENT failure (importance / off-target / INV-0 / nick / arm) does NOT trigger
+    a retry, because a synonymous swap cannot help it. ``max_insert_variants`` bounds the
+    lever (>= 1; 1 disables it; the lever also no-ops unless the cargo is a clean in-frame
+    CDS). Raises the last :class:`NoValidPegRNA` when every attempt is exhausted.
+    """
+    last: Optional[NoValidPegRNA] = None
+    for cargo_variant in _cargo_variants(cargo, max_insert_variants):
+        try:
+            return _run_recoded_tjpe_single(cargo=cargo_variant, **kwargs)
+        except NoValidPegRNA as exc:
+            last = exc
+            if not _is_insert_side_failure(exc.diagnostics):
+                break  # a synonymous cargo swap cannot rescue a cargo-independent failure
+    assert last is not None  # _cargo_variants always yields >= 1 attempt
+    raise last
 
 
 def _regions_for(spacer: str, rcpbs2: str, rtt: str, pbs1: str) -> Dict[str, Tuple[int, int]]:
