@@ -5,6 +5,9 @@
 #   pegrna-real  heavy: adds the CPU/API model stack for `api` mode
 #                (ViennaRNA, SpliceAI+TensorFlow-CPU, biotite, dnachisel, maxentpy).
 #                NO torch/boltz — docking is the NVIDIA NIM API, not local GPU.
+#   pridict2     PRIDICT2 pegRNA designer for `api`-mode auto-spacer design.
+#                Cloned from upstream + its own env (python 3.10, CPU torch==2.0.1).
+#                Torch lives ONLY here; pegrna-real stays torch-free.
 #
 # Idempotent and fail-loud. Bootstraps micromamba under $PEGRNA_ROOT if no
 # conda/mamba/micromamba is found. Everything lives under $PEGRNA_ROOT so nothing
@@ -98,6 +101,33 @@ print("api-mode import check:", "OK" if not bad else "MISSING -> " + "; ".join(b
 sys.exit(1 if bad else 0)
 PY
 
+# --- pridict2 (api mode: auto-spacer pegRNA design, CPU) ---------------------
+# PRIDICT2 designs the pegRNA (spacer/PBS/RTT) at the insert site. Cloned WITH its
+# trained_models (~95M). Env from the repo's own pridict2_repo.yml (python 3.10),
+# then CPU torch==2.0.1 (the build PRIDICT2 officially supports).
+PRIDICT_DIR="$PEGRNA_ROOT/PRIDICT2"
+PRIDICT_ENV="$PEGRNA_ROOT/envs/pridict2"
+
+if [ ! -d "$PRIDICT_DIR/.git" ]; then
+  log "cloning PRIDICT2 into $PRIDICT_DIR (includes trained_models, ~95M)"
+  git clone https://github.com/uzh-dqbm-cmi/PRIDICT2.git "$PRIDICT_DIR"
+else
+  log "PRIDICT2 already present at $PRIDICT_DIR"
+fi
+
+if [ ! -x "$PRIDICT_ENV/bin/python" ]; then
+  log "creating pridict2 env from $PRIDICT_DIR/pridict2_repo.yml (python 3.10)"
+  "$MM" create -y -p "$PRIDICT_ENV" -f "$PRIDICT_DIR/pridict2_repo.yml"
+fi
+log "pridict2: install CPU torch==2.0.1"
+run "$PRIDICT_ENV" python -m pip install -q "torch==2.0.1" \
+  --index-url https://download.pytorch.org/whl/cpu
+
+log "verify pridict2 env: torch (CPU), Bio, pandas import"
+run "$PRIDICT_ENV" python -c \
+  "import torch,Bio,pandas; print(torch.__version__, torch.cuda.is_available())"
+
 log "done. envs:"
 log "  pegrna-web  -> $WEB_ENV/bin/python"
 log "  pegrna-real -> $REAL_ENV/bin/python  (set PEGRNA_API_PYTHON to this)"
+log "  pridict2    -> $PRIDICT_ENV/bin/python  (set PRIDICT2_PYTHON to this)"

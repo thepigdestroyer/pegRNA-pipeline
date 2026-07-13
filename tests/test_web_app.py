@@ -168,6 +168,55 @@ def test_run_file_rejects_unlisted_name(client):
     assert client.get("/api/runs/whatever/recoded_tjpe_report.txt").status_code == 404  # no run
 
 
+# ---------------------------------------------------------------- het-edit pair
+def _fake_run_with_het():
+    """subprocess.run stand-in that writes the het-edit dual-pass artifacts the
+    CLI produces: top-level primary artifacts + het_edit.json + het_edit/ pair."""
+
+    def _fake_run(cmd, **_):
+        out = Path(cmd[cmd.index("--output-dir") + 1])
+        _write_artifacts(out)
+        het_dir = out / "het_edit"
+        het_dir.mkdir(parents=True, exist_ok=True)
+        (het_dir / "recoded_tjpe_report.txt").write_text("HET REPORT\n")
+        (het_dir / "recoded_tjpe_components.csv").write_text(
+            "index,component,sequence,length\n0,spacer,TGCA,4\n"
+        )
+        (out / "het_edit.json").write_text(
+            '{"requested": true, "produced": true, "note": "het-edit sense-window pair"}'
+        )
+
+        class R:
+            returncode = 0
+            stdout = "ok"
+            stderr = ""
+
+        return R()
+
+    return _fake_run
+
+
+def test_design_surfaces_het_edit_pair(client, app_module, monkeypatch):
+    monkeypatch.setattr(app_module.subprocess, "run", _fake_run_with_het())
+    r = client.post(
+        "/api/design",
+        json={"config": {"genome": "ACGT", "het_edit": True, "het_snps": [{}]}, "mode": "fake"},
+    )
+    assert r.status_code == 200
+    het = r.json()["het_edit"]
+    assert het is not None
+    assert het["requested"] is True and het["produced"] is True
+    assert "HET REPORT" in het["report"]
+    assert het["components"] and het["components"][0]["sequence"] == "TGCA"
+
+
+def test_design_single_pass_has_no_het_section(client, app_module, monkeypatch):
+    monkeypatch.setattr(app_module.subprocess, "run", _fake_run_factory(rc=0))
+    r = client.post("/api/design", json={"config": {"genome": "ACGT"}, "mode": "fake"})
+    assert r.status_code == 200
+    assert r.json()["het_edit"] is None
+
+
 # ---------------------------------------------------------------- retention
 def test_cleanup_keeps_last_n(app_module):
     runs = app_module.RUNS

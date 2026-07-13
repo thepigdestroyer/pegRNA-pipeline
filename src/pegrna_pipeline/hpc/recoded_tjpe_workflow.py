@@ -19,6 +19,7 @@ from pegrna_pipeline.hpc.cryptic_splice import passes_cryptic_splice_gate
 from pegrna_pipeline.hpc.full_structure import functional_region_pairing
 from pegrna_pipeline.hpc.gate_thresholds import THRESHOLDS
 from pegrna_pipeline.hpc.nick_search import enumerate_nick_sites, screen_nick_candidates
+from pegrna_pipeline.hpc.pridict_ngrna import InjectedNgRNA
 from pegrna_pipeline.hpc.recode_arm import recode_arm
 from pegrna_pipeline.hpc.scarless import assert_inv0
 from pegrna_pipeline.hpc.splice_screen import passes_splice_gate
@@ -485,6 +486,17 @@ def _partition_arm(
     )
 
 
+@dataclass(frozen=True)
+class _NickPlan:
+    """One second-nick option fed to the pool walk. ``rcpbs2`` is pre-derived for the
+    PRIDICT (injected) path; ``None`` means the genome path selects it per-nick via
+    :func:`_select_rcpbs2`."""
+
+    nick_position: int
+    protospacer: str
+    rcpbs2: Optional[str] = None
+
+
 def run_recoded_tjpe(
     *,
     spacer: str,
@@ -515,6 +527,7 @@ def run_recoded_tjpe(
     insertion_importance_context: int = 1,
     protein_length: Optional[int] = None,
     on_gate: Optional[Callable[..., None]] = None,
+    injected_ngrnas: Optional[Sequence[InjectedNgRNA]] = None,
 ) -> "RecodedTJPEResult":
     """Ranked-pool-walk orchestrator (decisions 0-15).
 
@@ -552,16 +565,30 @@ def run_recoded_tjpe(
     except Exception:  # noqa: BLE001
         allele_options = []
 
-    # Nick candidates on the opposite strand, off-target screened (incl. other-allele).
-    nicks = enumerate_nick_sites(
-        genome,
-        site_s=site_s,
-        pegrna_strand=pegrna_strand,
-        distance_min=ngrna_distance_min,
-        distance_max=ngrna_distance_max,
-    )
-    raw_nick_count = len(nicks)
-    nicks = screen_nick_candidates(nicks, scorer=offtarget_scorer)
+    # Second-nick candidates. AUTO (PRIDICT) path: the pipeline already selected +
+    # off-target-screened the ngRNA from PRIDICT nicking guides and derived each rcPBS2
+    # (pridict_ngrna.build_pridict_ngrnas), so inject them verbatim -- iterating them IS
+    # the NICK lever. GENOME (fallback / explicit-spacer) path: enumerate PAM-anchored
+    # opposite-strand nicks and off-target screen them here (unchanged).
+    if injected_ngrnas is not None:
+        plans = [
+            _NickPlan(
+                nick_position=inj.nick_position, protospacer=inj.protospacer, rcpbs2=inj.rcpbs2
+            )
+            for inj in injected_ngrnas
+        ]
+        raw_nick_count = len(plans)
+    else:
+        nicks = enumerate_nick_sites(
+            genome,
+            site_s=site_s,
+            pegrna_strand=pegrna_strand,
+            distance_min=ngrna_distance_min,
+            distance_max=ngrna_distance_max,
+        )
+        raw_nick_count = len(nicks)
+        nicks = screen_nick_candidates(nicks, scorer=offtarget_scorer)
+        plans = [_NickPlan(nick_position=n.nick_position, protospacer=n.protospacer) for n in nicks]
 
     variants = enumerate_pbs_rtt_variants(
         spacer=spacer,
@@ -582,8 +609,13 @@ def run_recoded_tjpe(
 
     # Diagnosability: an empty nick pool means the candidate loop never runs, so the
     # final NoValidPegRNA would otherwise carry a blank diagnostic. Say WHY here.
-    if not nicks:
-        if raw_nick_count == 0:
+    if not plans:
+        if injected_ngrnas is not None:
+            diagnostics.append(
+                "0 injected PRIDICT ngRNA candidates (none passed the distance window / "
+                "opposite-strand / off-target gates upstream)"
+            )
+        elif raw_nick_count == 0:
             diagnostics.append(
                 f"0 nick sites: no NGG-PAM protospacer in the "
                 f"[{ngrna_distance_min},{ngrna_distance_max}] bp window on the strand "
@@ -596,8 +628,8 @@ def run_recoded_tjpe(
                 f"gate mismatch tier)"
             )
 
-    for nick in nicks:
-        pos = nick.nick_position
+    for plan in plans:
+        pos = plan.nick_position
         if pos == site_s:
             diagnostics.append(f"nick {pos}: coincides with S")
             continue
@@ -617,28 +649,32 @@ def run_recoded_tjpe(
         arm = _partition_arm(genome, lo=lo, hi=hi, cds_mask=cds_mask, max_run=max_run)
         if arm is None:
             diagnostics.append(
-                f"nick {nick.nick_position}: arm partition failed "
+                f"nick {pos}: arm partition failed "
                 "(no synonymous CDS solution or non-monotone arm)"
             )
             continue
 
-        # rcPBS2 depends only on the nick (not the RTT variant): choose its LENGTH
-        # once per nick to hit the Tm band (decision 8), decoupled from PBS1's
-        # length. A per-nick miss here skips this nick, not the whole run.
-        rcpbs2, rcpbs2_why = _select_rcpbs2(
-            genome,
-            nick_position=pos,
-            pegrna_strand=pegrna_strand,
-            tm_lo=THRESHOLDS.pbs2_tm_lo,
-            tm_hi=THRESHOLDS.pbs2_tm_hi,
-            gc_lo=THRESHOLDS.pbs2_gc_lo,
-            gc_hi=THRESHOLDS.pbs2_gc_hi,
-            len_min=THRESHOLDS.pbs2_len_min,
-            len_max=THRESHOLDS.pbs2_len_max,
-        )
-        if rcpbs2 is None:
-            diagnostics.append(f"nick {pos}: rcPBS2 select: {rcpbs2_why}")
-            continue
+        # rcPBS2. PRIDICT path: use the genome-derived rcPBS2 the pipeline already built
+        # (derive_rc_pbs2, plan D4). GENOME path: choose its LENGTH once per nick to hit
+        # the Tm band (decision 8), decoupled from PBS1's length; a per-nick miss skips
+        # this nick, not the whole run.
+        if plan.rcpbs2 is not None:
+            rcpbs2 = plan.rcpbs2
+        else:
+            rcpbs2, rcpbs2_why = _select_rcpbs2(
+                genome,
+                nick_position=pos,
+                pegrna_strand=pegrna_strand,
+                tm_lo=THRESHOLDS.pbs2_tm_lo,
+                tm_hi=THRESHOLDS.pbs2_tm_hi,
+                gc_lo=THRESHOLDS.pbs2_gc_lo,
+                gc_hi=THRESHOLDS.pbs2_gc_hi,
+                len_min=THRESHOLDS.pbs2_len_min,
+                len_max=THRESHOLDS.pbs2_len_max,
+            )
+            if rcpbs2 is None:
+                diagnostics.append(f"nick {pos}: rcPBS2 select: {rcpbs2_why}")
+                continue
 
         for variant in variants:
             tried += 1
@@ -866,7 +902,10 @@ def run_recoded_tjpe(
             )
             parts_map = dict(rtt_components)
             gate_info["offtarget"] = (
-                f"nick {nick.nick_position}: unique on-target, 0 off-targets in tier"
+                f"nick {plan.nick_position}: PRIDICT ngRNA, off-target-screened upstream "
+                "(0 off-targets in tier)"
+                if plan.rcpbs2 is not None
+                else f"nick {plan.nick_position}: unique on-target, 0 off-targets in tier"
             )
             gate_info["recode"] = f"{arm.n_edits} synonymous codon edits (microhomology broken)"
             gate_info["inv0"] = "0 bp endogenous deletion; recode protein-silent (INV-0 held)"
@@ -889,9 +928,9 @@ def run_recoded_tjpe(
                 rtt=rtt,
                 pbs1=pbs1,
                 polyu="UUU",
-                ngrna_protospacer=nick.protospacer,
+                ngrna_protospacer=plan.protospacer,
                 site_s=site_s,
-                nick_position=nick.nick_position,
+                nick_position=plan.nick_position,
                 deletion_size=0,
                 recode_edits=arm.n_edits,
                 candidates_tried=tried,

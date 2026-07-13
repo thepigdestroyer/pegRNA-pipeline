@@ -31,12 +31,37 @@ class GateScorers:
     dock_scorer: Any
     offtarget_scorer: Callable[[List[str]], Dict[str, Tuple[float, int, bool]]]
     maxent_scorer: Any = None
+    #: PRIDICT2 runner used by the auto-spacer design path (wiring spec 2026-07-10).
+    #: ``PridictRunnerFake`` in fake mode; a local-subprocess ``PridictLocalRunner``
+    #: in real/api mode when configured, else ``None`` (auto-spacer then fails loud
+    #: only when requested — the fixed-spacer path never touches it).
+    pridict_runner: Any = None
+
+
+def _local_pridict_runner_or_none() -> Any:
+    """Build the local (subprocess) PRIDICT2 runner for the auto-spacer path, or
+    ``None`` when it is not configured.
+
+    ``PridictLocalRunner`` fails loud at construction if ``PRIDICT2_DIR`` /
+    ``PRIDICT2_PYTHON`` are unset. On a real/api box that only uses the fixed-spacer
+    path (no auto-design), that would be a spurious failure, so a missing config
+    degrades to ``None`` here; ``design_recoded`` still fails loud with an actionable
+    message if auto-spacer is actually requested without a runner. The import is
+    light (no torch/TF) and lives here so real-mode heavy-import errors surface first.
+    """
+    from pegrna_pipeline.hpc.pridict_local import PridictLocalRunner
+
+    try:
+        return PridictLocalRunner()
+    except ValueError:
+        return None
 
 
 def _fake_bundle() -> GateScorers:
     from pegrna_pipeline.hpc.complex_dock import DockFake
     from pegrna_pipeline.hpc.cryptic_splice import MaxEntScanFake
     from pegrna_pipeline.hpc.full_structure import FullStructureFake
+    from pegrna_pipeline.hpc.pridict_local import PridictRunnerFake
     from pegrna_pipeline.hpc.splice_screen import SpliceFake
     from pegrna_pipeline.hpc.structure_importance import ResidueMetrics
 
@@ -62,6 +87,7 @@ def _fake_bundle() -> GateScorers:
         dock_scorer=DockFake(apo_iptm=0.85, candidate_iptm=0.83),
         offtarget_scorer=_clean_offtarget,
         maxent_scorer=MaxEntScanFake(),  # all motifs below threshold -> gate passes
+        pridict_runner=PridictRunnerFake(),  # deterministic auto-spacer source for CI
     )
 
 
@@ -111,6 +137,8 @@ def _real_bundle(
         offtarget_scorer=offtarget,
         # MaxEntScan cryptic-splice gate (maxentpy staged in the [splice] extra).
         maxent_scorer=MaxEntScanScorer(),
+        # Local-subprocess PRIDICT2 for the auto-spacer path (None if unconfigured).
+        pridict_runner=_local_pridict_runner_or_none(),
     )
 
 
@@ -156,7 +184,9 @@ def _api_bundle(
     Every gate is REAL except that the two GPU-hard models are handled without a
     local GPU:
 
-    * splice      -> SpliceAIScorer            (TensorFlow, CPU)
+    * splice      -> _PaddedSpliceAIScorer      (SpliceAIScorer on CPU, N-padded so
+                                                 the advisory cross-check runs on
+                                                 short local design windows)
     * cryptic     -> MaxEntScanScorer          (pure-Python matrices, CPU)
     * structure   -> ViennaRNAStructureScorer  (partition-function bpp, CPU)
     * importance  -> AFDBImportanceScorer       (AlphaFold-DB web API + biotite, CPU)
@@ -170,7 +200,6 @@ def _api_bundle(
     from pegrna_pipeline.hpc.complex_dock import DockFake
     from pegrna_pipeline.hpc.complex_dock_nim import Boltz2NIMDockScorer
     from pegrna_pipeline.hpc.cryptic_splice import MaxEntScanScorer
-    from pegrna_pipeline.hpc.splice_screen import SpliceAIScorer
     from pegrna_pipeline.hpc.structure_importance import AFDBImportanceScorer
     from pegrna_pipeline.hpc.vienna_structure import ViennaRNAStructureScorer
 
@@ -195,12 +224,17 @@ def _api_bundle(
             return {p: (0.8, 0, False) for p in protospacers}
 
     return GateScorers(
-        splice_scorer=SpliceAIScorer(),
+        # N-pad short web-host design windows up to SpliceAI's >=10 kb context so the
+        # advisory cross-check actually runs here; the raw SpliceAIScorer fail-louds
+        # below that and the workflow would silently record it as an "advisory skip".
+        splice_scorer=_PaddedSpliceAIScorer(),
         full_structure_scorer=ViennaRNAStructureScorer(),
         importance_scorer=AFDBImportanceScorer(uniprot_acc or "UNKNOWN"),
         dock_scorer=dock,
         offtarget_scorer=offtarget,
         maxent_scorer=MaxEntScanScorer(),
+        # Local-subprocess PRIDICT2 for the auto-spacer path (None if unconfigured).
+        pridict_runner=_local_pridict_runner_or_none(),
     )
 
 
