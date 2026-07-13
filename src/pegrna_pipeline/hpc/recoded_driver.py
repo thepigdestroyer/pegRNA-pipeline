@@ -408,45 +408,58 @@ def design_recoded_with_het_edit(
     pre-existing phased het (specificity is capped by natural heterozygosity and
     is never manufactured). Returns both outputs and a note.
     """
+    from concurrent.futures import ThreadPoolExecutor  # Stage G: parallel reverse + het
+
     het_snps = list(het_snps or [])
-    prim = design_recoded(
-        **primary,
-        het_snps=het_snps,
-        mode=mode,
-        output_dir=(Path(output_dir) / "primary") if output_dir else None,
-    )
-    if het_edit_window is None:
-        return RecodedPairOutput(primary=prim, het_edit=None, het_edit_note="no het-edit requested")
-    opts = find_allele_specific(het_snps)
-    if not opts:
-        return RecodedPairOutput(
-            primary=prim,
-            het_edit=None,
-            het_edit_note=(
+    prim_dir = (Path(output_dir) / "primary") if output_dir else None
+
+    # Decide whether the het pass will run BEFORE dispatching. find_allele_specific is a
+    # cheap, design-free check that does not depend on the primary result, so when both
+    # passes are needed they run CONCURRENTLY (Stage G). The two designs are independent and
+    # write to separate output subdirs (primary/ vs het_edit/), so parallel execution yields
+    # the same result as the sequential order -- only the wall-clock differs.
+    opts = find_allele_specific(het_snps) if het_edit_window is not None else []
+    if het_edit_window is None or not opts:
+        prim = design_recoded(**primary, het_snps=het_snps, mode=mode, output_dir=prim_dir)
+        note = (
+            "no het-edit requested"
+            if het_edit_window is None
+            else (
                 "no discriminating phased het -> no allele-specific sense-window pair "
                 "(allele specificity is capped by natural heterozygosity, never manufactured)"
-            ),
+            )
         )
-    # The het-edit pass is advisory: a fail-loud here (no surviving sense-window
-    # candidate) must NOT kill the successful primary -- report it as a note.
+        return RecodedPairOutput(primary=prim, het_edit=None, het_edit_note=note)
+
+    het_dir = (Path(output_dir) / "het_edit") if output_dir else None
     o = opts[0]
-    try:
-        het = design_recoded(
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        fut_prim = pool.submit(
+            design_recoded, **primary, het_snps=het_snps, mode=mode, output_dir=prim_dir
+        )
+        fut_het = pool.submit(
+            design_recoded,
             **het_edit_window,
             het_snps=het_snps,
             allele_hunt=True,
             mode=mode,
-            output_dir=(Path(output_dir) / "het_edit") if output_dir else None,
+            output_dir=het_dir,
         )
-    except NoValidPegRNA as exc:
-        return RecodedPairOutput(
-            primary=prim,
-            het_edit=None,
-            het_edit_note=(
-                f"discriminating {o.side}-side {o.position_class} het present, but no "
-                f"sense-window candidate survived the gates: {exc}"
-            ),
-        )
+        # The primary is mandatory: let its failure propagate (as in the sequential path).
+        prim = fut_prim.result()
+        # The het-edit pass is advisory: a fail-loud here (no surviving sense-window
+        # candidate) must NOT kill the successful primary -- report it as a note.
+        try:
+            het = fut_het.result()
+        except NoValidPegRNA as exc:
+            return RecodedPairOutput(
+                primary=prim,
+                het_edit=None,
+                het_edit_note=(
+                    f"discriminating {o.side}-side {o.position_class} het present, but no "
+                    f"sense-window candidate survived the gates: {exc}"
+                ),
+            )
     note = (
         f"het-edit sense-window pair via {o.side}-side {o.position_class} het "
         f"(discrimination strength {o.strength:.2f}); non-coding re-templated byte-exact"
