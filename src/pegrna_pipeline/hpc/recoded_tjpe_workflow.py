@@ -348,6 +348,31 @@ def _insertion_site_footprint(
     return list(span)
 
 
+def _resolve_protein_length(protein_length: Optional[int], importance_scorer: Any) -> Optional[int]:
+    """Absolute protein length used to map the local insertion-site footprint onto the
+    AlphaFold structure.
+
+    An explicit ``protein_length`` wins. Otherwise ask the importance scorer for its own
+    structure's residue count (:meth:`AFDBImportanceScorer.protein_length`) -- the
+    authoritative source, since that is the exact structure the gate indexes -- so a real
+    run maps local->absolute WITHOUT the caller having to supply the length. Returns
+    ``None`` when neither is available (a frame-agnostic fake scorer), leaving the
+    footprint window-local; that is harmless because such a scorer ignores the residue
+    index. This removes the silent mis-index where a C-terminal knock-in was read as an
+    N-terminal core because the local window index was queried against the full protein.
+    """
+    if protein_length is not None:
+        return protein_length
+    getter = getattr(importance_scorer, "protein_length", None)
+    if callable(getter):
+        try:
+            value = getter()
+        except Exception:  # noqa: BLE001
+            return None
+        return int(value) if value else None
+    return None
+
+
 def _derive_pbs1(genome: str, *, site_s: int, pbs_length: int, pegrna_strand: str) -> str:
     """PBS1 primes off the 3'-OH the pegRNA nick creates (the pegRNA nick is at S,
     decision 1). It base-pairs antiparallel to the L genomic bases ending at the
@@ -805,7 +830,11 @@ def run_recoded_tjpe(
                 site_s,
                 cds_mask,
                 context=insertion_importance_context,
-                protein_length=protein_length,
+                # Prefer the real scorer's own residue count over the (often omitted)
+                # caller protein_length, so a C-terminal knock-in maps onto the correct
+                # absolute residues instead of silently indexing local-window residues
+                # into the full-protein structure.
+                protein_length=_resolve_protein_length(protein_length, importance_scorer),
             )
             if ins_footprint:
                 try:

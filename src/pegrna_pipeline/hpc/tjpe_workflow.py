@@ -574,13 +574,17 @@ def run_tjpe_workflow(
                 "minimum (R3, untested)"
             )
 
-    # -------- assemble final pegRNA --------
-    tjpe_pegrna = assemble_tj_pegrna(
+    # -------- assemble final pegRNA (authoritative layout, ADR 0014 / decision 0) --------
+    # The legacy 3'-terminal-rc_pbs2 assemble_tj_pegrna (v1) predates the locked
+    # tjPE structure; converge onto assemble_tj_pegrna_v2 so this path emits the same
+    # authoritative order as the recoded path: Spacer.Scaffold.rcPBS2.RTT.PBS1.PolyU.
+    # rc_pbs2 (already RC(TS) via derive_rc_pbs2) fills the HA slot; the RTT is the
+    # insert plus the scarless deletion-replacement arm.
+    tjpe_pegrna = assemble_tj_pegrna_v2(
         spacer=best_peg.spacer,
-        insert_dna=insert_full_dna,
+        pbs2=rc_pbs2,
+        rtt=insert_full_dna + restored_segment,
         pbs1=best_peg.pbs,
-        rc_pbs2=rc_pbs2,
-        restored_segment=restored_segment,
     )
 
     pe2_value = float(getattr(best_peg, _score_attr(score_cell_line)))

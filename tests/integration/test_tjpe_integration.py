@@ -54,13 +54,15 @@ def result() -> TJPEResult:
 
 
 def test_result_is_internally_consistent(result: TJPEResult):
-    # pegRNA sequence is spacer + scaffold + insert + pbs1 + rc_pbs2.
+    # Authoritative v2 layout (ADR 0014 / decision 0):
+    # spacer + scaffold + rcPBS2 + RTT(full_insert) + PBS1 + PolyU(UUU).
     reassembled = (
         result.spacer
         + STANDARD_SGRNA_SCAFFOLD
+        + result.rc_pbs2
         + result.full_insert_dna
         + result.pbs1
-        + result.rc_pbs2
+        + "UUU"
     )
     assert reassembled == result.tjpe_pegRNA_sequence
 

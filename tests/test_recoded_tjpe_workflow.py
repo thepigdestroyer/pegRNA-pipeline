@@ -9,6 +9,7 @@ from pegrna_pipeline.hpc.recoded_tjpe_workflow import (
     NoValidPegRNA,
     RecodedTJPEResult,
     _insertion_site_footprint,
+    _resolve_protein_length,
     run_recoded_tjpe,
 )
 from pegrna_pipeline.hpc.splice_screen import SpliceFake
@@ -195,6 +196,52 @@ def test_insertion_site_footprint_context_zero():
 
 def test_insertion_site_footprint_noncoding_returns_empty():
     assert _insertion_site_footprint(5, [False] * 10, context=1) == []
+
+
+def test_insertion_site_footprint_maps_local_to_absolute_with_protein_length():
+    # 300 bp all-CDS window; last coding residue local index = 299//3 = 99 anchored to
+    # the C-terminus of a 727-aa protein (residue 726). S=150 -> local residues 49/50 ->
+    # absolute 49+627 / 50+627 = 676/677 (offset 726-99=627), +/-1 context -> 675..678.
+    fp = _insertion_site_footprint(150, [True] * 300, context=1, protein_length=727)
+    assert fp == [675, 676, 677, 678]
+    # Without protein_length the same window stays window-LOCAL (the pre-fix behaviour
+    # that silently indexed local residues into the full-protein structure).
+    assert _insertion_site_footprint(150, [True] * 300, context=1) == [48, 49, 50, 51]
+
+
+class _LenScorer:
+    def __init__(self, n):
+        self._n = n
+
+    def protein_length(self):
+        return self._n
+
+    def metrics(self, i):  # pragma: no cover - not exercised here
+        raise AssertionError("metrics not needed")
+
+
+def test_resolve_protein_length_prefers_explicit():
+    assert _resolve_protein_length(727, _LenScorer(999)) == 727
+
+
+def test_resolve_protein_length_uses_scorer_when_none():
+    assert _resolve_protein_length(None, _LenScorer(727)) == 727
+
+
+def test_resolve_protein_length_none_when_scorer_has_no_length():
+    class _NoLen:
+        def metrics(self, i):  # pragma: no cover
+            raise AssertionError
+
+    assert _resolve_protein_length(None, _NoLen()) is None
+
+
+def test_resolve_protein_length_none_on_scorer_error():
+    class _Boom:
+        def protein_length(self):
+            raise RuntimeError("no AFDB entry")
+
+    assert _resolve_protein_length(None, _Boom()) is None
 
 
 class _BlockResidues:

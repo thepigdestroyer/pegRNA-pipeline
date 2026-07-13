@@ -66,13 +66,15 @@ def test_run_tjpe_workflow_end_to_end_with_fixtures():
     # rc_pbs2 length matches pbs2_length (default 17).
     assert result.rc_pbs2_length == 17
     assert len(result.rc_pbs2) == 17
-    # Full pegRNA length is the sum of components.
+    # Full pegRNA length is the sum of components in the authoritative v2 layout:
+    # spacer + scaffold + rcPBS2 + RTT(full_insert) + PBS1 + PolyU(UUU).
     expected_len = (
         len(result.spacer)
         + len(STANDARD_SGRNA_SCAFFOLD)
+        + len(result.rc_pbs2)
         + len(result.full_insert_dna)
         + len(result.pbs1)
-        + len(result.rc_pbs2)
+        + 3  # PolyU tail (2-3 U); assemble_tj_pegrna_v2 default is "UUU"
     )
     assert len(result.tjpe_pegRNA_sequence) == expected_len
 
