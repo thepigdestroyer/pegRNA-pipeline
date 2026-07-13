@@ -152,7 +152,18 @@ class PridictLocalRunner:
         result: dict[str, dict] = {}
         for row in rows:
             name = row["sequence_name"]
-            pegrnas = parse_pegrna_csv(outdir / f"{name}_pegRNA_Pridict_full.csv")
+            peg_csv = outdir / f"{name}_pegRNA_Pridict_full.csv"
+            if not peg_csv.is_file():
+                # PRIDICT can exit 0 yet write no pegRNA CSV when it skips a row (e.g.
+                # an insertion > 40 bp, or < 100 bp flanking each side). Fail loud with an
+                # actionable message instead of the bare FileNotFoundError from the parser.
+                raise RuntimeError(
+                    f"PRIDICT2 produced no output for sequence {name!r} "
+                    f"(expected {peg_csv.name}). PRIDICT ran but wrote no pegRNA CSV -- the "
+                    "edit is likely outside its design domain (insertions must be <= 40 bp) "
+                    "or the editseq had < 100 bp flanking sequence on each side."
+                )
+            pegrnas = parse_pegrna_csv(peg_csv)
             nicking = self._read_nicking(outdir / f"{name}_nicking_guides.csv")
             result[name] = {"pegrnas": pegrnas, "nicking": nicking}
         return result

@@ -108,6 +108,12 @@ def _select_top_pegrna(pegrnas: Sequence[Any]) -> Any:
         return pegrnas[0]
 
 
+#: PRIDICT2 rejects insertions longer than this ("Only insertions up to 40bp are
+#: currently supported by default!", verified on the DSI box 2026-07-13). See
+#: _design_peg1_via_pridict for why truncating the cargo to this window is safe here.
+_PRIDICT_MAX_INSERTION = 40
+
+
 def _design_peg1_via_pridict(
     *,
     genome: str,
@@ -148,7 +154,16 @@ def _design_peg1_via_pridict(
         transcript=transcript,
         fetcher=context_fetcher,
     )
-    editseq = format_tjpe_insertion_editseq(context_seq, context_site_s, cargo, min_flank=min_flank)
+    # PRIDICT2 hard-rejects insertions > 40 bp. Here PRIDICT is used ONLY as a spacer +
+    # nicking-guide designer (its RTT/PBS are discarded below), and spacer/nick placement
+    # is set by the genomic PAM landscape at site_s, not by the insert length -- so
+    # designing against the cargo's leading 40 bp yields the same guides a full-length
+    # insertion would. The FULL cargo still flows unchanged into the recoded tj-PE assembly
+    # (run_recoded_tjpe); only this PRIDICT design editseq is truncated.
+    probe_insert = cargo[:_PRIDICT_MAX_INSERTION]
+    editseq = format_tjpe_insertion_editseq(
+        context_seq, context_site_s, probe_insert, min_flank=min_flank
+    )
     batch = runner.run_batch([{"sequence_name": "peg1", "editseq": editseq}])
     entry = batch.get("peg1") or {}
     pegrnas = entry.get("pegrnas") or []

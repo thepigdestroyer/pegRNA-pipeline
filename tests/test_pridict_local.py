@@ -355,3 +355,14 @@ def test_fake_is_deterministic():
     second = fake.run_batch(rows)
     assert first["s1"]["pegrnas"][0] == second["s1"]["pegrnas"][0]
     assert first["s1"]["nicking"] == second["s1"]["nicking"]
+
+
+def test_collect_missing_pegrna_csv_raises_clear_error(tmp_path):
+    """PRIDICT can exit 0 yet write no pegRNA CSV (a skipped row, e.g. an insertion
+    > 40 bp). _collect must fail loud with an actionable message rather than let the
+    parser raise a bare FileNotFoundError."""
+    runner = pridict_local.PridictLocalRunner(
+        pridict_dir=str(tmp_path), pridict_python="/usr/bin/python3"
+    )
+    with pytest.raises(RuntimeError, match="produced no output"):
+        runner._collect(tmp_path, [{"sequence_name": "peg1", "editseq": "ACGT(+GGG)ACGT"}])
