@@ -168,3 +168,66 @@ def test_auto_spacer_fails_loud_when_no_runner_available(monkeypatch):
 def test_no_spacer_with_auto_disabled_fails_loud():
     with pytest.raises(ValueError, match="auto_spacer"):
         recoded_driver.design_recoded(**_auto_inputs(), mode="fake", auto_spacer=False)
+
+
+# ============================================================== insert truncation
+
+
+class _RecordingRunner:
+    """Captures the editseq PRIDICT is handed, then returns one gate-neutral pegRNA."""
+
+    def __init__(self, spacer: str = "ACGTACGTACGTACGTACGT") -> None:
+        self._spacer = spacer
+        self.editseq = None
+
+    def run_batch(self, rows):
+        self.editseq = rows[0]["editseq"]
+        name = rows[0]["sequence_name"]
+        return {name: {"pegrnas": [_peg(self._spacer)], "nicking": []}}
+
+
+def _bracket_insert(editseq: str) -> str:
+    """Extract the ``(+INSERT)`` insertion payload from a PRIDICT editseq."""
+    return editseq.split("(+", 1)[1].split(")", 1)[0]
+
+
+def test_pridict_editseq_truncates_cargo_to_40bp():
+    """PRIDICT2 rejects insertions > 40 bp, and here it is only a spacer/nick designer,
+    so the design editseq carries at most the cargo's leading 40 bp (the full cargo still
+    flows into the tj-PE assembly downstream). Regression for the 503 bp CTCF cargo that
+    silently produced no PRIDICT output on the DSI box."""
+    rec = _RecordingRunner()
+    cargo = "ATGC" * 20  # 80 bp, well over PRIDICT's 40 bp ceiling
+    genome = "ACGATGCATGGCATGACTGA" * 16  # 320 bp -> flanks 150/170 at site_s=150
+    spacer, _ = recoded_driver._design_peg1_via_pridict(
+        genome=genome,
+        site_s=150,
+        cargo=cargo,
+        auto_spacer=True,
+        min_flank=100,
+        runner=rec,
+        transcript=None,
+        context_fetcher=None,
+    )
+    assert spacer == "ACGTACGTACGTACGTACGT"
+    ins = _bracket_insert(rec.editseq)
+    assert len(ins) == 40
+    assert ins == cargo[:40].upper()
+
+
+def test_pridict_editseq_keeps_short_cargo_whole():
+    """A cargo <= 40 bp is passed to PRIDICT unchanged."""
+    rec = _RecordingRunner()
+    cargo = "ATGAAACCCGGG"  # 12 bp
+    genome = "ACGATGCATGGCATGACTGA" * 16
+    recoded_driver._design_peg1_via_pridict(
+        genome=genome,
+        site_s=150,
+        cargo=cargo,
+        auto_spacer=True,
+        min_flank=100,
+        runner=rec,
+        transcript=None,
+        context_fetcher=None,
+    )
+    assert _bracket_insert(rec.editseq) == cargo.upper()
