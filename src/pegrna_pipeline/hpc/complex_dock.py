@@ -14,6 +14,8 @@ from __future__ import annotations
 
 from typing import Optional, Protocol, Tuple
 
+from pegrna_pipeline.hpc.gate_thresholds import THRESHOLDS
+
 __all__ = ["ComplexDockScorer", "DockFake", "Boltz2DockScorer", "passes_docking_gate"]
 
 
@@ -187,13 +189,34 @@ class Boltz2DockScorer:
         return self._predict({"pegrna": pegrna, "cas9": cas9})
 
 
+#: AF-Multimer/AF3 boundary between the "high" and "medium" interface-ipTM bands
+#: (Evans et al. 2022; Abramson et al. 2024). The medium/likely-incorrect boundary is
+#: the credible-interface floor ``THRESHOLDS.docking_min_iptm`` (0.6), so it is not
+#: hard-coded here.
+_IPTM_HIGH_BAND = 0.8
+
+
+def _iptm_confidence_band(iptm: float, *, floor: float) -> str:
+    """Label the AlphaFold-Multimer / AF3 interface-ipTM confidence band an interface
+    falls in (Evans et al. 2022; Abramson et al. 2024 Nature): ``ipTM >= 0.8`` high,
+    ``floor <= ipTM < 0.8`` medium, ``ipTM < floor`` likely-incorrect. ``floor`` is the
+    credible-interface cutoff (``THRESHOLDS.docking_min_iptm``), so a run using a custom
+    floor annotates against that same floor.
+    """
+    if iptm >= _IPTM_HIGH_BAND:
+        return f"high (ipTM>={_IPTM_HIGH_BAND:g})"
+    if iptm >= floor:
+        return f"medium ({floor:g}-{_IPTM_HIGH_BAND:g})"
+    return f"likely-incorrect (<{floor:g})"
+
+
 def passes_docking_gate(
     pegrna: str,
     cas9: str,
     *,
     scorer: ComplexDockScorer,
-    max_drop: float = 0.2,
-    min_iptm: float = 0.6,
+    max_drop: float = THRESHOLDS.docking_max_drop,
+    min_iptm: float = THRESHOLDS.docking_min_iptm,
     metrics: Optional[dict] = None,
 ) -> Tuple[bool, str]:
     """HARD GATE on scaffold-Cas9 docking (interface ipTM).
@@ -201,16 +224,26 @@ def passes_docking_gate(
     Rejects if the candidate interface ipTM either (a) falls below ``min_iptm``
     (AlphaFold-Multimer/AF3 "likely incorrect" floor, 0.6) or (b) drops by more
     than ``max_drop`` (one full confidence band, 0.2) relative to the apo
-    scaffold-Cas9 baseline. Defaults are literature-derived (see
-    gate_thresholds.THRESHOLDS: Evans 2022, Abramson 2024).
+    scaffold-Cas9 baseline.
+
+    The floor and band annotation are single-sourced from
+    :data:`pegrna_pipeline.hpc.gate_thresholds.THRESHOLDS` (``docking_min_iptm`` /
+    ``docking_max_drop``), whose citation records the AF-Multimer/AF3 interpretation:
+    ipTM ``>= 0.8`` high, ``0.6-0.8`` medium, ``< 0.6`` likely incorrect (Evans et al.
+    2022; Abramson et al. 2024 Nature). Every candidate's ipTM is annotated with the band
+    it lands in -- so a borderline pass (e.g. 0.64 = medium) and a rejection (e.g. 0.45 =
+    likely-incorrect) are both legible in the report, and a near-floor result reads as an
+    AF-multimer confidence band rather than an opaque threshold miss.
 
     If ``metrics`` is supplied it is populated with the raw values and cutoffs
-    (interface ipTM vs the min-ipTM floor, plus apo baseline / drop vs max-drop)
-    for the caller's progress display; it never changes the return value.
+    (interface ipTM vs the min-ipTM floor, plus apo baseline / drop vs max-drop, and the
+    AF-multimer band) for the caller's progress display; it never changes the return
+    value.
     """
     apo = scorer.apo_interface_iptm(cas9)
     cand = scorer.interface_iptm(pegrna, cas9)
     drop = apo - cand
+    band = _iptm_confidence_band(cand, floor=min_iptm)
     if metrics is not None:
         metrics.update(
             {
@@ -218,17 +251,21 @@ def passes_docking_gate(
                 "value": round(cand, 3),
                 "cutoff": min_iptm,
                 "cmp": ">=",
-                "extra": f"apo {apo:.2f}→{cand:.2f}, drop {drop:.2f} (max {max_drop})",
+                "extra": (
+                    f"apo {apo:.2f}->{cand:.2f}, drop {drop:.2f} (max {max_drop}); "
+                    f"AF-multimer band: {band}"
+                ),
             }
         )
     if cand < min_iptm - 1e-9:
         return False, (
-            f"scaffold-Cas9 interface ipTM {cand:.2f} < {min_iptm} "
-            "(AF-multimer 'likely incorrect' floor)"
+            f"scaffold-Cas9 interface ipTM {cand:.2f} < {min_iptm:g} floor -- AF-multimer "
+            f"'{band}' band (Evans 2022; Abramson 2024: >={_IPTM_HIGH_BAND:g} high, "
+            f"{min_iptm:g}-{_IPTM_HIGH_BAND:g} medium, <{min_iptm:g} likely incorrect)"
         )
     if drop > max_drop + 1e-9:  # epsilon guards float artefacts at the exact boundary
         return False, (
             f"scaffold-Cas9 interface ipTM dropped {drop:.2f} "
-            f"(apo {apo:.2f} -> {cand:.2f} > {max_drop})"
+            f"(apo {apo:.2f} -> {cand:.2f} > {max_drop}; {band} band)"
         )
-    return True, f"interface preserved (apo {apo:.2f} -> {cand:.2f})"
+    return True, f"interface preserved (apo {apo:.2f} -> {cand:.2f}; AF-multimer band: {band})"

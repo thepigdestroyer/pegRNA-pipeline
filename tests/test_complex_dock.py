@@ -33,6 +33,47 @@ def test_docking_gate_default_thresholds_are_literature_values():
     assert ok is True  # within one confidence band and above floor
 
 
+def test_docking_gate_defaults_single_sourced_from_thresholds():
+    import inspect
+
+    from pegrna_pipeline.hpc.gate_thresholds import THRESHOLDS
+
+    sig = inspect.signature(passes_docking_gate)
+    assert sig.parameters["min_iptm"].default == THRESHOLDS.docking_min_iptm == 0.6
+    assert sig.parameters["max_drop"].default == THRESHOLDS.docking_max_drop == 0.2
+
+
+def test_docking_gate_annotates_medium_band_on_borderline_pass():
+    # 0.64 clears the 0.6 floor with a small drop -> passes, and is annotated as the
+    # AF-multimer MEDIUM band (0.6-0.8): a borderline result the report should flag.
+    scorer = DockFake(apo_iptm=0.70, candidate_iptm=0.64)
+    ok, detail = passes_docking_gate("PEGRNA", "nCas9", scorer=scorer)
+    assert ok is True
+    assert "medium" in detail and "band" in detail.lower()
+
+
+def test_docking_gate_annotates_high_band_on_confident_pass():
+    scorer = DockFake(apo_iptm=0.90, candidate_iptm=0.85)
+    ok, detail = passes_docking_gate("PEGRNA", "nCas9", scorer=scorer)
+    assert ok is True
+    assert "high" in detail
+
+
+def test_docking_gate_below_floor_annotates_band_and_cites_af_multimer():
+    scorer = DockFake(apo_iptm=0.85, candidate_iptm=0.45)
+    ok, detail = passes_docking_gate("PEGRNA", "nCas9", scorer=scorer)
+    assert ok is False
+    assert "floor" in detail and "likely-incorrect" in detail
+    assert "Evans" in detail and "Abramson" in detail
+
+
+def test_docking_gate_metrics_carry_band_annotation():
+    scorer = DockFake(apo_iptm=0.85, candidate_iptm=0.82)
+    m: dict = {}
+    passes_docking_gate("PEGRNA", "nCas9", scorer=scorer, metrics=m)
+    assert "AF-multimer band" in m["extra"] and "high" in m["extra"]
+
+
 def test_real_boltz_adapter_errors_without_gpu():
     from pegrna_pipeline.hpc.complex_dock import Boltz2DockScorer
 
