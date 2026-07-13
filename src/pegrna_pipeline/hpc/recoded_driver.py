@@ -12,11 +12,12 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Optional, Sequence, Tuple, Union
+from typing import Any, Callable, List, Optional, Sequence, Tuple, Union
 
 from pegrna_pipeline.hpc.allele_specificity import find_allele_specific
 from pegrna_pipeline.hpc.data_types import DEFAULT_SCORE_CELL_LINE, _score_attr
 from pegrna_pipeline.hpc.input_formatter import format_tjpe_insertion_editseq
+from pegrna_pipeline.hpc.pridict_ngrna import build_pridict_ngrnas, resolve_pridict_context
 from pegrna_pipeline.hpc.recoded_tjpe_workflow import (
     NoValidPegRNA,
     RecodedTJPEResult,
@@ -107,7 +108,7 @@ def _select_top_pegrna(pegrnas: Sequence[Any]) -> Any:
         return pegrnas[0]
 
 
-def _auto_design_spacer(
+def _design_peg1_via_pridict(
     *,
     genome: str,
     site_s: int,
@@ -115,14 +116,20 @@ def _auto_design_spacer(
     auto_spacer: bool,
     min_flank: int,
     runner: Any,
-) -> str:
-    """Design the pegRNA#1 spacer at the insert site via the injected PRIDICT2 runner.
+    transcript: Optional[str],
+    context_fetcher: Optional[Callable[[str], str]],
+) -> Tuple[str, List[dict]]:
+    """Design pegRNA#1 at the insert site via the injected PRIDICT2 runner; return its
+    spacer AND the PRIDICT nicking-guide rows (the ngRNA candidate source).
 
-    Builds the ``(+cargo)`` insertion editseq at ``site_s``, runs one PRIDICT batch,
-    and returns the top pegRNA's spacer. Fail-loud (never guesses a spacer): raises if
-    auto-design is disabled, no runner is available, or PRIDICT yields no pegRNA. The
-    runner is injected (fake in CI, local subprocess in real/api), so this never
-    imports or launches real PRIDICT2 itself.
+    ONE PRIDICT batch yields both the pegRNA#1 (whose top-PE2 row's spacer becomes the
+    auto-spacer) and its ``*_nicking_guides.csv`` rows (under the ``"nicking"`` key), so
+    the ngRNA is sourced from the SAME run -- PRIDICT is never invoked twice. The editseq
+    window is chosen by :func:`resolve_pridict_context` (the provided window when it has
+    ``>= min_flank`` bp each side, else an auto-fetched wider GRCh38 window). Fail-loud
+    (never guesses): raises if auto-design is disabled, no runner is available, or PRIDICT
+    yields no pegRNA. The runner is injected (fake in CI, local subprocess in real/api),
+    so this never imports or launches real PRIDICT2 itself.
     """
     if not auto_spacer:
         raise ValueError(
@@ -134,7 +141,14 @@ def _auto_design_spacer(
             "configure PRIDICT2_DIR/PRIDICT2_PYTHON for mode 'real'/'api', or pass "
             "pridict_runner="
         )
-    editseq = format_tjpe_insertion_editseq(genome, site_s, cargo, min_flank=min_flank)
+    context_seq, context_site_s = resolve_pridict_context(
+        genome=genome,
+        site_s=site_s,
+        min_flank=min_flank,
+        transcript=transcript,
+        fetcher=context_fetcher,
+    )
+    editseq = format_tjpe_insertion_editseq(context_seq, context_site_s, cargo, min_flank=min_flank)
     batch = runner.run_batch([{"sequence_name": "peg1", "editseq": editseq}])
     entry = batch.get("peg1") or {}
     pegrnas = entry.get("pegrnas") or []
@@ -143,7 +157,7 @@ def _auto_design_spacer(
             f"PRIDICT returned no pegRNA for the auto-spacer pegRNA#1 editseq at "
             f"site_s={site_s}; cannot auto-design a spacer"
         )
-    return _select_top_pegrna(pegrnas).spacer
+    return _select_top_pegrna(pegrnas).spacer, list(entry.get("nicking") or [])
 
 
 def design_recoded(
@@ -170,6 +184,9 @@ def design_recoded(
     # the auto-spacer editseq must carry >= 100 bp each side of the insert site.
     pridict_min_flank: int = 100,
     pridict_runner: Optional[Any] = None,
+    transcript: Optional[str] = None,
+    context_fetcher: Optional[Callable[[str], str]] = None,
+    pridict_pbs2_length: int = 17,
     output_dir: Optional[Union[str, Path]] = None,
     manifest: Optional[dict] = None,
     uniprot_acc: str = "",
@@ -186,11 +203,17 @@ def design_recoded(
     """Run the recoded TJ-PE design end-to-end and (optionally) write a report.
 
     The pegRNA ``spacer`` is optional. When omitted and ``auto_spacer`` is ``True``
-    (the default), PRIDICT2 designs pegRNA#1 at the insert site and the pipeline
-    adopts its spacer (``pridict_min_flank`` sets the required flank each side of the
-    editseq); the ngRNA-nick enumeration, recode arm, and gate cascade are unchanged.
-    Passing an explicit ``spacer`` keeps the historical fixed-spacer path and never
-    invokes PRIDICT. The runner is injected — an explicit ``pridict_runner`` wins,
+    (the default), PRIDICT2 designs pegRNA#1 at the insert site and the pipeline adopts
+    its spacer (``pridict_min_flank`` sets the required flank each side of the editseq;
+    a too-short ``genome`` window is widened via ``transcript`` + ``context_fetcher``).
+    The ngRNA is then sourced from the SAME PRIDICT run's nicking guides: the pipeline
+    selects by distance window + opposite strand + DeepCas9 score, off-target-gates the
+    choice (advancing to the next nicking candidate on failure — the NICK lever), and
+    derives rcPBS2 from the genome 5' of the nick. When PRIDICT yields no admissible
+    ngRNA, the design falls back to the genome-enumerated ngRNA path; the recode arm and
+    gate cascade are unchanged either way. Passing an explicit ``spacer`` keeps the
+    historical fixed-spacer + genome-enumerated-ngRNA path and never invokes PRIDICT.
+    The runner is injected — an explicit ``pridict_runner`` wins,
     else the scorer bundle's (``PridictRunnerFake`` in fake mode, a local-subprocess
     ``PridictLocalRunner`` in real/api). Auto-spacer fails loud if no runner is
     available or PRIDICT returns no pegRNA.
@@ -231,15 +254,34 @@ def design_recoded(
     # spacer keeps the historical fixed-spacer path unchanged (it never touches the
     # runner). The runner is injected — an explicit ``pridict_runner`` wins, else the
     # scorer bundle's (PridictRunnerFake in fake mode) — so CI never runs real PRIDICT.
+    injected_ngrnas = None
     if spacer is None:
-        spacer = _auto_design_spacer(
+        runner = pridict_runner if pridict_runner is not None else scorers.pridict_runner
+        spacer, nicking_rows = _design_peg1_via_pridict(
             genome=genome,
             site_s=site_s,
             cargo=cargo,
             auto_spacer=auto_spacer,
             min_flank=pridict_min_flank,
-            runner=pridict_runner if pridict_runner is not None else scorers.pridict_runner,
+            runner=runner,
+            transcript=transcript,
+            context_fetcher=context_fetcher,
         )
+        # ngRNA from the SAME PRIDICT run: the pipeline selects by distance window +
+        # opposite strand + DeepCas9 score, off-target-gates the choice (NICK lever), and
+        # derives rcPBS2 (plan D4). An empty result (no admissible/off-target-clean PRIDICT
+        # nick) falls back to the genome-enumerated ngRNA path inside run_recoded_tjpe.
+        injected = build_pridict_ngrnas(
+            nicking_rows,
+            genome=genome,
+            site_s=site_s,
+            pegrna_strand=pegrna_strand,
+            ngrna_distance_min=ngrna_distance_min,
+            ngrna_distance_max=ngrna_distance_max,
+            offtarget_scorer=scorers.offtarget_scorer,
+            pbs2_length=pridict_pbs2_length,
+        )
+        injected_ngrnas = injected or None
 
     result = run_recoded_tjpe(
         spacer=spacer,
@@ -266,6 +308,7 @@ def design_recoded(
         protein_length=protein_length,
         structure_threshold=structure_threshold,
         on_gate=progress_cb,
+        injected_ngrnas=injected_ngrnas,
     )
 
     manifest = dict(manifest or {})
