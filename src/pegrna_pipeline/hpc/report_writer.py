@@ -684,6 +684,18 @@ def render_recoded_report(result, manifest: dict) -> str:
     lines: List[str] = []
     lines.append("=== Recoded TJ-PE pegRNA design ===")
     lines.append("")
+    # Stand-in gates must be impossible to miss: a reader ordering DNA off this
+    # report has to know which verdicts came from a real model and which did not.
+    stand_in = str(manifest.get("stand_in_gates", "") or "")
+    if stand_in:
+        lines.append("*** NOT A VALIDATED DESIGN - STAND-IN GATES IN USE ***")
+        lines.append(f"  The following gates did NOT run a real model: {stand_in}")
+        lines.append("  Their verdicts below are placeholders, not evidence.")
+        if str(manifest.get("scorer_mode", "")) == "fake":
+            lines.append("  scorer_mode=fake: this whole run is a dry run of the design logic.")
+        else:
+            lines.append("  Re-run with the missing credentials/resources before ordering DNA.")
+        lines.append("")
     lines.append("Full construct (pegRNA, 5'->3' = Spacer.Scaffold.rcPBS2.RTT.PBS1.PolyU):")
     lines.append(f"  spacer : {result.spacer}")
     lines.append(f"  rcPBS2 : {result.rcpbs2}")

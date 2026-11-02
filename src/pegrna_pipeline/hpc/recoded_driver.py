@@ -124,6 +124,7 @@ def _design_peg1_via_pridict(
     runner: Any,
     transcript: Optional[str],
     context_fetcher: Optional[Callable[[str], str]],
+    offline: bool = False,
 ) -> Tuple[str, List[dict]]:
     """Design pegRNA#1 at the insert site via the injected PRIDICT2 runner; return its
     spacer AND the PRIDICT nicking-guide rows (the ngRNA candidate source).
@@ -147,12 +148,27 @@ def _design_peg1_via_pridict(
             "configure PRIDICT2_DIR/PRIDICT2_PYTHON for mode 'real'/'api', or pass "
             "pridict_runner="
         )
+    fetcher = context_fetcher
+    resolve_transcript = transcript
+    if offline and fetcher is None:
+        # ``resolve_pridict_context`` only calls the fetcher when it has a transcript
+        # to fetch for; offline padding does not depend on one, so supply a sentinel.
+        resolve_transcript = transcript or "offline-fake-mode"
+
+        # fake mode is a dry run of the design logic and is documented as needing no
+        # external service, so it must not reach for Ensembl when the supplied window
+        # is short. PRIDICT is a fake here too, so N-padding to min_flank exercises
+        # exactly the same code path without inventing genomic sequence.
+        def fetcher(_transcript: str) -> str:  # noqa: ARG001
+            pad = "N" * min_flank
+            return pad + genome + pad
+
     context_seq, context_site_s = resolve_pridict_context(
         genome=genome,
         site_s=site_s,
         min_flank=min_flank,
-        transcript=transcript,
-        fetcher=context_fetcher,
+        transcript=resolve_transcript,
+        fetcher=fetcher,
     )
     # PRIDICT2 hard-rejects insertions > 40 bp. Here PRIDICT is used ONLY as a spacer +
     # nicking-guide designer (its RTT/PBS are discarded below), and spacer/nick placement
@@ -281,6 +297,7 @@ def design_recoded(
             runner=runner,
             transcript=transcript,
             context_fetcher=context_fetcher,
+            offline=(mode == "fake"),
         )
         # ngRNA from the SAME PRIDICT run: the pipeline selects by distance window +
         # opposite strand + DeepCas9 score, off-target-gates the choice (NICK lever), and
@@ -328,6 +345,11 @@ def design_recoded(
 
     manifest = dict(manifest or {})
     manifest.setdefault("scorer_mode", mode)
+    # Declare any gate served by a stand-in (e.g. api mode with no NVIDIA key ->
+    # docking). The report renders this as a banner: a reader must never mistake a
+    # stand-in verdict for a real one, because DNA gets ordered off these reports.
+    if scorers.stub_gates:
+        manifest.setdefault("stand_in_gates", ", ".join(scorers.stub_gates))
     report_text = render_recoded_report(result, manifest=manifest)
     csv_text = render_recoded_csv(result, manifest=manifest)
 
@@ -354,6 +376,10 @@ def design_recoded(
                     "deletion_size": result.deletion_size,
                     "candidates_tried": result.candidates_tried,
                     "warnings": result.warnings,
+                    # Which gates ran a stand-in instead of a real model, so the UI
+                    # can mark those nodes rather than showing a real-looking score.
+                    "stand_in_gates": list(scorers.stub_gates),
+                    "scorer_mode": mode,
                 }
             )
         )

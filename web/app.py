@@ -59,9 +59,30 @@ SUPPORTED_MODES = ["fake", "api"]
 # Each mode runs in its own conda env. The env root and both interpreter paths
 # are env-overridable so this deploys on any host (not just the original box).
 CONDA_ENVS = os.environ.get("PEGRNA_CONDA_ENVS", "/mnt/data3/jmoore3/miniconda3/envs")
+
+
+def _api_python() -> str:
+    """Interpreter for `api` mode.
+
+    Prefers an explicit ``PEGRNA_API_PYTHON``, then the conventional
+    ``pegrna-real`` conda env, and finally the interpreter already running this
+    app. Without the fallback a deployment that installed the api stack into the
+    current environment (pip/uv rather than that specific conda layout) would
+    point at a path that does not exist and every api run would die with a bare
+    "failed to launch" — the behaviour seen on any host but the original box.
+    """
+    explicit = os.environ.get("PEGRNA_API_PYTHON")
+    if explicit:
+        return explicit
+    conda = Path(f"{CONDA_ENVS}/pegrna-real/bin/python")
+    if conda.exists():
+        return str(conda)
+    return sys.executable
+
+
 MODE_PYTHON = {
     "fake": os.environ.get("PEGRNA_WEB_PYTHON", sys.executable),
-    "api": os.environ.get("PEGRNA_API_PYTHON", f"{CONDA_ENVS}/pegrna-real/bin/python"),
+    "api": _api_python(),
 }
 
 # NVIDIA API key for the Boltz-2 NIM docking gate. Read from (in order) the

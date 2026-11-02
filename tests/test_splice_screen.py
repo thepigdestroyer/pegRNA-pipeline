@@ -8,6 +8,28 @@ from pegrna_pipeline.hpc.splice_screen import (
 )
 
 
+def _spliceai_installed() -> bool:
+    """True when the real SpliceAI stack is importable in this environment."""
+    import importlib.util
+
+    try:
+        return importlib.util.find_spec("spliceai") is not None and (
+            importlib.util.find_spec("tf_keras") is not None
+            or importlib.util.find_spec("keras") is not None
+        )
+    except (ImportError, ValueError):  # pragma: no cover - defensive
+        return False
+
+
+# The two tests below assert the adapter FAILS LOUD when the weights are absent.
+# That contract is only observable without the deps, so they are skipped (not
+# failed) on a host where the real `[splice]` stack is installed.
+needs_no_spliceai = pytest.mark.skipif(
+    _spliceai_installed(),
+    reason="asserts the missing-dependency path; the real SpliceAI stack is installed here",
+)
+
+
 def test_splice_gate_blocks_high_delta():
     scorer = SpliceFake(delta=0.6)  # strong predicted disruption
     ok, detail = passes_splice_gate("ACGT" * 30, "ACGA" * 30, scorer=scorer, max_delta=0.2)
@@ -27,6 +49,7 @@ def test_splice_gate_boundary_is_blocking():
     assert ok is False
 
 
+@needs_no_spliceai
 def test_real_adapter_importerror_without_weights():
     # With adequate, length-matched context the real adapter reaches the weight
     # import and fails loud (ImportError) absent deps — never silently skipped.
@@ -46,6 +69,7 @@ def test_real_adapter_fails_loud_on_short_context():
         SpliceAIScorer().delta("ACGT" * 30, "ACGA" * 30)
 
 
+@needs_no_spliceai
 def test_real_adapter_handles_indel_length_mismatch():
     # Indel edits (recoded-TJPE: the edited allele is longer/shorter than the
     # reference by the cargo insert) are now handled via prefix/suffix alignment,

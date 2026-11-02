@@ -7,14 +7,13 @@ The 20-nt core is padded with the minimum G's to a multiple of 3 so it never
 frameshifts a downstream CDS while keeping the start G-rich (C would be wrong).
 """
 
-from Bio.Seq import Seq
-
 import pytest
+from Bio.Seq import Seq
 
 from pegrna_pipeline.hpc.insert_elements import (
     RC_T7G_PROMOTER,
-    T7G_PROMOTER,
     T7_CORE,
+    T7G_PROMOTER,
     InsertElement,
     assemble_insert,
     get_promoter,

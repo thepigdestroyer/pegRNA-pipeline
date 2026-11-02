@@ -45,9 +45,16 @@ recode = [
 splice = [
     "spliceai>=1.3",
     "tensorflow>=2.6",
+    # SpliceAI ships legacy Keras-2 .h5 weights. TensorFlow >= 2.16 makes `keras`
+    # Keras 3, which cannot load them, so the adapter prefers this Keras-2 shim.
+    "tf-keras>=2.16",
+    # spliceai's own __init__ imports pkg_resources, removed in setuptools >= 81.
+    "setuptools<81",
     # maxentpy (MaxEntScan, primary cryptic-splice gate) is NOT pip-installable on
-    # Python 3.11 (broken C ext); it is staged pure-Python from source by
-    # scripts/hpc/stage_models.sh (like RiNALMo/RNAformer/Boltz).
+    # Python >= 3.11 (its pre-generated Cython _hashseq.c uses the private
+    # longintrepr.h). The pure-Python scorer is all the pipeline uses, so install
+    # the vendored copy without its C extension:
+    #     scripts/install_maxentpy.sh
 ]
 importance = [
     "biotite>=0.40",
@@ -78,7 +85,19 @@ addopts = "-ra"
 [tool.ruff]
 line-length = 100
 target-version = "py310"
+# Vendored third-party source — keep it byte-identical to upstream.
+extend-exclude = ["web/maxentpy_src"]
+
+[tool.ruff.lint]
+# Pin the rule set explicitly. Ruff's *default* selection has widened over time,
+# so leaving this implicit means `ruff check` reports a different set of errors
+# depending on which ruff the CI runner happens to resolve -- the repo went from
+# clean to 754 errors without a line of source changing. These are the rules the
+# codebase was written and reviewed against; widen deliberately, not by upgrade.
+select = ["E4", "E7", "E9", "F", "I"]
 
 [tool.black]
 line-length = 100
 target-version = ["py310"]
+# Vendored third-party source — keep it byte-identical to upstream.
+force-exclude = "web/maxentpy_src"

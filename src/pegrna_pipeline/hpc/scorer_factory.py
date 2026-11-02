@@ -36,6 +36,11 @@ class GateScorers:
     #: in real/api mode when configured, else ``None`` (auto-spacer then fails loud
     #: only when requested — the fixed-spacer path never touches it).
     pridict_runner: Any = None
+    #: Gates in this bundle served by a STAND-IN rather than the real model, e.g.
+    #: ``("docking",)`` for an api run with no ``NVIDIA_API_KEY``. Threaded into the
+    #: run manifest so a report can never pass a stand-in verdict off as a real one
+    #: (a design is ordered as DNA off these reports — silence here is a safety bug).
+    stub_gates: Tuple[str, ...] = ()
 
 
 def _local_pridict_runner_or_none() -> Any:
@@ -88,6 +93,16 @@ def _fake_bundle() -> GateScorers:
         offtarget_scorer=_clean_offtarget,
         maxent_scorer=MaxEntScanFake(),  # all motifs below threshold -> gate passes
         pridict_runner=PridictRunnerFake(),  # deterministic auto-spacer source for CI
+        # Every gate here is a stand-in by construction — fake mode is a dry run.
+        stub_gates=(
+            "splice",
+            "structure",
+            "importance",
+            "docking",
+            "offtarget",
+            "cryptic",
+            "pridict",
+        ),
     )
 
 
@@ -203,14 +218,16 @@ def _api_bundle(
     from pegrna_pipeline.hpc.structure_importance import AFDBImportanceScorer
     from pegrna_pipeline.hpc.vienna_structure import ViennaRNAStructureScorer
 
+    stubs: List[str] = []
     key = nvidia_api_key or os.environ.get("NVIDIA_API_KEY")
     if key:
         dock: Any = Boltz2NIMDockScorer(api_key=key)
     else:
         # No key -> cannot call the hosted GPU model. Run every other gate for real
-        # and use a neutral stand-in for docking (flagged loudly by the caller via
-        # the DOCKING_STUB marker) rather than failing the whole design.
+        # and use a neutral stand-in for docking rather than failing the whole
+        # design. Recorded in ``stub_gates`` so the report says so in plain text.
         dock = DockFake(apo_iptm=0.85, candidate_iptm=0.83)
+        stubs.append("docking")
 
     if genome:
         from pegrna_pipeline.hpc.offtarget_scorer import CasOffinderScorer
@@ -219,6 +236,8 @@ def _api_bundle(
             genome=genome, pam=pam, max_mismatches=max_mismatches
         )
     else:
+        # No genome FASTA -> cas-offinder cannot run. Clean-pass stand-in, declared.
+        stubs.append("offtarget")
 
         def offtarget(protospacers: List[str]) -> Dict[str, Tuple[float, int, bool]]:
             return {p: (0.8, 0, False) for p in protospacers}
@@ -235,6 +254,7 @@ def _api_bundle(
         maxent_scorer=MaxEntScanScorer(),
         # Local-subprocess PRIDICT2 for the auto-spacer path (None if unconfigured).
         pridict_runner=_local_pridict_runner_or_none(),
+        stub_gates=tuple(stubs),
     )
 
 

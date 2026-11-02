@@ -7,9 +7,8 @@ are the point: feeding the wrong strand operation (plain ``complement`` or plain
 proving the pipeline enforces the three-way distinction.
 """
 
-from Bio.Seq import Seq
-
 import pytest
+from Bio.Seq import Seq
 
 from pegrna_pipeline.hpc.strand_orientation import orient_rtt_tail
 from pegrna_pipeline.hpc.tprt_sim import TPRTMismatch, simulate_tprt

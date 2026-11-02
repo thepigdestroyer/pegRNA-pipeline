@@ -5,9 +5,9 @@ import pytest
 from pegrna_pipeline.agent.construct_parser import (
     Construct,
     ResolvedComponent,
+    parse_components,
     resolve_construct,
     tokenize,
-    parse_components,
 )
 from pegrna_pipeline.agent.motif_library import MotifLibrary
 
