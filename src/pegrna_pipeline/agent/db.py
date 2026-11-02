@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from pathlib import Path
+
 from sqlalchemy import Column, DateTime, String, create_engine
 from sqlalchemy.orm import DeclarativeBase, Session
 

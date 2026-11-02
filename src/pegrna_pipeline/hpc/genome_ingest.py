@@ -25,6 +25,7 @@ default real fetcher uses ``requests``.
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Callable, List, Optional, Sequence
 
 from pegrna_pipeline.hpc.genome_context import (
@@ -40,13 +41,87 @@ __all__ = ["fetch_genomic_context", "build_genomic_context"]
 _ENSEMBL = "https://rest.ensembl.org"
 
 
+def _cache_dir() -> "Path":
+    """Directory for cached Ensembl payloads (``PEGRNA_CACHE_DIR`` overrides)."""
+    import os  # noqa: PLC0415
+    from pathlib import Path  # noqa: PLC0415
+
+    root = os.environ.get("PEGRNA_CACHE_DIR") or os.path.join(
+        os.path.expanduser("~"), ".cache", "pegrna"
+    )
+    path = Path(root) / "ensembl"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def _cache_key(url: str, params: dict) -> str:
+    import hashlib  # noqa: PLC0415
+    import json as _json  # noqa: PLC0415
+
+    raw = url + "?" + _json.dumps(params, sort_keys=True)
+    return hashlib.sha256(raw.encode()).hexdigest()[:32]
+
+
 def _real_http_get(url: str, **params) -> dict:  # pragma: no cover - network path
+    """GET an Ensembl REST payload, with an on-disk cache and bounded retries.
+
+    Ensembl is slow and rate-limited: a transcript lookup for a large gene can take
+    ~30 s and 429/503 responses are routine. Without this, one blip kills a design
+    that is otherwise entirely local, and every re-run re-pays the full cost.
+
+    * Cached by URL+params under ``PEGRNA_CACHE_DIR`` (default ``~/.cache/pegrna``).
+      Reference GRCh38 payloads are immutable for a given Ensembl release, so the
+      cache has no TTL; delete the directory to force a refresh.
+    * Retries 429/5xx and connection errors with exponential backoff, honouring
+      ``Retry-After`` when Ensembl sends it.
+    """
+    import json as _json  # noqa: PLC0415
+    import os  # noqa: PLC0415
+    import time  # noqa: PLC0415
+
     import requests  # noqa: PLC0415
 
+    cache_path = _cache_dir() / f"{_cache_key(url, params)}.json"
+    if cache_path.exists():
+        try:
+            return _json.loads(cache_path.read_text())
+        except ValueError:
+            cache_path.unlink(missing_ok=True)  # corrupt entry -> refetch
+
+    attempts = int(os.environ.get("PEGRNA_ENSEMBL_RETRIES", "4"))
+    timeout = int(os.environ.get("PEGRNA_ENSEMBL_TIMEOUT", "120"))
     headers = {"Content-Type": "application/json"}
-    resp = requests.get(url, headers=headers, params=params, timeout=60)
-    resp.raise_for_status()
-    return resp.json()
+    last_exc: Exception | None = None
+    for attempt in range(attempts):
+        if attempt:
+            time.sleep(min(2**attempt, 30))
+        try:
+            resp = requests.get(url, headers=headers, params=params, timeout=timeout)
+        except requests.RequestException as exc:
+            last_exc = exc
+            continue
+        if resp.status_code in (429, 500, 502, 503, 504):
+            retry_after = resp.headers.get("Retry-After")
+            if retry_after:
+                try:
+                    time.sleep(min(float(retry_after), 30))
+                except ValueError:
+                    pass
+            last_exc = requests.HTTPError(f"{resp.status_code} from Ensembl", response=resp)
+            continue
+        resp.raise_for_status()
+        payload = resp.json()
+        try:
+            cache_path.write_text(_json.dumps(payload))
+        except OSError:
+            pass  # a read-only cache dir must not fail the design
+        return payload
+    raise RuntimeError(
+        f"Ensembl request failed after {attempts} attempts: {url} "
+        f"(last error: {last_exc}). Ensembl is rate-limited and intermittently "
+        f"unavailable; retry later, or pass a genome window wide enough that no "
+        f"fetch is needed (>= the PRIDICT min_flank each side of site_s)."
+    ) from last_exc
 
 
 def build_genomic_context(

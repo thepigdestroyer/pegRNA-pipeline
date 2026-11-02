@@ -9,7 +9,6 @@ EnumerationResult has fields:
 import math
 from dataclasses import fields
 
-
 from pegrna_pipeline.hpc.codon_expander import (
     CODONS_BY_AA,
     EnumerationResult,

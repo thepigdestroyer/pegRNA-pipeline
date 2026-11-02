@@ -21,8 +21,8 @@ from pegrna_pipeline.hpc.data_types import (
     VariantScore,
 )
 from pegrna_pipeline.hpc.pe7_workflow import (
-    PE7Result,
     PRIDICT_MAX_INSERT_BP,
+    PE7Result,
     run_pe7_workflow,
 )
 

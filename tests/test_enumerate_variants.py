@@ -12,7 +12,6 @@ enumerate_variants must:
 import itertools
 from typing import List, Tuple
 
-
 from pegrna_pipeline.hpc.codon_expander import (
     CODONS_BY_AA,
     CodonVariant,

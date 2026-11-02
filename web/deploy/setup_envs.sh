@@ -61,8 +61,11 @@ run "$WEB_ENV" python -m pip install -q -r "$PEGRNA_REPO/web/requirements.txt"
 
 # --- pegrna-real (api mode) --------------------------------------------------
 if [ ! -x "$REAL_ENV/bin/python" ]; then
-  log "creating pegrna-real (+ ViennaRNA from conda-forge)"
-  create "$REAL_ENV" viennarna
+  # cas-offinder (bioconda) powers the real off-target gate. Without the binary
+  # the gate silently degrades to a clean-pass stand-in, so install it here and
+  # not only in the HPC environment.yml.
+  log "creating pegrna-real (+ ViennaRNA, cas-offinder)"
+  create "$REAL_ENV" viennarna cas-offinder
 fi
 log "pegrna-real: install CLI + api model stack (CPU) + web layer"
 run "$REAL_ENV" python -m pip install -q --upgrade pip
@@ -74,17 +77,17 @@ run "$REAL_ENV" python -m pip install -q "tensorflow-cpu" "setuptools<81"
 run "$REAL_ENV" python -m pip install -q -e "$PEGRNA_REPO[splice,importance,scarless,recode]"
 run "$REAL_ENV" python -m pip install -q -r "$PEGRNA_REPO/web/requirements.txt"
 
-# maxentpy (MaxEntScan) — vendored; NOT pip-installable on py>=3.11 because its
-# pre-generated Cython _hashseq.c includes the private longintrepr.h. The pure-
-# Python maxent.py (score5/score3) is all the pipeline uses, so install WITHOUT
-# the C extension: strip ext_modules from setup.py, then --no-build-isolation.
-MAXSRC="$PEGRNA_REPO/web/maxentpy_src"
-if ! run "$REAL_ENV" python -c "import maxentpy.maxent" >/dev/null 2>&1; then
-  log "pegrna-real: install vendored maxentpy (pure-Python, no C ext)"
-  TMP="$(mktemp -d)"; cp -r "$MAXSRC/." "$TMP/"
-  sed -i 's/ext_modules=ext_modules,//' "$TMP/setup.py" 2>/dev/null || true
-  run "$REAL_ENV" python -m pip install -q --no-build-isolation "$TMP"
-  rm -rf "$TMP"
+# maxentpy (MaxEntScan) — vendored, installed without its C extension. The logic
+# lives in scripts/install_maxentpy.sh so this and a plain local install cannot
+# drift apart; it used to exist only here, which is why api mode failed at the
+# cryptic-splice gate on every host except this one.
+log "pegrna-real: install vendored maxentpy (pure-Python, no C ext)"
+PYTHON="$REAL_ENV/bin/python" bash "$PEGRNA_REPO/scripts/install_maxentpy.sh"
+
+if run "$REAL_ENV" bash -lc 'command -v cas-offinder' >/dev/null 2>&1; then
+  log "pegrna-real: cas-offinder present (real off-target gate available)"
+else
+  log "pegrna-real: WARN cas-offinder missing — off-target stays a STAND-IN"
 fi
 
 log "verify api-mode imports resolve in pegrna-real"
@@ -131,3 +134,6 @@ log "done. envs:"
 log "  pegrna-web  -> $WEB_ENV/bin/python"
 log "  pegrna-real -> $REAL_ENV/bin/python  (set PEGRNA_API_PYTHON to this)"
 log "  pridict2    -> $PRIDICT_ENV/bin/python  (set PRIDICT2_PYTHON to this)"
+log ""
+log "The frontend is served from web/static/, which is committed pre-built —"
+log "no Node is needed here. Rebuild only from web/frontend/ (see its README)."

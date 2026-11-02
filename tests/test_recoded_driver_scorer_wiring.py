@@ -18,9 +18,9 @@ The heavy real models are never imported: ``make_scorers`` is spied and returns
 the deterministic fake bundle so the rest of ``design_recoded`` runs offline.
 """
 
-from pegrna_pipeline.hpc import recoded_driver, scorer_factory
-
 import pytest
+
+from pegrna_pipeline.hpc import recoded_driver, scorer_factory
 
 _RESOURCE_ENV = ("PEGRNA_GENOME", "BOLTZ_CACHE", "RINALMO_SS_WEIGHTS", "RNAFORMER_CKPT")
 

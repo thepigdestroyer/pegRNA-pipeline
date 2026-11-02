@@ -99,8 +99,14 @@ is deployment-agnostic.
 ```
 web/
   app.py            FastAPI app — endpoints, subprocess dispatch, streaming
-  static/index.html vanilla-JS SPA (form, pipeline flowchart, report/CSV view)
+  frontend/         React + TypeScript + Tailwind source (Vite)  -> see its README
+  static/           BUILT frontend (committed, so the deploy box needs no Node)
   examples/         ready-to-load design configs
   maxentpy_src/     vendored MaxEntScan (pure-Python build) + scoring matrices
   requirements.txt  web-layer deps (FastAPI/uvicorn)
 ```
+
+The UI is built from `frontend/` with `npm run build`, which writes
+`static/index.html` + `static/assets/`. Those outputs are committed on purpose:
+deployment stays a pure-Python affair. If you change anything under `frontend/`,
+rebuild and commit the result or the server keeps serving the previous bundle.

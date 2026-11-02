@@ -6,8 +6,8 @@ import pytest
 
 from pegrna_pipeline.hpc.pbs import (
     MEM_CAP_GB,
-    PBSJobSpec,
     WALLTIME_CAP_HOURS,
+    PBSJobSpec,
     retry_with_doubled_resources,
 )
 

@@ -53,15 +53,25 @@ class SpliceAIScorer:
         if self._model is not None:
             return
         try:
-            from keras.models import load_model  # noqa: PLC0415
-            from pkg_resources import resource_filename  # noqa: PLC0415
+            # SpliceAI ships legacy Keras-2 ``.h5`` weights. TensorFlow >= 2.16 makes
+            # ``keras`` Keras 3, which cannot read them, so prefer the ``tf_keras``
+            # (Keras 2) shim when installed and fall back to ``keras`` on the older
+            # TensorFlow stacks (CX3).
+            try:
+                from tf_keras.models import load_model  # noqa: PLC0415
+            except ImportError:
+                from keras.models import load_model  # noqa: PLC0415
+            # ``pkg_resources`` was removed in setuptools >= 81; importlib.resources
+            # is the stdlib equivalent and works on every supported Python.
+            from importlib.resources import files  # noqa: PLC0415
         except Exception as exc:
             raise ImportError(
                 "SpliceAI requires the '[splice]' extra (tensorflow/keras + spliceai) "
                 "and the model weights; run real splice scoring on CX3. "
                 f"Original error: {exc}"
             ) from exc
-        paths = [resource_filename("spliceai", f"models/spliceai{i}.h5") for i in range(1, 6)]
+        models = files("spliceai") / "models"
+        paths = [str(models / f"spliceai{i}.h5") for i in range(1, 6)]
         self._model = [load_model(p) for p in paths]
 
     @staticmethod

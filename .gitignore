@@ -23,3 +23,11 @@ nvidia.key
 
 # AlphaFold-DB structures fetched/cached at runtime — not source.
 AF-*.cif
+
+# Frontend toolchain. The BUILT assets in web/static/ ARE committed on purpose,
+# so the deploy box serves the app without needing Node — only the toolchain and
+# its caches are ignored.
+node_modules/
+web/frontend/node_modules/
+web/frontend/.vite/
+*.tsbuildinfo

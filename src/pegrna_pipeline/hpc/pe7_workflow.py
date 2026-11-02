@@ -34,6 +34,8 @@ from pegrna_pipeline.hpc.data_types import (
 )
 from pegrna_pipeline.hpc.tjpe_workflow import (
     rank_variants_by_pe2,
+)
+from pegrna_pipeline.hpc.tjpe_workflow import (
     select_tjpe_ngrna as select_pe3_ngrna,
 )
 
