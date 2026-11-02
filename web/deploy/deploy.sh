@@ -21,7 +21,17 @@ log() { echo "[deploy $(date -u +%H:%M:%S)] $*"; }
 mkdir -p "$PEGRNA_ROOT"
 
 # 1) checkout ----------------------------------------------------------------
-if [ -d "$PEGRNA_REPO/.git" ]; then
+# PEGRNA_SKIP_PULL=1 uses whatever is already in $PEGRNA_REPO. That covers the
+# case where the tree was pushed to the host directly (rsync/scp) rather than
+# cloned -- a private repo would otherwise need a PAT or deploy key stored on a
+# shared box purely so deploy.sh can re-fetch what is already there.
+if [ "${PEGRNA_SKIP_PULL:-0}" = "1" ]; then
+  if [ ! -d "$PEGRNA_REPO" ]; then
+    echo "error: PEGRNA_SKIP_PULL=1 but $PEGRNA_REPO does not exist" >&2
+    exit 1
+  fi
+  log "PEGRNA_SKIP_PULL=1 — using the tree already at $PEGRNA_REPO"
+elif [ -d "$PEGRNA_REPO/.git" ]; then
   log "updating $PEGRNA_REPO"; git -C "$PEGRNA_REPO" pull --ff-only
 else
   log "cloning $REPO_URL -> $PEGRNA_REPO"; git clone "$REPO_URL" "$PEGRNA_REPO"

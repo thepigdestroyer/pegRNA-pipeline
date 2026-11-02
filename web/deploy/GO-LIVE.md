@@ -26,8 +26,29 @@ If auth still fails, send Hiru the full `-vvv` output.
 
 ## 1. Deploy
 
-**The repo is private**, so the box needs credentials before it can clone.
-Easiest is a GitHub Personal Access Token with `repo` scope
+### Option A — push the tree from your laptop (no credentials on the box)
+
+Preferred for a shared machine: nothing secret is stored there, and the private
+repo needs no token.
+
+```bash
+# from your laptop, with the repo checked out
+rsync -az --delete \
+  --exclude '.venv' --exclude 'node_modules' --exclude 'web/runs' \
+  ~/Documents/Opencode/pegRNA-pipeline/ \
+  mj1824@146-169-8-141.dsi.ic.ac.uk:/mnt/data2/mj1824/pegrna/prime-editing/
+
+ssh mj1824@146-169-8-141.dsi.ic.ac.uk \
+  'PEGRNA_ROOT=/mnt/data2/mj1824/pegrna PEGRNA_SKIP_PULL=1 \
+   bash /mnt/data2/mj1824/pegrna/prime-editing/web/deploy/deploy.sh'
+```
+
+Re-run the same two commands to ship a change.
+
+### Option B — clone on the box
+
+**The repo is private**, so this needs credentials stored there. Use a GitHub
+Personal Access Token with `repo` scope
 (<https://github.com/settings/tokens>), used once and then cached:
 
 ```bash
