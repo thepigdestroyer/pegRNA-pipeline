@@ -26,20 +26,35 @@ If auth still fails, send Hiru the full `-vvv` output.
 
 ## 1. Deploy
 
+**The repo is private**, so the box needs credentials before it can clone.
+Easiest is a GitHub Personal Access Token with `repo` scope
+(<https://github.com/settings/tokens>), used once and then cached:
+
 ```bash
 ssh mj1824@146.169.8.141
 
 export PEGRNA_ROOT=/mnt/data2/mj1824/pegrna
-export REPO_URL=https://github.com/thepigdestroyer/pegRNA-pipeline.git
+mkdir -p "$PEGRNA_ROOT"
 
-curl -fsSL https://raw.githubusercontent.com/thepigdestroyer/pegRNA-pipeline/main/web/deploy/deploy.sh \
-  -o /tmp/deploy.sh && bash /tmp/deploy.sh
+# Clone once, with the token inline. git stores it in the remote URL, so the
+# later `git pull` in deploy.sh just works.
+read -rsp 'GitHub PAT: ' GH_PAT; echo
+git clone "https://${GH_PAT}@github.com/thepigdestroyer/pegRNA-pipeline.git" \
+  "$PEGRNA_ROOT/prime-editing"
+unset GH_PAT
+
+bash "$PEGRNA_ROOT/prime-editing/web/deploy/deploy.sh"
 ```
 
-That clones the repo, builds `pegrna-web`, `pegrna-real` and `pridict2`, installs
-the `systemd --user` unit, starts it on `127.0.0.1:8092`, and health-checks it.
+`deploy.sh` then builds `pegrna-web`, `pegrna-real` and `pridict2`, installs the
+`systemd --user` unit, starts it on `127.0.0.1:8092`, and health-checks it.
 
 > The frontend ships **pre-built** in `web/static/`, so the box needs no Node.
+
+> If you would rather not leave a token in the remote URL, use a read-only
+> **deploy key** instead: `ssh-keygen -t ed25519 -f ~/.ssh/pegrna_deploy -N ''`,
+> add the `.pub` under the repo's *Settings → Deploy keys*, and clone the
+> `git@github.com:` URL.
 
 ---
 
