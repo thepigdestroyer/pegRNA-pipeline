@@ -1,0 +1,141 @@
+@import "tailwindcss";
+
+/*
+ * Design tokens. The palette is deliberately calm and high-contrast: this is a
+ * tool people read sequences off, so legibility beats decoration. Each pegRNA
+ * part gets its own hue, used consistently in the sequence map, the component
+ * table and the legend, so colour means one thing throughout.
+ */
+@theme {
+  --font-sans:
+    "Inter var", "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono:
+    "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+
+  --color-ink-50: oklch(0.985 0.002 250);
+  --color-ink-100: oklch(0.96 0.004 250);
+  --color-ink-200: oklch(0.91 0.006 250);
+  --color-ink-300: oklch(0.83 0.008 250);
+  --color-ink-400: oklch(0.65 0.012 250);
+  --color-ink-500: oklch(0.52 0.014 250);
+  --color-ink-600: oklch(0.42 0.016 250);
+  --color-ink-700: oklch(0.33 0.018 253);
+  --color-ink-800: oklch(0.25 0.018 255);
+  --color-ink-900: oklch(0.19 0.016 257);
+  --color-ink-950: oklch(0.14 0.014 259);
+
+  --color-brand-50: oklch(0.97 0.015 240);
+  --color-brand-100: oklch(0.93 0.035 240);
+  --color-brand-300: oklch(0.78 0.09 243);
+  --color-brand-500: oklch(0.6 0.15 250);
+  --color-brand-600: oklch(0.52 0.16 252);
+  --color-brand-700: oklch(0.44 0.145 254);
+
+  /* pegRNA part colours — one hue per construct component. */
+  --color-part-spacer: oklch(0.62 0.17 255);
+  --color-part-scaffold: oklch(0.6 0.03 260);
+  --color-part-pbs2: oklch(0.65 0.15 190);
+  --color-part-insert: oklch(0.68 0.17 145);
+  --color-part-recode: oklch(0.72 0.16 95);
+  --color-part-pbs1: oklch(0.63 0.16 310);
+  --color-part-polyu: oklch(0.7 0.1 30);
+}
+
+@layer base {
+  html {
+    scroll-behavior: smooth;
+  }
+
+  body {
+    @apply bg-ink-100 text-ink-900 antialiased;
+    font-feature-settings: "cv05", "ss01";
+  }
+
+  .dark body {
+    @apply bg-ink-950 text-ink-100;
+  }
+
+  /* A visible focus ring everywhere, for keyboard and screen-reader users. */
+  :focus-visible {
+    @apply outline-2 outline-offset-2 outline-brand-500;
+  }
+
+  /* Honour a reduced-motion preference rather than animating regardless. */
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+    }
+  }
+}
+
+@layer components {
+  .card {
+    @apply rounded-xl border border-ink-200 bg-white shadow-sm;
+  }
+  .dark .card {
+    @apply border-ink-800 bg-ink-900;
+  }
+
+  .field-label {
+    @apply mb-1.5 block text-sm font-medium text-ink-700;
+  }
+  .dark .field-label {
+    @apply text-ink-300;
+  }
+
+  .field-hint {
+    @apply mt-1.5 text-xs leading-relaxed text-ink-500;
+  }
+  .dark .field-hint {
+    @apply text-ink-400;
+  }
+
+  .input {
+    @apply w-full rounded-lg border border-ink-300 bg-white px-3 py-2 text-sm text-ink-900
+           transition-colors placeholder:text-ink-400
+           focus:border-brand-500 focus:ring-2 focus:ring-brand-500/25 focus:outline-none
+           disabled:cursor-not-allowed disabled:bg-ink-100 disabled:text-ink-400;
+  }
+  .dark .input {
+    @apply border-ink-700 bg-ink-950 text-ink-100 placeholder:text-ink-500
+           disabled:bg-ink-900 disabled:text-ink-500;
+  }
+
+  .input-invalid {
+    @apply border-rose-500 focus:border-rose-500 focus:ring-rose-500/25;
+  }
+
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 rounded-lg border px-3.5 py-2
+           text-sm font-medium transition-colors
+           disabled:cursor-not-allowed disabled:opacity-50;
+  }
+
+  .btn-secondary {
+    @apply border-ink-300 bg-white text-ink-700 hover:bg-ink-50;
+  }
+  .dark .btn-secondary {
+    @apply border-ink-700 bg-ink-900 text-ink-200 hover:bg-ink-800;
+  }
+
+  .btn-primary {
+    @apply border-transparent bg-brand-600 text-white shadow-sm hover:bg-brand-700;
+  }
+
+  .btn-ghost {
+    @apply border-transparent text-ink-600 hover:bg-ink-100;
+  }
+  .dark .btn-ghost {
+    @apply text-ink-300 hover:bg-ink-800;
+  }
+
+  .seq {
+    @apply font-mono break-all;
+    font-variant-ligatures: none;
+  }
+}
