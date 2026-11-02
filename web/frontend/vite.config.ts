@@ -7,7 +7,10 @@ import tailwindcss from "@tailwindcss/vite";
 // deploy box needs no Node: the built assets are committed.
 export default defineConfig({
   plugins: [react(), tailwindcss()],
-  base: "/static/",
+  // FastAPI mounts the app under /static, so that is the default. A standalone
+  // static host (Vercel) serves the same files from the root instead, and sets
+  // VITE_BASE=/ — with the wrong base the bundle 404s and nothing renders.
+  base: process.env.VITE_BASE ?? "/static/",
   build: {
     outDir: "../static",
     emptyOutDir: false, // index.html is replaced; nothing else lives there

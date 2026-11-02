@@ -7,6 +7,22 @@ import type {
   ProgressEvent,
 } from "./types";
 
+/**
+ * Where the pipeline API lives.
+ *
+ * Empty (the default) means same-origin -- the app served by the FastAPI box
+ * itself. Set VITE_API_BASE at build time to point a separately hosted frontend
+ * (e.g. on Vercel) at the machine running the models. It has to be a direct
+ * browser->backend call: a real design runs for minutes, well past the
+ * execution cap on a serverless proxy.
+ */
+const API_BASE = (import.meta.env.VITE_API_BASE ?? "").replace(/\/$/, "");
+
+/** Resolve an API path against the configured backend. */
+export function apiURL(path: string): string {
+  return `${API_BASE}${path}`;
+}
+
 /** Human-readable text for the guard responses web/app.py can return. */
 export function statusMessage(code: number): string {
   switch (code) {
@@ -24,7 +40,7 @@ export function statusMessage(code: number): string {
 }
 
 async function getJSON<T>(url: string): Promise<T> {
-  const r = await fetch(url);
+  const r = await fetch(apiURL(url));
   if (!r.ok) throw new Error(statusMessage(r.status));
   return (await r.json()) as T;
 }
@@ -36,7 +52,7 @@ export const getRealExample = () => getJSON<DesignConfig>("/api/example/real");
 export const getMotifs = () => getJSON<{ groups: MotifGroups }>("/api/motifs");
 
 export function runFileURL(runId: string, name: string): string {
-  return `/api/runs/${encodeURIComponent(runId)}/${encodeURIComponent(name)}`;
+  return apiURL(`/api/runs/${encodeURIComponent(runId)}/${encodeURIComponent(name)}`);
 }
 
 /**
@@ -51,7 +67,7 @@ export async function streamDesign(
   onProgress: (ev: ProgressEvent) => void,
   signal?: AbortSignal,
 ): Promise<DesignResult> {
-  const r = await fetch("/api/design/stream", {
+  const r = await fetch(apiURL("/api/design/stream"), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ config, mode }),

@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -165,6 +166,22 @@ def _cleanup_runs() -> None:
 
 
 app = FastAPI(title="pegRNA design", version="0.2.0")
+
+# Browser origins allowed to call this API cross-origin, comma-separated.
+# The UI can be hosted away from the pipeline (e.g. the static app on Vercel,
+# the models on a lab box). A real `api` design outruns a serverless function's
+# execution cap, so the browser has to talk to this backend directly rather than
+# being proxied -- which makes it a cross-origin call, hence CORS.
+# Empty => no cross-origin access (same-origin only), which is the default.
+_origins = [o.strip() for o in os.environ.get("PEGRNA_CORS_ORIGINS", "").split(",") if o.strip()]
+if _origins:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=_origins,
+        allow_credentials=False,
+        allow_methods=["GET", "POST", "OPTIONS"],
+        allow_headers=["Content-Type", "X-Access-Token"],
+    )
 
 
 @app.get("/api/health")
