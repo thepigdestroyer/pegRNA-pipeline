@@ -61,8 +61,11 @@ run "$WEB_ENV" python -m pip install -q -r "$PEGRNA_REPO/web/requirements.txt"
 
 # --- pegrna-real (api mode) --------------------------------------------------
 if [ ! -x "$REAL_ENV/bin/python" ]; then
-  log "creating pegrna-real (+ ViennaRNA from conda-forge)"
-  create "$REAL_ENV" viennarna
+  # cas-offinder (bioconda) powers the real off-target gate. Without the binary
+  # the gate silently degrades to a clean-pass stand-in, so install it here and
+  # not only in the HPC environment.yml.
+  log "creating pegrna-real (+ ViennaRNA, cas-offinder)"
+  create "$REAL_ENV" viennarna cas-offinder
 fi
 log "pegrna-real: install CLI + api model stack (CPU) + web layer"
 run "$REAL_ENV" python -m pip install -q --upgrade pip
@@ -80,6 +83,12 @@ run "$REAL_ENV" python -m pip install -q -r "$PEGRNA_REPO/web/requirements.txt"
 # cryptic-splice gate on every host except this one.
 log "pegrna-real: install vendored maxentpy (pure-Python, no C ext)"
 PYTHON="$REAL_ENV/bin/python" bash "$PEGRNA_REPO/scripts/install_maxentpy.sh"
+
+if run "$REAL_ENV" bash -lc 'command -v cas-offinder' >/dev/null 2>&1; then
+  log "pegrna-real: cas-offinder present (real off-target gate available)"
+else
+  log "pegrna-real: WARN cas-offinder missing — off-target stays a STAND-IN"
+fi
 
 log "verify api-mode imports resolve in pegrna-real"
 run "$REAL_ENV" python - <<'PY'
