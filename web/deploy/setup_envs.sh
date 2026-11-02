@@ -74,18 +74,12 @@ run "$REAL_ENV" python -m pip install -q "tensorflow-cpu" "setuptools<81"
 run "$REAL_ENV" python -m pip install -q -e "$PEGRNA_REPO[splice,importance,scarless,recode]"
 run "$REAL_ENV" python -m pip install -q -r "$PEGRNA_REPO/web/requirements.txt"
 
-# maxentpy (MaxEntScan) — vendored; NOT pip-installable on py>=3.11 because its
-# pre-generated Cython _hashseq.c includes the private longintrepr.h. The pure-
-# Python maxent.py (score5/score3) is all the pipeline uses, so install WITHOUT
-# the C extension: strip ext_modules from setup.py, then --no-build-isolation.
-MAXSRC="$PEGRNA_REPO/web/maxentpy_src"
-if ! run "$REAL_ENV" python -c "import maxentpy.maxent" >/dev/null 2>&1; then
-  log "pegrna-real: install vendored maxentpy (pure-Python, no C ext)"
-  TMP="$(mktemp -d)"; cp -r "$MAXSRC/." "$TMP/"
-  sed -i 's/ext_modules=ext_modules,//' "$TMP/setup.py" 2>/dev/null || true
-  run "$REAL_ENV" python -m pip install -q --no-build-isolation "$TMP"
-  rm -rf "$TMP"
-fi
+# maxentpy (MaxEntScan) — vendored, installed without its C extension. The logic
+# lives in scripts/install_maxentpy.sh so this and a plain local install cannot
+# drift apart; it used to exist only here, which is why api mode failed at the
+# cryptic-splice gate on every host except this one.
+log "pegrna-real: install vendored maxentpy (pure-Python, no C ext)"
+PYTHON="$REAL_ENV/bin/python" bash "$PEGRNA_REPO/scripts/install_maxentpy.sh"
 
 log "verify api-mode imports resolve in pegrna-real"
 run "$REAL_ENV" python - <<'PY'
@@ -131,3 +125,6 @@ log "done. envs:"
 log "  pegrna-web  -> $WEB_ENV/bin/python"
 log "  pegrna-real -> $REAL_ENV/bin/python  (set PEGRNA_API_PYTHON to this)"
 log "  pridict2    -> $PRIDICT_ENV/bin/python  (set PRIDICT2_PYTHON to this)"
+log ""
+log "The frontend is served from web/static/, which is committed pre-built —"
+log "no Node is needed here. Rebuild only from web/frontend/ (see its README)."

@@ -41,5 +41,15 @@ with open(path, "w") as fh:
     fh.write(re.sub(r"ext_modules\s*=\s*ext_modules\s*,", "", text))
 PY
 
-"$PYTHON" -m pip install --no-build-isolation "$TMP"
+# Install with whichever installer this environment actually has. A uv-created
+# venv ships no pip, so `python -m pip` is not a safe assumption.
+if "$PYTHON" -m pip --version >/dev/null 2>&1; then
+  "$PYTHON" -m pip install --no-build-isolation "$TMP"
+elif command -v uv >/dev/null 2>&1; then
+  uv pip install --python "$PYTHON" --no-build-isolation "$TMP"
+else
+  echo "error: no installer available — $PYTHON has no pip and uv is not on PATH" >&2
+  exit 1
+fi
+
 "$PYTHON" -c "import maxentpy.maxent; print('maxentpy installed OK (pure-Python)')"
