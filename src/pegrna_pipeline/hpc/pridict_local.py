@@ -116,6 +116,24 @@ class PridictLocalRunner:
             for row in rows:
                 writer.writerow([row["sequence_name"], row["editseq"]])
 
+    @staticmethod
+    def _subprocess_env() -> dict[str, str]:
+        """Environment for the PRIDICT2 subprocess.
+
+        PRIDICT2's bundled DeepCas9 (``trained_models/DeepCas9_TestCode.py``) is TF1
+        graph-mode code that hands a symbolic ``tf.bool`` placeholder to
+        ``tf.keras.layers.Dropout(training=...)``. Keras 3 (the default ``tf.keras``
+        from TensorFlow >= 2.16) rejects that with "Using a symbolic `tf.Tensor` as a
+        Python `bool` is not allowed", and PRIDICT then exits 0 having written no
+        pegRNA CSV -- surfacing here as the misleading "edit is outside its design
+        domain". Keras 2 accepts it, so request the legacy shim unless the caller has
+        already pinned the variable. Harmless on an older TF where tf.keras IS Keras 2.
+        """
+        env = dict(os.environ)
+        env.setdefault("TF_USE_LEGACY_KERAS", "1")
+        env.setdefault("TF_CPP_MIN_LOG_LEVEL", "3")
+        return env
+
     def _run_subprocess(self, input_basename: str, reldir: str) -> None:
         cmd = [
             self.pridict_python,
@@ -136,6 +154,7 @@ class PridictLocalRunner:
                 capture_output=True,
                 text=True,
                 timeout=self.timeout,
+                env=self._subprocess_env(),
             )
         except subprocess.TimeoutExpired as exc:
             raise RuntimeError(
