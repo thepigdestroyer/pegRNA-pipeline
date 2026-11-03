@@ -40,26 +40,59 @@ def _http_error(code, headers=None, body=b""):
     return urllib.error.HTTPError("http://x", code, "err", headers or {}, io.BytesIO(body))
 
 
+class _Clock:
+    """A fake clock installed as the client module's ``time``: sleeping advances it, so
+    backoff and deadlines can be exercised without waiting (and without touching the real
+    ``time`` module, which the rest of the process shares)."""
+
+    def __init__(self):
+        self.now = 0.0
+        self.waited = []
+
+    def monotonic(self):
+        return self.now
+
+    def sleep(self, seconds):
+        self.waited.append(seconds)
+        self.now += seconds
+
+
+STALL = "stall"  # an attempt that hangs until its socket timeout fires
+
+
 class _Script:
     """Replaces urlopen: yields the scripted outcomes in order, counting calls."""
 
-    def __init__(self, *outcomes):
+    def __init__(self, *outcomes, clock=None):
         self.outcomes = list(outcomes)
         self.calls = 0
+        self.clock = clock
+        self.timeouts = []
+        self.requests = []
 
     def __call__(self, req, timeout=None):
         self.calls += 1
+        self.timeouts.append(timeout)
+        self.requests.append(req)
         out = self.outcomes.pop(0)
+        if out == STALL:
+            self.clock.now += timeout  # the attempt used its whole socket timeout
+            raise TimeoutError("timed out")
         if isinstance(out, BaseException):
             raise out
         return _Resp(out)
 
 
 @pytest.fixture
-def sleeps(monkeypatch):
-    waited = []
-    monkeypatch.setattr(complex_dock_nim.time, "sleep", lambda s: waited.append(s))
-    return waited
+def clock(monkeypatch):
+    c = _Clock()
+    monkeypatch.setattr(complex_dock_nim, "time", c)
+    return c
+
+
+@pytest.fixture
+def sleeps(clock):
+    return clock.waited
 
 
 def _scorer(**kw):
@@ -135,6 +168,60 @@ def test_a_response_with_no_metric_is_a_service_error(monkeypatch, sleeps):
 def test_a_missing_key_is_a_service_error():
     with pytest.raises(DockingServiceError):
         Boltz2NIMDockScorer(api_key=None)._predict_iptm("ACGU", "M" * 10)
+
+
+# --- waiting model: measured against the live endpoint ---------------------------------------
+
+
+@pytest.mark.parametrize("code", [429, 500, 502, 503, 504])
+def test_every_transient_status_is_resubmitted(monkeypatch, sleeps, code):
+    """504 included: the hosted endpoint answers it when a hold-open window elapses, and the
+    request id it returns is not pollable (the status route is 404), so the job is gone and
+    the only recovery is to submit again."""
+    script = _Script(_http_error(code), GOOD_BODY)
+    assert _run(_scorer(), script, monkeypatch) == 0.7
+    assert script.calls == 2
+
+
+def test_no_poll_window_is_requested(monkeypatch, sleeps):
+    """NVCF-POLL-SECONDS turns a slow job into a 504 on this endpoint instead of a 202."""
+    script = _Script(GOOD_BODY)
+    _run(_scorer(), script, monkeypatch)
+    sent = {k.lower() for k in script.requests[0].headers}
+    assert "nvcf-poll-seconds" not in sent
+
+
+def test_a_stalled_service_is_abandoned_at_the_deadline(monkeypatch, clock):
+    """A request once hung for over 30 minutes. retries x timeout used to allow the better
+    part of an hour; the whole call, backoff included, now has one budget."""
+    script = _Script(STALL, STALL, STALL, STALL, STALL, STALL, STALL, clock=clock)
+    with pytest.raises(DockingServiceError) as exc:
+        _run(_scorer(timeout=300, deadline=600), script, monkeypatch)
+    assert clock.now <= 600, "the call must not outlive its budget"
+    assert "budget 600 s" in str(exc.value) and "not a verdict on the design" in str(exc.value)
+    assert script.calls < 7, "it must give up rather than exhaust every retry"
+
+
+def test_the_last_attempt_is_shortened_to_what_remains(monkeypatch, clock):
+    script = _Script(STALL, STALL, clock=clock)
+    with pytest.raises(DockingServiceError):
+        _run(_scorer(timeout=300, deadline=600), script, monkeypatch)
+    assert script.timeouts == [300, 295], "second attempt gets 600 - (300 + 5 s backoff)"
+
+
+def test_a_backoff_that_would_overrun_the_budget_is_not_slept(monkeypatch, clock):
+    script = _Script(*[_http_error(429)] * 7, clock=clock)
+    with pytest.raises(DockingServiceError):
+        _run(_scorer(deadline=30), script, monkeypatch)
+    assert clock.waited == [5.0, 10.0], "a 20 s pause with 15 s left is skipped"
+    assert clock.now <= 30
+
+
+def test_a_slow_but_successful_call_is_not_cut_short(monkeypatch, clock):
+    """The deadline bounds failure, not success: a long first attempt that works is kept."""
+    script = _Script(GOOD_BODY, clock=clock)
+    assert _run(_scorer(timeout=300, deadline=600), script, monkeypatch) == 0.7
+    assert script.timeouts == [300]
 
 
 # --- the part that mattered: the walk must not swallow it -----------------------------------

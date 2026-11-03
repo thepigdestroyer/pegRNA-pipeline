@@ -22,6 +22,15 @@ resolves:
 
 Cost/latency: a Cas9(~1368 aa)+pegRNA(~700 nt) complex is large — each call can
 take minutes and consume NIM credits. The apo baseline is cached and reused.
+
+Waiting model (measured against the live endpoint, not assumed). A plain request is held
+open until the result is ready: 25-150 s for the sizes used here. Do NOT send NVIDIA's
+``NVCF-POLL-SECONDS`` header, although the cloud-function docs describe it as returning a
+202 plus a request id to poll. On this hosted endpoint a short window returns HTTP 504
+(``Nvcf-Status: errored``) when it elapses, and ``GET /v2/nvcf/pexec/status/<id>`` for that
+id is 404, so the job is gone, not resumable. A 504 therefore means "resubmit", which is
+how it is handled. Because a shared trial endpoint also stalls (a request once hung for
+over 30 minutes), every call has a per-attempt socket timeout and an overall deadline.
 """
 
 from __future__ import annotations
@@ -42,6 +51,8 @@ __all__ = ["Boltz2NIMDockScorer"]
 #: HTTP statuses worth retrying: rate limiting and transient server trouble.
 _TRANSIENT_HTTP = frozenset({429, 500, 502, 503, 504})
 _MAX_BACKOFF_S = 60.0
+DEFAULT_ATTEMPT_TIMEOUT_S = 300.0
+DEFAULT_DEADLINE_S = 600.0
 
 DEFAULT_NIM_URL = "https://health.api.nvidia.com/v1/biology/mit/boltz2/predict"
 _SPCAS9_UNIPROT = "Q99ZW2"  # S. pyogenes Cas9
@@ -56,16 +67,22 @@ class Boltz2NIMDockScorer:
         apo_scaffold: Optional[str] = None,
         recycling_steps: int = 3,
         sampling_steps: int = 50,
-        timeout: int = 900,
+        timeout: float = DEFAULT_ATTEMPT_TIMEOUT_S,
         retries: int = 6,
         samples: int = THRESHOLDS.docking_samples,
+        deadline: float = DEFAULT_DEADLINE_S,
     ) -> None:
         self.api_key = api_key or os.environ.get("NVIDIA_API_KEY")
         self.url = url or os.environ.get("BOLTZ_NIM_URL") or DEFAULT_NIM_URL
         self.recycling_steps = recycling_steps
         self.sampling_steps = sampling_steps
+        #: Socket timeout of ONE attempt. Real calls take 25-150 s; 300 s detects a hung
+        #: connection in minutes instead of the quarter of an hour it used to take.
         self.timeout = timeout
         self.retries = retries
+        #: Wall-clock budget for one call INCLUDING retries and backoff. Without it
+        #: ``retries`` x ``timeout`` could hold a web request for the better part of an hour.
+        self.deadline = deadline
         #: Diffusion samples per request. A single draw is too noisy to threshold (sd
         #: 0.03-0.11; a scrambled non-binder drew 0.634 once), so the calibrated gate
         #: averages several, which cost one request and about the same wall time.
@@ -134,10 +151,19 @@ class Boltz2NIMDockScorer:
             "Authorization": f"Bearer {self.api_key}",
         }
         last_err: Optional[BaseException] = None
+        started = time.monotonic()
+        attempts = 0
         for attempt in range(self.retries + 1):
+            remaining = self.deadline - (time.monotonic() - started)
+            if remaining <= 0:
+                break
+            attempts += 1
             try:
                 req = urllib.request.Request(self.url, data=data, headers=headers, method="POST")
-                with urllib.request.urlopen(req, timeout=self.timeout) as resp:  # noqa: S310
+                # An attempt may not outlive the call's overall budget.
+                with urllib.request.urlopen(  # noqa: S310
+                    req, timeout=min(self.timeout, remaining)
+                ) as resp:
                     body = json.loads(resp.read().decode())
                 return self._extract_samples(body)
             except urllib.error.HTTPError as exc:
@@ -164,9 +190,14 @@ class Boltz2NIMDockScorer:
                 last_err = exc
                 wait = min(5.0 * 2**attempt, _MAX_BACKOFF_S)
             if attempt < self.retries:
-                time.sleep(min(wait, _MAX_BACKOFF_S))
+                pause = min(wait, _MAX_BACKOFF_S)
+                if pause >= self.deadline - (time.monotonic() - started):
+                    break  # sleeping would use up what is left; fail now rather than later
+                time.sleep(pause)
+        elapsed = time.monotonic() - started
         raise DockingServiceError(
-            f"Boltz-2 NIM unavailable after {self.retries + 1} attempts: {last_err}. "
+            f"Boltz-2 NIM unavailable after {attempts} attempt(s) in {elapsed:.0f} s "
+            f"(budget {self.deadline:.0f} s): {last_err or 'no attempt was possible'}. "
             "This is the docking service failing, not a verdict on the design."
         )
 
