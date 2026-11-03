@@ -61,10 +61,19 @@ PEGRNA_ACCESS_TOKEN=              # unset: would gate the entire site
 The UI asks for the token only when `/api/health` reports
 `api_mode_token_required: true`, and remembers it in `localStorage`.
 
-## Tunnel providers and failover
+## The tunnel: named (permanent) or quick (fallback)
 
-`tunnel-run.sh` tries providers in order and publishes whichever comes up to
-`~/pegrna/tunnel-url.txt`:
+`tunnel-run.sh` is what the `pegrna-tunnel` unit runs, and it publishes the live URL to
+`~/pegrna/tunnel-url.txt` so the audit and deploy scripts never have to guess.
+
+**Named tunnel (permanent hostname).** If `~/.config/pegrna/tunnel.token` exists and
+`PEGRNA_PUBLIC_URL` is set, the script does nothing but run that tunnel with
+`cloudflared tunnel run --token-file`. One hostname, no rate-limited provisioning, no failover,
+and `cloudflared` reconnects on its own after a network blip. It is outbound-only like the rest:
+nothing listens on the box.
+
+**Quick tunnel (the fallback, and what runs until the named one is set up).** Providers are tried
+in order:
 
 1. **cloudflared quick tunnel** — preferred, but Cloudflare rate-limits
    account-less provisioning (HTTP 429). Once tripped it stays tripped for a
@@ -73,49 +82,53 @@ The UI asks for the token only when `/api/health` reports
    cloudflared cannot provision.
 
 Both give a random hostname, so the failover keeps the site *up* but does not
-make the URL *stable*.
+make the URL *stable*. Deleting `tunnel.token` returns to this mode.
 
-## ⚠ The one outstanding step: a named tunnel
+## Setting up the named tunnel
 
-The deployment currently uses a **quick tunnel**, which is not production-grade
-and Cloudflare says so itself:
+The quick tunnel is not production-grade, and Cloudflare says so itself: the hostname is random
+and changes on every restart, there is no uptime guarantee, and provisioning is rate-limited
+(restart it a few times in a row and you get HTTP 429 and no tunnel until it clears). Because the
+frontend bakes the backend URL in at build time, a new hostname breaks the site until it is
+rebuilt (`scripts/refresh-backend.sh` does that in one command, but it is a workaround).
 
-- the hostname is **random and changes on every restart**
-- there is **no uptime guarantee**
-- provisioning is **rate-limited** — restart it a few times in a row and you get
-  HTTP 429 and no tunnel at all until it clears
-
-Because the frontend bakes the backend URL in at build time, a new hostname
-breaks the site until it is rebuilt. `scripts/refresh-backend.sh` does that in
-one command, but it is a workaround.
-
-**The fix needs a Cloudflare login (about five minutes) and then never recurs:**
+**Route A: one command (recommended).** Create a Cloudflare API token with
+`Account > Cloudflare Tunnel > Edit` and `Zone > DNS > Edit` for the zone that holds the hostname
+(dash.cloudflare.com > My Profile > API Tokens > Create Token > Create Custom Token), then store it
+without pasting it anywhere:
 
 ```bash
-# on the DSI box
-~/pegrna/bin/cloudflared tunnel login          # opens a browser URL
-~/pegrna/bin/cloudflared tunnel create pegrna
-~/pegrna/bin/cloudflared tunnel route dns pegrna pegrna.<your-domain>
-
-mkdir -p ~/.cloudflared
-cat > ~/.cloudflared/config.yml <<'EOF'
-tunnel: pegrna
-credentials-file: /home/mj1824/.cloudflared/<TUNNEL-ID>.json
-ingress:
-  - hostname: pegrna.<your-domain>
-    service: http://127.0.0.1:8093
-  - service: http_status:404
-EOF
+read -rs T; security add-generic-password -a "$USER" -s cloudflare-tunnel-token -w "$T" -U; unset T
 ```
 
-Then point the unit at `cloudflared tunnel run pegrna`, and deploy the site once
-against that permanent hostname:
+Then, from the repo (the DSI copy must be current, so rsync first):
 
 ```bash
-PEGRNA_API_BASE=https://pegrna.<your-domain> bash web/vercel/deploy.sh --prod
+scripts/setup-named-tunnel.py --dry-run     # shows the plan; reads no secret, changes nothing
+scripts/setup-named-tunnel.py --deploy      # creates it, installs it on DSI, redeploys the site
 ```
 
-After that the URL never changes and `refresh-backend.sh` is never needed.
+Every step is idempotent, so a second run changes nothing. The script creates or reuses the tunnel
+`pegrna-dsi`, sets its ingress to `http://127.0.0.1:8093` (any other hostname gets a 404), creates
+the proxied CNAME, installs the connector token on DSI over ssh stdin (mode 600; never on a command
+line or in a log), sets `PEGRNA_PUBLIC_URL`, restarts the service and waits for
+`/api/health`. It refuses to overwrite a DNS record of another type and never deletes anything.
+Hostname defaults to `pegrna.ukdri.org`; pass `--hostname` to change it.
+
+**Route B: no API token.** In the Cloudflare dashboard (Zero Trust > Networks > Tunnels) create a
+tunnel, add a public hostname `pegrna.<your-domain>` pointing at `http://localhost:8093`, and copy
+the connector token it shows. On the DSI box:
+
+```bash
+umask 077; mkdir -p ~/.config/pegrna
+printf '%s\n' '<connector-token>' > ~/.config/pegrna/tunnel.token
+echo 'PEGRNA_PUBLIC_URL=https://pegrna.<your-domain>' >> ~/.config/pegrna/pegrna.env
+systemctl --user restart pegrna-tunnel
+```
+
+then `PEGRNA_API_BASE=https://pegrna.<your-domain> bash web/vercel/deploy.sh --prod`.
+
+After either route the URL never changes and `refresh-backend.sh` is never needed.
 
 ## Resource limits (this host is shared)
 

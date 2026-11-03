@@ -85,6 +85,19 @@ await page.waitForTimeout(1500);
 await page.selectOption("#mode", "api");
 await page.waitForTimeout(400);
 
+// The second nick's off-target tolerance is a visible, validated setting and defaults to strict.
+await page.locator("summary", { hasText: "Fine-tuning" }).click();
+const tolerance = page.locator("#ngrna_max_offtargets");
+(await tolerance.inputValue()) === "0"
+  ? ok("off-target tolerance defaults to 0 (strict)")
+  : fail(`off-target tolerance defaulted to ${await tolerance.inputValue()}`);
+await tolerance.fill("11");
+await tolerance.blur();
+(await page.locator("text=A whole number from 0 to 10.").isVisible())
+  ? ok("an out-of-range tolerance is refused")
+  : fail("no validation message for a tolerance of 11");
+await tolerance.fill("0");
+
 console.log("  running a real design (PRIDICT2 + cas-offinder + SpliceAI + AlphaFold + Boltz-2)...");
 const t0 = Date.now();
 await page.getByRole("button", { name: "Design pegRNA" }).click();
@@ -113,6 +126,22 @@ const docking = await page.locator("li", { hasText: "Cas9 binding" }).first().in
 /neutral/i.test(docking) && /non-binder/i.test(docking)
   ? ok("docking is judged against a length-matched reference")
   : fail(`docking row does not show the calibrated comparison: ${docking.slice(0, 160)}`);
+
+// The off-target row states the chosen guide's actual count, not a fixed "0".
+const offtarget = await page.locator("li", { hasText: "Off-target check" }).first().innerText().catch(() => "");
+/off-target site/i.test(offtarget)
+  ? ok("the off-target row reports the chosen guide's count")
+  : fail(`off-target row does not state a count: ${offtarget.slice(0, 160)}`);
+
+// Advisories must be readable without opening the collapsed report. The chosen guide of the
+// shipped demo has a CCCCC run: that is reported, not hidden and not a reason to reject.
+if ((await page.locator("text=Check these before you order").count()) > 0) {
+  ok("advisories are shown on the result");
+  const advice = await page.locator("ul li", { hasText: "advisory" }).allInnerTexts();
+  console.log(`  ${advice.length} advisory line(s): ${advice.map((a) => a.slice(0, 70)).join(" | ")}`);
+} else {
+  console.log("  (no advisories on this design)");
+}
 
 const gateRows = await page.locator("ol li").count();
 console.log(`  pipeline steps shown: ${gateRows}`);

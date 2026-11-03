@@ -35,6 +35,14 @@ chk "resource caps configured"      "ssh dsi 'grep -q ^PEGRNA_THREADS= ~/.config
 chk "off-target cache enabled"      "ssh dsi 'grep -q ^PEGRNA_CACHE_DIR= ~/.config/pegrna/pegrna.env'"
 chk "host not saturated (load < 48)" "ssh dsi '[ \$(cut -d. -f1 /proc/loadavg) -lt 48 ]'"
 
+# A quick tunnel works but its hostname is random and changes on restart, so it is reported, not
+# failed: the fix needs a Cloudflare token (GO-LIVE.md, "Setting up the named tunnel").
+if ssh dsi 'test -s ~/.config/pegrna/tunnel.token' 2>/dev/null; then
+  ok "named tunnel: permanent hostname ($URL)"
+else
+  printf '  \033[33mNOTE\033[0m  quick tunnel: the hostname is random and changes on restart (scripts/setup-named-tunnel.py)\n'
+fi
+
 echo
 echo "ZERO STAND-IN GATES"
 STUBS=$(ssh dsi 'set -a; . ~/.config/pegrna/pegrna.env; set +a

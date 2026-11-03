@@ -16,8 +16,10 @@
 #                                  cloudflared cannot provision.
 #
 # Both give a RANDOM hostname that changes whenever the tunnel restarts. That is
-# the one genuinely non-production property of this setup; the permanent fix is
-# a named Cloudflare tunnel on a domain you own (see GO-LIVE.md). The live URL is
+# the one genuinely non-production property of those two providers. The permanent
+# fix is a NAMED Cloudflare tunnel on a domain you own: scripts/setup-named-tunnel.py
+# creates it and installs its connector token, after which this script does nothing
+# but run that tunnel (see "named tunnel" below and GO-LIVE.md). The live URL is
 # always written to $PEGRNA_ROOT/tunnel-url.txt so tooling never has to guess.
 set -uo pipefail
 
@@ -45,6 +47,18 @@ publish() {
 }
 
 : > "$URL_FILE"
+
+# --- named tunnel: a permanent hostname --------------------------------------
+# When a connector token is installed (scripts/setup-named-tunnel.py writes it to
+# $TOKEN_FILE and sets PEGRNA_PUBLIC_URL) that is the whole story: one hostname that never
+# changes, no rate-limited provisioning, no failover. cloudflared reconnects on its own after
+# a network blip. Delete the token file to fall back to the quick-tunnel providers below.
+TOKEN_FILE="${PEGRNA_TUNNEL_TOKEN_FILE:-$HOME/.config/pegrna/tunnel.token}"
+if [ -s "$TOKEN_FILE" ] && [ -n "${PEGRNA_PUBLIC_URL:-}" ] && [ -x "$BIN" ]; then
+  publish "$PEGRNA_PUBLIC_URL"
+  log "cloudflared: running the named tunnel (token file $TOKEN_FILE)"
+  exec "$BIN" tunnel --no-autoupdate run --token-file "$TOKEN_FILE" >> "$LOG_FILE" 2>&1
+fi
 
 # --- provider 1: cloudflared -------------------------------------------------
 try_cloudflared() {
