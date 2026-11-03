@@ -144,9 +144,18 @@ class CasOffinderScorer:
             tail = (proc.stderr or proc.stdout or "").strip()[-800:]
             raise RuntimeError(f"cas-offinder failed (rc={proc.returncode}):\n{tail}")
 
-    def _write_input(self, path: str, protospacers: Sequence[str]) -> None:
+    def _write_input(
+        self, path: str, protospacers: Sequence[str], spacer_len: int | None = None
+    ) -> None:
+        """Write a cas-offinder input file for guides that are ALL the same length.
+
+        cas-offinder takes a single pattern per run and aborts the whole job if
+        any query differs from it in length ("The length of target sequences
+        should match with the length of pattern sequence"), so the caller groups
+        by length and invokes this once per group.
+        """
         pam_ns = "N" * len(self.pam)
-        pattern = "N" * self.spacer_len + self.pam
+        pattern = "N" * (spacer_len if spacer_len is not None else self.spacer_len) + self.pam
         lines = [self.genome, pattern]
         for sp in protospacers:
             lines.append(f"{sp}{pam_ns} {self.max_mismatches}")
@@ -157,22 +166,33 @@ class CasOffinderScorer:
         results: dict = {sp: {"exact": 0, "near": 0} for sp in protospacers}
         if not protospacers:
             return {}
+        # Group by length. Protospacers are not all 20 nt in practice -- PRIDICT
+        # returns some 19-nt ngRNA spacers -- and mixing lengths makes
+        # cas-offinder abort the ENTIRE run, losing every guide's result rather
+        # than just the odd one. One invocation per distinct length is correct
+        # and keeps the batching (a whole-genome scan is ~100 s, so the number of
+        # invocations, not the number of guides, is what costs).
+        by_length: dict = {}
+        for sp in protospacers:
+            by_length.setdefault(len(sp), []).append(sp)
+
         with tempfile.TemporaryDirectory() as tmp:
-            inp = os.path.join(tmp, "casin.txt")
-            outp = os.path.join(tmp, "casout.txt")
-            self._write_input(inp, protospacers)
-            self._run(inp, outp)
-            for row in self._parse_output(outp):
-                guide = row["guide"]
-                if guide not in results:
-                    continue
-                mm = row["mismatches"]
-                if mm == 0:
-                    results[guide]["exact"] += 1
-                elif mm <= self.count_mismatch_threshold:
-                    results[guide]["near"] += 1
-                # mm > count_mismatch_threshold: searched (up to max_mismatches) but
-                # NOT counted -- distant hits are not functional off-targets.
+            for length, group in sorted(by_length.items()):
+                inp = os.path.join(tmp, f"casin_{length}.txt")
+                outp = os.path.join(tmp, f"casout_{length}.txt")
+                self._write_input(inp, group, spacer_len=length)
+                self._run(inp, outp)
+                for row in self._parse_output(outp):
+                    guide = row["guide"]
+                    if guide not in results:
+                        continue
+                    mm = row["mismatches"]
+                    if mm == 0:
+                        results[guide]["exact"] += 1
+                    elif mm <= self.count_mismatch_threshold:
+                        results[guide]["near"] += 1
+                    # mm > count_mismatch_threshold: searched (up to max_mismatches)
+                    # but NOT counted -- distant hits are not functional off-targets.
         out: dict = {}
         for sp, agg in results.items():
             exact, near = agg["exact"], agg["near"]
