@@ -39,6 +39,7 @@ interface FormState {
   pbs_lengths: string;
   ngrna_distance_min: string;
   ngrna_distance_max: string;
+  ngrna_max_offtargets: string;
   max_run: string;
   spacer: string;
   het_snps: string;
@@ -57,6 +58,7 @@ const EMPTY_FORM: FormState = {
   pbs_lengths: "13,15,17",
   ngrna_distance_min: "40",
   ngrna_distance_max: "90",
+  ngrna_max_offtargets: "0",
   max_run: "8",
   spacer: "",
   het_snps: "",
@@ -144,6 +146,8 @@ export default function App() {
       pbs_lengths: (cfg.pbs_lengths ?? []).join(",") || "13,15,17",
       ngrna_distance_min: cfg.ngrna_distance_min != null ? String(cfg.ngrna_distance_min) : "40",
       ngrna_distance_max: cfg.ngrna_distance_max != null ? String(cfg.ngrna_distance_max) : "90",
+      ngrna_max_offtargets:
+        cfg.ngrna_max_offtargets != null ? String(cfg.ngrna_max_offtargets) : "0",
       max_run: cfg.max_run != null ? String(cfg.max_run) : "8",
       spacer: cfg.spacer ?? "",
       het_snps: cfg.het_snps ? JSON.stringify(cfg.het_snps) : "",
@@ -176,6 +180,9 @@ export default function App() {
     if (!cargo) e.cargo = "Add the cargo you want to insert.";
     if (form.spacer && form.spacer.trim().length !== 20)
       e.spacer = `A spacer is 20 nt (this is ${form.spacer.trim().length}).`;
+    const tolerance = Number(form.ngrna_max_offtargets);
+    if (!Number.isInteger(tolerance) || tolerance < 0 || tolerance > 10)
+      e.ngrna_max_offtargets = "A whole number from 0 to 10.";
     if (form.het_snps.trim()) {
       try {
         const parsed = JSON.parse(form.het_snps);
@@ -219,6 +226,7 @@ export default function App() {
     if (pbs.length) cfg.pbs_lengths = pbs;
     cfg.ngrna_distance_min = Number(form.ngrna_distance_min) || 40;
     cfg.ngrna_distance_max = Number(form.ngrna_distance_max) || 90;
+    cfg.ngrna_max_offtargets = Number(form.ngrna_max_offtargets) || 0;
 
     // Spacer is an override: blank means PRIDICT2 designs it, and must clear any
     // spacer inherited from a loaded example.
@@ -489,7 +497,7 @@ export default function App() {
 
                 <Disclosure
                   title="Fine-tuning"
-                  description="PBS lengths, nick distance, homopolymer limit"
+                  description="PBS lengths, nick distance, homopolymer limit, off-target tolerance"
                 >
                   <div className="grid gap-4 sm:grid-cols-2">
                     <Field
@@ -538,6 +546,26 @@ export default function App() {
                         className="input"
                         value={form.ngrna_distance_max}
                         onChange={(e) => set("ngrna_distance_max", e.target.value)}
+                      />
+                    </Field>
+                    <Field
+                      label="Off-target hits allowed, second nick"
+                      htmlFor="ngrna_max_offtargets"
+                      error={shownError("ngrna_max_offtargets")}
+                      help="How many near-matches elsewhere in the genome the second nick's guide may have. The second nick cuts one strand only, so a near-match costs less than for a cutting guide. 0 is strict and recommended; raise it only if every good guide is being rejected. Whatever the chosen guide has is shown on the result."
+                    >
+                      <input
+                        id="ngrna_max_offtargets"
+                        type="number"
+                        min={0}
+                        max={10}
+                        className={cx(
+                          "input",
+                          shownError("ngrna_max_offtargets") && "input-invalid",
+                        )}
+                        value={form.ngrna_max_offtargets}
+                        onBlur={() => touch("ngrna_max_offtargets")}
+                        onChange={(e) => set("ngrna_max_offtargets", e.target.value)}
                       />
                     </Field>
                   </div>

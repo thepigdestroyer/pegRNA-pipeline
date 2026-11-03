@@ -167,6 +167,21 @@ export function ResultPanel({ result }: { result: DesignResult }) {
           </Callout>
         )}
 
+        {/*
+          Advisories the design carries (a check that could only report, a tolerated
+          off-target, a guide sequence worth a second look). They were only in the collapsed
+          text report, so a reader ordering DNA could miss them.
+        */}
+        {result.ok && (result.gates?.warnings?.length ?? 0) > 0 && (
+          <Callout tone="warn" title="Check these before you order">
+            <ul className="mt-1 list-disc space-y-1 pl-5">
+              {result.gates.warnings!.map((w, i) => (
+                <li key={i}>{w}</li>
+              ))}
+            </ul>
+          </Callout>
+        )}
+
         {result.ok && result.components.length > 0 && (
           <SequenceMap components={result.components} />
         )}

@@ -19,6 +19,26 @@ from typing import List, Optional, Sequence, Tuple
 OFFTARGET_SCORING_DONE = "OFFTARGET_SCORING_DONE"
 
 
+class OffTargetScore(tuple):
+    """``(on_target, off_target_count, has_off_target)``, plus how many of those off-targets are
+    EXACT copies of the guide elsewhere in the genome (``.duplicates``).
+
+    It is a real 3-tuple, so it compares equal to and unpacks like the plain triple every
+    scorer returns, and nothing that consumes the triple changes. The extra attribute exists
+    because the count lumps two very different things together: a near-match (1-2 mismatches)
+    cuts rarely and weakly, while a perfect duplicate cuts as well as the intended site. A
+    tolerance for the first must never admit the second, so the screens read ``duplicates``.
+    Scorers that cannot tell return a plain tuple, which reads as no known duplicates.
+    """
+
+    duplicates: int
+
+    def __new__(cls, on: float, off: int, flagged: bool, duplicates: int = 0) -> "OffTargetScore":
+        self = super().__new__(cls, (on, off, flagged))
+        self.duplicates = duplicates
+        return self
+
+
 @dataclass(frozen=True)
 class OffTargetReport:
     """One row of :file:`offtarget_scores.tsv`.
@@ -276,9 +296,10 @@ class CasOffinderScorer:
         for sp, agg in results.items():
             exact, near = agg["exact"], agg["near"]
             # Disqualifying off-targets = extra EXACT duplicates + near-tier hits.
-            offtargets = max(0, exact - 1) + near
+            duplicates = max(0, exact - 1)
+            offtargets = duplicates + near
             on = 1.0 if exact >= 1 else 0.0
-            out[sp] = (on, offtargets, offtargets > 0)
+            out[sp] = OffTargetScore(on, offtargets, offtargets > 0, duplicates)
         return out
 
     def _parse_output(self, path: str):

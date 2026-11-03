@@ -50,4 +50,6 @@ def test_screen_sorts_by_ontarget_desc():
     a = NickCandidate("ACGTA" + "C" * 15, "AGG", 10, 45, "Fw")  # 0.6
     b = NickCandidate("CCCCC" + "G" * 15, "AGG", 11, 46, "Fw")  # 0.9
     kept = screen_nick_candidates([a, b], scorer=scorer)
-    assert kept[0] is b and kept[1] is a
+    # Survivors are copies (they now carry the off-target count), so compare by content.
+    assert [c.protospacer for c in kept] == [b.protospacer, a.protospacer]
+    assert [c.offtargets for c in kept] == [0, 0]

@@ -20,6 +20,8 @@ export interface DesignConfig {
   het_edit?: boolean;
   protein_length?: number;
   structure_threshold?: number;
+  /** Off-target sites the second nick (ngRNA) may have; 0 is the strict default. */
+  ngrna_max_offtargets?: number;
   [key: string]: unknown;
 }
 

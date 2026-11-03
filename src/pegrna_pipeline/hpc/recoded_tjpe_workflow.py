@@ -18,7 +18,12 @@ from pegrna_pipeline.hpc.complex_dock import DockingServiceError, passes_docking
 from pegrna_pipeline.hpc.cryptic_splice import passes_cryptic_splice_gate
 from pegrna_pipeline.hpc.full_structure import functional_region_pairing
 from pegrna_pipeline.hpc.gate_thresholds import THRESHOLDS
-from pegrna_pipeline.hpc.nick_search import enumerate_nick_sites, screen_nick_candidates
+from pegrna_pipeline.hpc.guide_sanity import assess_spacer
+from pegrna_pipeline.hpc.nick_search import (
+    enumerate_nick_sites,
+    filter_nick_sanity,
+    screen_nick_candidates,
+)
 from pegrna_pipeline.hpc.pridict_ngrna import InjectedNgRNA
 from pegrna_pipeline.hpc.recode_arm import recode_arm
 from pegrna_pipeline.hpc.scarless import assert_inv0
@@ -525,6 +530,8 @@ class _NickPlan:
     nick_position: int
     protospacer: str
     rcpbs2: Optional[str] = None
+    #: Off-target sites the screen counted for this guide; ``None`` if it was not screened.
+    offtargets: Optional[int] = None
 
 
 def _run_recoded_tjpe_single(
@@ -558,8 +565,16 @@ def _run_recoded_tjpe_single(
     protein_length: Optional[int] = None,
     on_gate: Optional[Callable[..., None]] = None,
     injected_ngrnas: Optional[Sequence[InjectedNgRNA]] = None,
+    ngrna_max_offtargets: int = 0,
 ) -> "RecodedTJPEResult":
     """Ranked-pool-walk orchestrator (decisions 0-15).
+
+    ``ngrna_max_offtargets`` is how many off-target sites (extra exact copies plus near matches
+    within the scorer's mismatch tier) the second-nick guide may have anywhere in the genome.
+    The default, 0, is ADR 0010's zero tolerance. It applies to the genome-enumerated path
+    here; the PRIDICT path applies the same number where it screens
+    (:func:`pegrna_pipeline.hpc.pridict_ngrna.build_pridict_ngrnas`). Whatever count the chosen
+    guide actually has is reported on the design, so a tolerated off-target is never silent.
 
     Builds a ranked candidate pool once; for each candidate runs the gates in
     cheap->expensive order (recode + INV-0 + rcPBS2 + ViennaRNA-class structure;
@@ -570,6 +585,10 @@ def _run_recoded_tjpe_single(
     """
     if arm_side not in ("3prime", "5prime", "auto"):
         raise ValueError(f"arm_side must be '3prime'/'5prime'/'auto'; got {arm_side!r}")
+    if int(ngrna_max_offtargets) != ngrna_max_offtargets or ngrna_max_offtargets < 0:
+        raise ValueError(
+            f"ngrna_max_offtargets must be an integer >= 0; got {ngrna_max_offtargets!r}"
+        )
 
     def _emit(
         cand: int, gate_id: str, info: str, passed: bool, metrics: Optional[dict] = None
@@ -600,10 +619,14 @@ def _run_recoded_tjpe_single(
     # (pridict_ngrna.build_pridict_ngrnas), so inject them verbatim -- iterating them IS
     # the NICK lever. GENOME (fallback / explicit-spacer) path: enumerate PAM-anchored
     # opposite-strand nicks and off-target screen them here (unchanged).
+    unusable_nicks: list = []
     if injected_ngrnas is not None:
         plans = [
             _NickPlan(
-                nick_position=inj.nick_position, protospacer=inj.protospacer, rcpbs2=inj.rcpbs2
+                nick_position=inj.nick_position,
+                protospacer=inj.protospacer,
+                rcpbs2=inj.rcpbs2,
+                offtargets=inj.offtargets,
             )
             for inj in injected_ngrnas
         ]
@@ -617,8 +640,17 @@ def _run_recoded_tjpe_single(
             distance_max=ngrna_distance_max,
         )
         raw_nick_count = len(nicks)
-        nicks = screen_nick_candidates(nicks, scorer=offtarget_scorer)
-        plans = [_NickPlan(nick_position=n.nick_position, protospacer=n.protospacer) for n in nicks]
+        # The same hard sequence rules the PRIDICT path applies, before the genome scan.
+        nicks, unusable_nicks = filter_nick_sanity(nicks)
+        nicks = screen_nick_candidates(
+            nicks, scorer=offtarget_scorer, max_offtargets=ngrna_max_offtargets
+        )
+        plans = [
+            _NickPlan(
+                nick_position=n.nick_position, protospacer=n.protospacer, offtargets=n.offtargets
+            )
+            for n in nicks
+        ]
 
     variants = enumerate_pbs_rtt_variants(
         spacer=spacer,
@@ -658,10 +690,23 @@ def _run_recoded_tjpe_single(
                 f"opposite the pegRNA ({pegrna_strand})"
             )
         else:
+            screened = raw_nick_count - len(unusable_nicks)
+            parts = []
+            if unusable_nicks:
+                parts.append(
+                    f"{len(unusable_nicks)} failed the sequence rules "
+                    f"({'; '.join(sorted({r.split(':')[0] for _, rs in unusable_nicks for r in rs}))})"
+                )
+            if screened:
+                parts.append(
+                    f"{screened} failed the off-target screen (each needs a unique on-target and "
+                    f"at most {ngrna_max_offtargets} off-target site(s) within the gate mismatch "
+                    "tier)"
+                )
+            # The lead phrase is the one ADR 0010 documents; the breakdown says which rule.
             diagnostics.append(
-                f"0 nicks after off-target screen: all {raw_nick_count} PAM candidate(s) "
-                f"were rejected (each needs a unique on-target and 0 off-targets within the "
-                f"gate mismatch tier)"
+                f"0 nicks after off-target screen: all {raw_nick_count} PAM candidate(s) were "
+                "rejected: " + ", ".join(parts)
             )
 
     for plan in plans:
@@ -931,6 +976,8 @@ def _run_recoded_tjpe_single(
             gate_info["docking"] = dock_why
             # First survivor wins.
             warnings: List[str] = []
+            if dk_metrics.get("borderline"):
+                warnings.append("docking gate: " + dk_metrics["note"])
             if dk_metrics.get("advisory"):
                 # Outside the calibrated length range the docking gate can only report,
                 # not judge. The design is accepted on the other gates, and says so.
@@ -942,6 +989,22 @@ def _run_recoded_tjpe_single(
                     "microhomology advisory: non-coding locked span re-templated "
                     "byte-exact (cannot recode; Decision 15)"
                 )
+            # Spacer sequence findings. The ngRNA cannot fail a hard rule (it was filtered), but
+            # the pegRNA spacer is the caller's or PRIDICT's choice, so a failure there is
+            # reported rather than silently rejected.
+            for label, guide in (("pegRNA spacer", spacer), ("ngRNA spacer", plan.protospacer)):
+                verdict = assess_spacer(guide)
+                warnings.extend(f"{label}: {f}" for f in verdict.failures)
+                warnings.extend(f"{label} advisory: {a}" for a in verdict.advisories)
+            tier = getattr(offtarget_scorer, "count_mismatch_threshold", None)
+            tier_txt = f"within {tier} mismatches" if tier is not None else "in the mismatch tier"
+            n_off = plan.offtargets or 0
+            if n_off > 0:
+                warnings.append(
+                    f"second-nick guide has {n_off} off-target site(s) {tier_txt} "
+                    f"(ngrna_max_offtargets={ngrna_max_offtargets}). Each is a single-strand "
+                    "nick, not a double-strand break, but check them before ordering"
+                )
             rtt_components = _decompose_rtt(
                 rtt,
                 cargo=cargo,
@@ -950,11 +1013,16 @@ def _run_recoded_tjpe_single(
                 nick_gt_s=pos > site_s,
             )
             parts_map = dict(rtt_components)
-            gate_info["offtarget"] = (
-                f"nick {plan.nick_position}: PRIDICT ngRNA, off-target-screened upstream "
-                "(0 off-targets in tier)"
+            how = (
+                "PRIDICT ngRNA, off-target-screened upstream"
                 if plan.rcpbs2 is not None
-                else f"nick {plan.nick_position}: unique on-target, 0 off-targets in tier"
+                else "unique on-target"
+            )
+            gate_info["offtarget"] = (
+                f"nick {plan.nick_position}: {how}, 0 off-target sites {tier_txt}"
+                if n_off == 0
+                else f"nick {plan.nick_position}: {how}, {n_off} off-target site(s) {tier_txt} "
+                f"(tolerance {ngrna_max_offtargets})"
             )
             gate_info["recode"] = f"{arm.n_edits} synonymous codon edits (microhomology broken)"
             gate_info["inv0"] = "0 bp endogenous deletion; recode protein-silent (INV-0 held)"

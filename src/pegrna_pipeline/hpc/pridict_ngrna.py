@@ -33,7 +33,7 @@ from dataclasses import dataclass
 from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
 from pegrna_pipeline.hpc.data_types import NgRNADesign
-from pegrna_pipeline.hpc.nick_search import nick_usable_for_arm
+from pegrna_pipeline.hpc.nick_search import nick_usable_for_arm, offtarget_rejection
 from pegrna_pipeline.hpc.tjpe_workflow import derive_rc_pbs2, select_tjpe_ngrna
 
 __all__ = [
@@ -71,6 +71,8 @@ class InjectedNgRNA:
     distance_to_edit: int
     target_strand: str
     deepcas9_score: float
+    #: Off-target sites the screen counted for this guide (0 unless a tolerance was granted).
+    offtargets: int = 0
 
 
 def _coerce_flag(val: object) -> bool:
@@ -160,9 +162,10 @@ def build_pridict_ngrnas(
     2. Arm side: a nick on the wrong side of S for ``arm_side`` is dropped HERE, before
        the (slow) off-target scan -- see :func:`nick_usable_for_arm` for why this must
        happen when the pool is built and not only when it is walked.
-    3. Off-target gate on each protospacer (one batched scorer call). A candidate with a
-       flagged off-target, more than ``max_offtargets`` in-tier hits, or on-target below
-       ``min_ontarget`` is skipped -- the NICK lever advances to the next candidate.
+    3. Off-target gate on each protospacer (one batched scorer call), by
+       :func:`pegrna_pipeline.hpc.nick_search.offtarget_rejection`: a candidate with more than
+       ``max_offtargets`` in-tier hits, or on-target below ``min_ontarget``, is skipped -- the
+       NICK lever advances to the next candidate. ``max_offtargets`` defaults to 0 (ADR 0010).
     4. rcPBS2 = :func:`derive_rc_pbs2` over the window 5' of ``site_s + distance_to_edit``;
        a candidate whose PBS2 window falls off the genome window is skipped.
 
@@ -186,9 +189,10 @@ def build_pridict_ngrnas(
     scores = offtarget_scorer([ng.spacer for ng in ordered])
     out: List[InjectedNgRNA] = []
     for ng in ordered:
-        on, off, has_off = scores.get(ng.spacer, (0.0, 10**9, True))
-        if has_off or off > max_offtargets or on < min_ontarget:
+        score = scores.get(ng.spacer, (0.0, 10**9, True))
+        if offtarget_rejection(score, max_offtargets=max_offtargets, min_ontarget=min_ontarget):
             continue  # NICK lever: skip this nick, try the next admissible candidate
+        off = int(score[1])
         nick_pos = site_s + ng.distance_to_edit
         try:
             rcpbs2 = derive_rc_pbs2(genome, ngrna_nick_position=nick_pos, pbs2_length=pbs2_length)
@@ -202,6 +206,7 @@ def build_pridict_ngrnas(
                 distance_to_edit=ng.distance_to_edit,
                 target_strand=ng.target_strand,
                 deepcas9_score=ng.deepcas9_score,
+                offtargets=off,
             )
         )
     return out

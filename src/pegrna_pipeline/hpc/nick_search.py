@@ -8,13 +8,17 @@ protospacer. Off-target / on-target scoring is applied separately
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Callable, Dict, List, Tuple
+from dataclasses import dataclass, replace
+from typing import Callable, Dict, List, Optional, Tuple
 
 from Bio.Seq import Seq
 
+from pegrna_pipeline.hpc.guide_sanity import assess_spacer
+
 __all__ = [
     "enumerate_nick_sites",
+    "filter_nick_sanity",
+    "offtarget_rejection",
     "screen_nick_candidates",
     "nick_usable_for_arm",
     "NickCandidate",
@@ -55,6 +59,63 @@ class NickCandidate:
     nick_position: int  # 0-indexed on the sense genome
     distance_to_edit: int  # |nick - S|
     target_strand: str  # "Fw" or "Rv" (opposite the pegRNA)
+    #: Off-target sites the screen counted for this guide (extra exact copies plus near
+    #: matches within the mismatch tier). ``None`` until the candidate has been screened.
+    offtargets: Optional[int] = None
+
+
+def offtarget_rejection(
+    score: Tuple[float, int, bool], *, max_offtargets: int, min_ontarget: float
+) -> Optional[str]:
+    """Why a guide's ``(on-target, off-target count, flagged)`` triple disqualifies it, or
+    ``None`` when it is acceptable.
+
+    The count is what is compared with ``max_offtargets``. The ``flagged`` bit is redundant
+    with it (the scorers set it to ``count > 0``), and it must not be consulted on its own:
+    doing so made ``max_offtargets`` a no-op for every value above 0, because any guide with
+    a single off-target was already flagged. A guide flagged with a count of zero is
+    contradictory, and is rejected rather than trusted.
+
+    Exact duplicates of the guide elsewhere in the genome are never tolerated, whatever the
+    limit: ``max_offtargets`` is a tolerance for near-matches (a cutting site that is weak and
+    rare), and a perfect copy is neither. Scorers that report the duplicate count do so on the
+    score (``OffTargetScore.duplicates``); one that returns a plain tuple has none known.
+
+    This is the one definition of the rule; both the genome-enumerated and the PRIDICT paths
+    call it, so they cannot disagree about the same guide.
+    """
+    on, off, flagged = score
+    if on < min_ontarget:
+        return f"on-target score {on:.2f} is below {min_ontarget:g}"
+    duplicates = getattr(score, "duplicates", 0)
+    if duplicates > 0:
+        return (
+            f"{duplicates} exact copy/copies of this guide elsewhere in the genome: it is not "
+            "unique to this locus (never tolerated)"
+        )
+    if off > max_offtargets:
+        return f"{off} off-target site(s), more than the {max_offtargets} allowed"
+    if flagged and off <= 0:
+        return "the scorer flagged an off-target but reported no count"
+    return None
+
+
+def filter_nick_sanity(
+    candidates: List["NickCandidate"],
+) -> Tuple[List["NickCandidate"], List[Tuple["NickCandidate", Tuple[str, ...]]]]:
+    """Split candidates into those whose spacer breaks no HARD sequence rule (TTTT, GC) and
+    those that do, with the reasons. Applied before the genome scan, which is the expensive
+    step: there is no point scanning a guide that cannot be used. This is the same check the
+    PRIDICT path applies (``guide_sanity``), so a guide is judged identically on both."""
+    kept: List["NickCandidate"] = []
+    dropped: List[Tuple["NickCandidate", Tuple[str, ...]]] = []
+    for c in candidates:
+        verdict = assess_spacer(c.protospacer)
+        if verdict.ok:
+            kept.append(c)
+        else:
+            dropped.append((c, verdict.failures))
+    return kept, dropped
 
 
 def _opposite(strand: str) -> str:
@@ -135,11 +196,11 @@ def screen_nick_candidates(
     other = other_allele_seqs or {}
     kept: List[Tuple[float, NickCandidate]] = []
     for c in candidates:
-        on, off, has_off = scores.get(c.protospacer, (0.0, 10**9, True))
-        if has_off or off > max_offtargets or on < min_ontarget:
+        score = scores.get(c.protospacer, (0.0, 10**9, True))
+        if offtarget_rejection(score, max_offtargets=max_offtargets, min_ontarget=min_ontarget):
             continue
         if other.get(c.protospacer) == c.protospacer:
             continue  # other allele identical => not allele-discriminating, would cut both
-        kept.append((on, c))
+        kept.append((score[0], replace(c, offtargets=int(score[1]))))
     kept.sort(key=lambda t: (-t[0], t[1].distance_to_edit, t[1].protospacer))
     return [c for _, c in kept]

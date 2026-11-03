@@ -4,8 +4,8 @@ Filters:
 - ``|distance_to_edit|`` falls in [min_distance, max_distance].
 - If ``pegrna_strand`` is supplied, keep only opposite-strand candidates
   (mapping {Fw: Rv, Rv: Fw}).
-- Sanity filters on the spacer: no TTTT (RNA-pol III terminator), no
-  homopolymer run of length >= 5, GC content in [0.30, 0.75].
+- Sanity filters on the spacer (hard rules, see ``guide_sanity``): no TTTT (RNA-pol III
+  terminator), GC content in [0.30, 0.75]. Homopolymer runs are advisory, not filtered.
 
 Returns the candidate with the maximum ``deepcas9_score`` that survives,
 or ``None`` if no candidate survives.
@@ -93,10 +93,12 @@ def test_reject_spacer_with_tttt():
     assert select_tjpe_ngrna(cands) is None
 
 
-def test_reject_spacer_with_long_homopolymer():
-    # 6-A run
-    cands = [_ng(spacer="AAAAAACCTGGTACGGATCA", score=0.9)]
-    assert select_tjpe_ngrna(cands) is None
+def test_long_homopolymer_is_not_a_hard_rejection():
+    """Only TTTT (a Pol III stop signal) has a mechanism, so a run of A, C or G is reported as
+    an advisory instead (guide_sanity); it used to be rejected here, on this path only, which made
+    the same guide acceptable to the genome-enumerated path and not to this one."""
+    cands = [_ng(spacer="AAAAAACCTGGTACGGATCA", score=0.9)]  # 6-A run
+    assert select_tjpe_ngrna(cands) is not None
 
 
 def test_reject_spacer_with_low_gc():

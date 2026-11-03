@@ -30,7 +30,7 @@ export const PIPELINE: PipelineStep[] = [
     engine: "cas-offinder",
     gate: true,
     keywords: ["off-target", "offtarget"],
-    why: "Rejects a guide that also matches elsewhere in the genome, which would cut somewhere you did not intend.",
+    why: "Rejects a second-nick guide that also matches elsewhere in the genome, which would cut somewhere you did not intend. By default no near-match is allowed; the Fine-tuning panel can allow a few, and the result always states how many the chosen guide has.",
   },
   {
     id: "enum",
