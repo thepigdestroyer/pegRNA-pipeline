@@ -23,6 +23,26 @@ export function apiURL(path: string): string {
   return `${API_BASE}${path}`;
 }
 
+const TOKEN_KEY = "pegrna.accessToken";
+
+/** The access token for `api` mode, kept in localStorage between visits. */
+export function getToken(): string {
+  try {
+    return localStorage.getItem(TOKEN_KEY) ?? "";
+  } catch {
+    return "";
+  }
+}
+
+export function setToken(value: string): void {
+  try {
+    if (value) localStorage.setItem(TOKEN_KEY, value);
+    else localStorage.removeItem(TOKEN_KEY);
+  } catch {
+    /* private browsing can block storage; the token still works for this run */
+  }
+}
+
 /** Human-readable text for the guard responses web/app.py can return. */
 export function statusMessage(code: number): string {
   switch (code) {
@@ -69,7 +89,10 @@ export async function streamDesign(
 ): Promise<DesignResult> {
   const r = await fetch(apiURL("/api/design/stream"), {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: {
+      "Content-Type": "application/json",
+      ...(getToken() ? { "X-Access-Token": getToken() } : {}),
+    },
     body: JSON.stringify({ config, mode }),
     signal,
   });
@@ -109,8 +132,10 @@ export async function streamDesign(
       } catch {
         continue; // a partial or non-JSON line is not fatal to the stream
       }
-      if ((obj as DesignResult).type === "result") final = obj as DesignResult;
-      else onProgress(obj as ProgressEvent);
+      const kind = (obj as { type?: string }).type;
+      if (kind === "result") final = obj as DesignResult;
+      // Keepalives exist only to stop an idle proxy dropping a long design.
+      else if (kind !== "heartbeat") onProgress(obj as ProgressEvent);
     }
   }
 

@@ -1,66 +1,67 @@
 #!/usr/bin/env bash
-# Stage a GRCh38 genome FASTA so the off-target gate runs for real.
+# Stage a GRCh38 genome for the off-target gate so cas-offinder runs for real.
 #
-# Without a FASTA, _api_bundle falls back to a clean-pass stand-in: every guide
-# is reported as having zero off-targets. That verdict is now declared in the
-# report (`stand_in_gates`), but on a production deployment you want the real
-# thing -- an unchecked guide is exactly what the gate exists to catch.
+# Without a genome, _api_bundle falls back to a clean-pass stand-in: every guide
+# is reported as having zero off-targets. That is declared in the report now
+# (`stand_in_gates`), but on a production deployment you want the real check --
+# an unscreened guide is exactly what this gate exists to catch.
 #
-# Pairs with the `cas-offinder` binary, installed into the pegrna-real env by
-# web/deploy/setup_envs.sh.
-#
-# Downloads the Ensembl GRCh38 primary assembly (~900 MB gzipped, ~3.1 GB
-# unpacked), matching the GRCh38 coordinate frame the rest of the gates use.
+# Uses UCSC's .2bit (~950 MB) rather than an unpacked FASTA (~3.1 GB).
+# cas-offinder >= 2.4 reads .2bit directly, and the gate only COUNTS hits per
+# mismatch tier -- it never reports coordinates -- so UCSC's `chr1` naming
+# versus Ensembl's `1` is irrelevant here. On a shared box where the deployment
+# lives on the system disk, 2.2 GB of headroom matters more than the convention.
 #
 # Usage:
-#   scripts/install_genome.sh [target-dir]     # default: $PEGRNA_ROOT/genomes
-#
-# Then set in web/deploy/pegrna.env:
-#   PEGRNA_GENOME=<target-dir>/GRCh38.primary_assembly.genome.fa
+#   scripts/install_genome.sh [target-dir]      # default: $PEGRNA_ROOT/genomes
 set -euo pipefail
 
-PEGRNA_ROOT="${PEGRNA_ROOT:-/mnt/data2/mj1824/pegrna}"
+PEGRNA_ROOT="${PEGRNA_ROOT:-$HOME/pegrna}"
 TARGET="${1:-$PEGRNA_ROOT/genomes}"
-URL="https://ftp.ensembl.org/pub/release-112/fasta/homo_sapiens/dna/Homo_sapiens.GRCh38.dna.primary_assembly.fa.gz"
-FASTA="$TARGET/GRCh38.primary_assembly.genome.fa"
+URL="https://hgdownload.soe.ucsc.edu/goldenPath/hg38/bigZips/hg38.2bit"
+GENOME="$TARGET/hg38.2bit"
+MIN_BYTES=800000000   # a truncated download must not be accepted silently
 
 log() { echo "[install_genome $(date -u +%H:%M:%S)] $*"; }
 
 mkdir -p "$TARGET"
 
-if [ -s "$FASTA" ]; then
-  log "already present: $FASTA ($(du -h "$FASTA" | cut -f1))"
-else
-  log "downloading GRCh38 primary assembly (~900 MB gz) -> $TARGET"
-  # --continue so an interrupted transfer resumes instead of restarting.
-  curl -L --continue-at - --retry 5 --retry-delay 10 -o "$FASTA.gz" "$URL"
-  log "decompressing (~3.1 GB)"
-  gunzip -c "$FASTA.gz" > "$FASTA"
-  rm -f "$FASTA.gz"
+# Refuse to fill a disk that other people depend on.
+avail_kb="$(df -Pk "$TARGET" | tail -1 | awk '{print $4}')"
+if [ "$avail_kb" -lt 2000000 ]; then
+  echo "error: only $((avail_kb / 1024)) MB free at $TARGET; need ~2 GB." >&2
+  echo "       Free space or pass a target on a larger volume." >&2
+  exit 1
 fi
 
-log "verifying it looks like a FASTA"
-head -c 1 "$FASTA" | grep -q '>' || { echo "error: $FASTA does not start with '>'" >&2; exit 1; }
-contigs=$(grep -c '^>' "$FASTA" || true)
-log "OK — $contigs sequences"
-
-if command -v cas-offinder >/dev/null 2>&1; then
-  log "cas-offinder found: $(command -v cas-offinder)"
+if [ -s "$GENOME" ] && [ "$(stat -c %s "$GENOME" 2>/dev/null || stat -f %z "$GENOME")" -ge "$MIN_BYTES" ]; then
+  log "already present: $GENOME ($(du -h "$GENOME" | cut -f1))"
 else
-  log "WARN: cas-offinder is not on PATH here. It lives in the pegrna-real env;"
-  log "      the web app invokes it from there, so this warning is fine locally."
+  log "downloading hg38.2bit (~950 MB) -> $TARGET"
+  curl -L --fail --continue-at - --retry 5 --retry-delay 10 -o "$GENOME" "$URL"
 fi
+
+size="$(stat -c %s "$GENOME" 2>/dev/null || stat -f %z "$GENOME")"
+if [ "$size" -lt "$MIN_BYTES" ]; then
+  echo "error: $GENOME is only $((size / 1024 / 1024)) MB — download looks truncated." >&2
+  exit 1
+fi
+# .2bit starts with the magic number 0x1A412743.
+if [ "$(head -c 4 "$GENOME" | od -An -tx1 | tr -d ' \n')" != "4327411a" ]; then
+  echo "error: $GENOME does not have the .2bit magic number." >&2
+  exit 1
+fi
+log "OK — $(du -h "$GENOME" | cut -f1), valid .2bit"
 
 cat <<EOF
 
 Genome staged. Point the pipeline at it:
 
-  PEGRNA_GENOME=$FASTA
+  PEGRNA_GENOME=$GENOME
 
-Add that line to ~/.config/pegrna/pegrna.env and restart:
+Add that to ~/.config/pegrna/pegrna.env and restart:
 
   systemctl --user restart pegrna-web
 
-The off-target gate then runs cas-offinder for real, and 'offtarget' disappears
-from stand_in_gates in the report and the UI.
+'offtarget' then disappears from stand_in_gates in the report and the UI.
 EOF

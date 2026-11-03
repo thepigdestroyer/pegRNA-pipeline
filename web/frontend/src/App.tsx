@@ -5,6 +5,8 @@ import {
   getModes,
   getMotifs,
   getRealExample,
+  getToken,
+  setToken,
   streamDesign,
 } from "./api";
 import type {
@@ -89,6 +91,7 @@ export default function App() {
     [],
   );
 
+  const [token, setTokenState] = useState<string>(() => getToken());
   const [running, setRunning] = useState(false);
   const [progress, setProgress] = useState<Record<string, ProgressEvent>>({});
   const [result, setResult] = useState<DesignResult | null>(null);
@@ -616,10 +619,35 @@ export default function App() {
                 ))}
               </select>
             </div>
+            {/*
+              The token is only asked for when the server says api mode needs
+              one, and never for fake mode -- a visitor should be able to try the
+              tool without credentials.
+            */}
+            {mode === "api" && health?.api_mode_token_required && (
+              <div className="w-56">
+                <label className="field-label" htmlFor="access-token">
+                  Access token
+                </label>
+                <input
+                  id="access-token"
+                  type="password"
+                  className="input"
+                  value={token}
+                  onChange={(e) => {
+                    setTokenState(e.target.value);
+                    setToken(e.target.value);
+                  }}
+                  placeholder="required for real models"
+                />
+              </div>
+            )}
             <p className="max-w-sm flex-1 pb-2 text-xs leading-relaxed text-ink-500 dark:text-ink-400">
               {mode === "fake"
                 ? "Checks your inputs flow through the design logic in about a second. Every verdict is a placeholder."
-                : "Runs the real models — a few minutes. Docking needs an API key on the server."}
+                : health?.api_mode_token_required && !token
+                  ? "Running the real models needs an access token. Dry run is open to everyone."
+                  : "Runs the real models — this can take 15 minutes or more. Progress appears as each check completes."}
             </p>
             {running && (
               <button

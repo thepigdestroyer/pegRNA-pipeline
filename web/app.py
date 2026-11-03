@@ -12,6 +12,7 @@ import csv
 import io
 import json
 import os
+import queue
 import shutil
 import subprocess
 import sys
@@ -100,9 +101,19 @@ MAX_CONFIG_BYTES = int(os.environ.get("PEGRNA_MAX_CONFIG_BYTES", "200000"))  # 2
 MAX_GENOME_LEN = int(os.environ.get("PEGRNA_MAX_GENOME_LEN", "50000"))
 KEEP_RUNS = int(os.environ.get("PEGRNA_KEEP_RUNS", "200"))
 RUN_TIMEOUT = int(os.environ.get("PEGRNA_TIMEOUT", "1800"))
+# How long the design stream may stay silent before emitting a keepalive. Must
+# stay comfortably under the shortest idle timeout between here and the browser
+# (a Cloudflare Tunnel is ~100 s).
+STREAM_HEARTBEAT_SECONDS = int(os.environ.get("PEGRNA_HEARTBEAT_SECONDS", "15"))
 # Optional shared-secret gate. Empty => open (anyone can design); set it to
 # require an `X-Access-Token` header (or `?token=`) on the design endpoints.
 ACCESS_TOKEN = os.environ.get("PEGRNA_ACCESS_TOKEN", "")
+# Token required for `api` mode ONLY, leaving `fake` open to everyone.
+# A public deployment wants both: anyone may try the tool, but only known users
+# may spend NVIDIA credits and occupy the box for ~15 minutes a run. Gating the
+# whole site instead would make it useless as a public demo, and embedding a
+# site-wide token in the frontend bundle protects nothing.
+API_MODE_TOKEN = os.environ.get("PEGRNA_API_MODE_TOKEN", "")
 
 _SLOTS = threading.BoundedSemaphore(MAX_CONCURRENCY)
 
@@ -122,6 +133,25 @@ def _check_token(request: Request) -> None:
     supplied = request.headers.get("X-Access-Token") or request.query_params.get("token") or ""
     if supplied != ACCESS_TOKEN:
         raise HTTPException(401, "missing or invalid access token")
+
+
+def _supplied_token(request: Request) -> str:
+    return request.headers.get("X-Access-Token") or request.query_params.get("token") or ""
+
+
+def _check_api_mode_token(request: Request, mode: str) -> None:
+    """401 unless an `api`-mode request carries the token (no-op when unset).
+
+    `fake` mode is always allowed: it is free, instant, and the thing a visitor
+    should be able to try without asking anyone.
+    """
+    if mode != "api" or not API_MODE_TOKEN:
+        return
+    if _supplied_token(request) != API_MODE_TOKEN:
+        raise HTTPException(
+            401,
+            "Running the real models needs an access token. Dry-run (fake) mode is open to all.",
+        )
 
 
 def _validate(req: "DesignRequest") -> None:
@@ -201,6 +231,7 @@ def health() -> dict[str, Any]:
         "api_python_ok": Path(api_py).exists(),
         "nvidia_key": bool(_nvidia_key()),
         "access_token_required": bool(ACCESS_TOKEN),
+        "api_mode_token_required": bool(API_MODE_TOKEN),
         "concurrency": {"limit": MAX_CONCURRENCY},
     }
 
@@ -222,6 +253,14 @@ def _run_env(mode: str) -> dict[str, str]:
     env = dict(os.environ)
     env["TF_CPP_MIN_LOG_LEVEL"] = "3"  # silence TensorFlow banner spam
     if mode == "api":
+        # Put the api env's bin directory on PATH. Gates that shell out to a
+        # BINARY rather than import a module -- cas-offinder for off-target --
+        # are installed into that env, but the subprocess otherwise inherits the
+        # service's PATH and cannot see them. The gate then fails loud with
+        # "requires the 'cas-offinder' binary", which reads like a missing
+        # install even though it is right there.
+        api_bin = str(Path(MODE_PYTHON["api"]).parent)
+        env["PATH"] = api_bin + os.pathsep + env.get("PATH", "")
         key = _nvidia_key()
         if key:
             env["NVIDIA_API_KEY"] = key
@@ -331,6 +370,7 @@ def motifs() -> JSONResponse:
 @app.post("/api/design")
 def design(req: DesignRequest, request: Request) -> JSONResponse:
     _check_token(request)
+    _check_api_mode_token(request, req.mode)
     _validate(req)
     with _Slot():
         run_id = time.strftime("%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex[:6]
@@ -400,6 +440,7 @@ def design_stream(req: DesignRequest, request: Request) -> StreamingResponse:
     `{"type":"result", ...}` line. Progress lines are `{cand,gate,info,passed}`
     emitted by the CLI's --progress hook as each gate is evaluated."""
     _check_token(request)
+    _check_api_mode_token(request, req.mode)
     _validate(req)
     # Acquire a slot up front so an over-capacity request is rejected (429)
     # before any work starts; the generator releases it in a finally.
@@ -437,8 +478,34 @@ def design_stream(req: DesignRequest, request: Request) -> StreamingResponse:
                 text=True,
                 bufsize=1,
             )
-            for line in proc.stdout:  # type: ignore[union-attr]
-                line = line.rstrip("\n")
+
+            # Pump the subprocess on a worker thread so the generator can emit a
+            # heartbeat while the pipeline is silent. A single live Boltz-2 call
+            # runs for minutes with no output, and anything between the browser
+            # and here -- a Cloudflare Tunnel idles at ~100 s, and most proxies
+            # and load balancers are similar -- will drop a connection that sends
+            # nothing. Without this a real api design dies mid-run, which looks
+            # to the user like the pipeline crashed.
+            lines: "queue.Queue[str | None]" = queue.Queue()
+
+            def _pump() -> None:
+                try:
+                    for raw in proc.stdout:  # type: ignore[union-attr]
+                        lines.put(raw.rstrip("\n"))
+                finally:
+                    lines.put(None)  # sentinel: stdout closed
+
+            threading.Thread(target=_pump, daemon=True).start()
+
+            while True:
+                try:
+                    line = lines.get(timeout=STREAM_HEARTBEAT_SECONDS)
+                except queue.Empty:
+                    # Ignored by the client (no `gate`), but it keeps the socket warm.
+                    yield json.dumps({"type": "heartbeat"}) + "\n"
+                    continue
+                if line is None:
+                    break
                 if line.startswith("@@P "):
                     yield line[4:] + "\n"
                 elif line:
