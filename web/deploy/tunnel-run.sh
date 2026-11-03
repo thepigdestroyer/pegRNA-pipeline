@@ -66,6 +66,29 @@ try_cloudflared() {
   return 0
 }
 
+# While on the fallback, keep checking whether Cloudflare will serve us again.
+# The fallback rotates its hostname roughly every 20 minutes, which breaks the
+# site each time; a cloudflared tunnel keeps one hostname for the life of the
+# process. So as soon as the rate limit lifts we want to be back on it. On
+# success this exits the whole script so systemd restarts us into provider 1.
+watch_for_cloudflared() {
+  local probe
+  while sleep 900; do
+    [ -x "$BIN" ] || continue
+    probe="$(mktemp)"
+    timeout 45 "$BIN" tunnel --no-autoupdate --url "http://127.0.0.1:$PEGRNA_PORT" \
+      > "$probe" 2>&1 || true
+    if grep -q 'trycloudflare.com' "$probe" && ! grep -q '429' "$probe"; then
+      log "cloudflared: available again — restarting onto it for a stable hostname"
+      rm -f "$probe"
+      kill -TERM -$$ 2>/dev/null
+      exit 0
+    fi
+    rm -f "$probe"
+    log "cloudflared: still unavailable; staying on the fallback"
+  done
+}
+
 # --- provider 2: localhost.run ----------------------------------------------
 try_localhost_run() {
   log "localhost.run: opening reverse tunnel"
@@ -111,7 +134,11 @@ run_provider() {
 }
 
 run_provider try_cloudflared "cloudflared" && exit 0
+
 log "falling back to localhost.run"
+watch_for_cloudflared &
+WATCHDOG=$!
+trap 'kill "$WATCHDOG" 2>/dev/null' EXIT
 run_provider try_localhost_run "localhost.run" && exit 0
 
 log "no tunnel provider succeeded"

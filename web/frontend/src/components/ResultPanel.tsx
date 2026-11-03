@@ -148,6 +148,16 @@ export function ResultPanel({ result }: { result: DesignResult }) {
           <Callout tone="neutral">
             In <span className="font-medium">api</span> mode, “no candidate survived” is a genuine
             verdict from the checks — not a crash. The blocking step is marked in the panel above.
+            Docking in particular is stochastic, so the same inputs can pass on another run.
+          </Callout>
+        )}
+
+        {!result.ok && standIn.length > 0 && (
+          <Callout tone="warn" title="Part of this rejection came from a placeholder">
+            These checks did not run a real model:{" "}
+            <span className="font-semibold">{standIn.join(", ")}</span>. A rejection by a stand-in
+            is not evidence of anything — fix the configuration above before concluding the design
+            is bad.
           </Callout>
         )}
 

@@ -551,6 +551,39 @@ def design_recoded_cmd(config_path: str, mode: str, output_dir: str, progress: b
                 click.echo(f"\nReport written to {out.report_path}")
     except Exception as exc:  # fail loud with a clear message
         click.echo(f"design-recoded failed: {type(exc).__name__}: {exc}", err=True)
+        # Record which gates were real even though the design failed. "No
+        # candidate survived" means something REJECTED the design, so which
+        # gates were real models and which were placeholders is exactly what the
+        # reader needs -- a rejection by a stand-in is not evidence of anything.
+        try:
+            from pegrna_pipeline.hpc.scorer_factory import make_scorers  # noqa: PLC0415
+
+            # Same inputs the driver uses to decide which gates can be real:
+            # a genome FASTA enables cas-offinder, a key enables Boltz-2.
+            probe = (
+                {
+                    "uniprot_acc": cfg.get("uniprot_acc") or manifest.get("uniprot") or "",
+                    "genome": os.environ.get("PEGRNA_GENOME") or None,
+                }
+                if mode in ("real", "api")
+                else {}
+            )
+            stubs = list(make_scorers(mode=mode, **probe).stub_gates)
+            out_dir = Path(output_dir)
+            out_dir.mkdir(parents=True, exist_ok=True)
+            (out_dir / "recoded_tjpe_gates.json").write_text(
+                json.dumps(
+                    {
+                        "gate_results": [],
+                        "failed": True,
+                        "error": f"{type(exc).__name__}: {exc}",
+                        "stand_in_gates": stubs,
+                        "scorer_mode": mode,
+                    }
+                )
+            )
+        except Exception:  # noqa: BLE001 - diagnostics must never mask the real failure
+            pass
         sys.exit(1)
 
 
