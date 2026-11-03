@@ -100,6 +100,12 @@ MAX_CONCURRENCY = max(1, int(os.environ.get("PEGRNA_MAX_CONCURRENCY", "2")))
 MAX_CONFIG_BYTES = int(os.environ.get("PEGRNA_MAX_CONFIG_BYTES", "200000"))  # 200 KB
 MAX_GENOME_LEN = int(os.environ.get("PEGRNA_MAX_GENOME_LEN", "50000"))
 KEEP_RUNS = int(os.environ.get("PEGRNA_KEEP_RUNS", "200"))
+# A design must not be able to take the machine it runs on. The deployment host is a shared
+# 64-core server: one unconstrained design ran PRIDICT2 at ~36 cores and a cas-offinder scan
+# for 69 CPU-minutes. Threads are capped and the pipeline starts at a lower scheduling
+# priority, so other people's jobs win any contention.
+THREADS = max(1, int(os.environ.get("PEGRNA_THREADS", "4")))
+NICE = max(0, int(os.environ.get("PEGRNA_NICE", "10")))
 RUN_TIMEOUT = int(os.environ.get("PEGRNA_TIMEOUT", "1800"))
 # How long the design stream may stay silent before emitting a keepalive. Must
 # stay comfortably under the shortest idle timeout between here and the browser
@@ -242,9 +248,18 @@ class DesignRequest(BaseModel):
 
 
 def _pegrna_cli(mode: str) -> list[str]:
-    """CLI invocation using the interpreter for the requested mode's env."""
+    """CLI invocation using the interpreter for the requested mode's env.
+
+    Prefixed with ``nice`` when available. The ``nice`` binary rather than
+    ``preexec_fn=os.nice``: this runs from a threaded server, where preexec_fn is documented
+    as unsafe.
+    """
     python = MODE_PYTHON.get(mode, sys.executable)
-    return [python, "-m", "pegrna_pipeline.agent.cli"]
+    cmd = [python, "-m", "pegrna_pipeline.agent.cli"]
+    nice = shutil.which("nice")
+    if NICE and nice:
+        cmd = [nice, "-n", str(NICE), *cmd]
+    return cmd
 
 
 def _run_env(mode: str) -> dict[str, str]:
@@ -252,6 +267,17 @@ def _run_env(mode: str) -> dict[str, str]:
     PRIDICT2 location for api)."""
     env = dict(os.environ)
     env["TF_CPP_MIN_LOG_LEVEL"] = "3"  # silence TensorFlow banner spam
+    # Cap the thread pools of everything the pipeline imports (TensorFlow for SpliceAI,
+    # BLAS under numpy/scikit-learn, ViennaRNA). Left alone each starts one thread per core.
+    for var in (
+        "OMP_NUM_THREADS",
+        "MKL_NUM_THREADS",
+        "OPENBLAS_NUM_THREADS",
+        "NUMEXPR_NUM_THREADS",
+        "TF_NUM_INTRAOP_THREADS",
+    ):
+        env.setdefault(var, str(THREADS))
+    env.setdefault("TF_NUM_INTEROP_THREADS", "2")
     if mode == "api":
         # Put the api env's bin directory on PATH. Gates that shell out to a
         # BINARY rather than import a module -- cas-offinder for off-target --
@@ -312,10 +338,10 @@ def index() -> HTMLResponse:
     return HTMLResponse((STATIC / "index.html").read_text())
 
 
-# Auto-spacer minimal-FLAG preset (24 bp cargo, no manual spacer): verified live on the
-# DSI box to run the full api cascade through the Boltz-2 docking gate. Docking pass is
-# stochastic (Boltz-2 is a diffusion model), so a given api run may or may not yield a
-# final design; importance / structure / splice pass reliably.
+# Auto-spacer minimal-FLAG preset (24 bp cargo, no manual spacer): runs the full api
+# cascade through the Boltz-2 docking gate. Results are reproducible: the Boltz-2 service
+# returns identical scores for identical requests, and the docking gate averages several
+# diffusion samples and compares against a neutral RNA of the same length.
 REAL_EXAMPLE = REPO / "examples" / "ctcf_cterm" / "config_autospacer_flag.json"
 
 
@@ -329,7 +355,7 @@ def example() -> JSONResponse:
 @app.get("/api/example/real")
 def example_real() -> JSONResponse:
     """CTCF C-terminal FLAG knock-in (auto-spacer) that runs the full api cascade
-    through the live Boltz-2 docking gate. Docking pass is stochastic."""
+    through the live Boltz-2 docking gate."""
     if not REAL_EXAMPLE.exists():
         raise HTTPException(404, "real example config not found")
     return JSONResponse(json.loads(REAL_EXAMPLE.read_text()))

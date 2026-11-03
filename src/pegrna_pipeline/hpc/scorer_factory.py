@@ -17,6 +17,7 @@ arguments of :func:`pegrna_pipeline.hpc.recoded_tjpe_workflow.run_recoded_tjpe`.
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Tuple
 
@@ -128,7 +129,12 @@ def _real_bundle(
     if genome:
         # Real genome-wide specificity via cas-offinder (+ KOLF2.1J FASTA on CX3).
         offtarget: Callable[[List[str]], Dict[str, Tuple[float, int, bool]]] = CasOffinderScorer(
-            genome=genome, pam=pam, max_mismatches=max_mismatches
+            genome=genome,
+            pam=pam,
+            max_mismatches=max_mismatches,
+            # Per-guide results are cached under PEGRNA_CACHE_DIR when it is set: a scan costs
+            # ~69 CPU-minutes, and the same guides recur across runs.
+            cache_dir=os.environ.get("PEGRNA_CACHE_DIR"),
         )
     else:
 
@@ -210,8 +216,6 @@ def _api_bundle(
                      design still runs, and this is flagged in the report manifest.
     * off-target  -> cas-offinder if a genome FASTA is supplied, else clean-pass.
     """
-    import os
-
     from pegrna_pipeline.hpc.complex_dock import DockFake
     from pegrna_pipeline.hpc.complex_dock_nim import Boltz2NIMDockScorer
     from pegrna_pipeline.hpc.cryptic_splice import MaxEntScanScorer
@@ -233,7 +237,12 @@ def _api_bundle(
         from pegrna_pipeline.hpc.offtarget_scorer import CasOffinderScorer
 
         offtarget: Callable[[List[str]], Dict[str, Tuple[float, int, bool]]] = CasOffinderScorer(
-            genome=genome, pam=pam, max_mismatches=max_mismatches
+            genome=genome,
+            pam=pam,
+            max_mismatches=max_mismatches,
+            # Per-guide results are cached under PEGRNA_CACHE_DIR when it is set: a scan costs
+            # ~69 CPU-minutes, and the same guides recur across runs.
+            cache_dir=os.environ.get("PEGRNA_CACHE_DIR"),
         )
     else:
         # No genome FASTA -> cas-offinder cannot run. Clean-pass stand-in, declared.

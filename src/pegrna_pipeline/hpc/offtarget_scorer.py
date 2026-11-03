@@ -8,7 +8,9 @@ downloads the output TSV, and parses it into a list of
 from __future__ import annotations
 
 import csv
+import hashlib
 import io
+import json
 import os
 import tempfile
 from dataclasses import dataclass
@@ -115,7 +117,11 @@ class CasOffinderScorer:
         count_mismatch_threshold: int = 2,
         device: str = "C",  # cas-offinder: C=CPU, G=GPU
         binary: str = "cas-offinder",
+        cache_dir: Optional[str] = None,
     ) -> None:
+        # ``cache_dir`` enables a per-guide result cache (see ``_cache_*``). It is OFF unless
+        # given, so unit tests stay hermetic; the deployment factory passes PEGRNA_CACHE_DIR.
+        self.cache_dir = cache_dir
         self.genome = genome
         self.pam = pam.upper()
         self.spacer_len = spacer_len
@@ -134,15 +140,76 @@ class CasOffinderScorer:
                 f"CasOffinderScorer requires the {self.binary!r} binary + a genome; "
                 "install cas-offinder and stage the genome on CX3 (never silently skipped)."
             )
+        # cas-offinder's CPU backend is PoCL, which starts one worker per core unless told
+        # otherwise. A single whole-genome scan used ~40 cores for 100 s (69 CPU-minutes) on a
+        # shared 64-core host, which is not a thing a web request should be allowed to do.
+        # Cap it; PEGRNA_CASOFFINDER_THREADS tunes the trade-off between latency and manners.
+        env = dict(os.environ)
+        env.setdefault("POCL_MAX_PTHREAD_COUNT", os.environ.get("PEGRNA_CASOFFINDER_THREADS", "16"))
         proc = subprocess.run(
             [self.binary, input_path, self.device, output_path],
             check=False,
             capture_output=True,
             text=True,
+            env=env,
         )
         if proc.returncode != 0:
             tail = (proc.stderr or proc.stdout or "").strip()[-800:]
             raise RuntimeError(f"cas-offinder failed (rc={proc.returncode}):\n{tail}")
+
+    # -- per-guide result cache ------------------------------------------------------
+    def _cache_file(self) -> Optional[str]:
+        """Path of the cache for this (genome, PAM, mismatch) configuration, or None.
+
+        Keyed on the genome FILE (path, size, mtime), so replacing or re-downloading the
+        genome invalidates it, and on every setting that changes what a hit count means.
+        Results for one configuration can never answer for another.
+        """
+        if not self.cache_dir:
+            return None
+        try:
+            st = os.stat(self.genome)
+            fingerprint = f"{st.st_size}:{st.st_mtime_ns}"
+        except OSError:
+            fingerprint = "unstatable"  # e.g. a directory of 2bit/fasta, or tests
+        raw = "|".join(
+            [
+                os.path.abspath(self.genome),
+                fingerprint,
+                self.pam,
+                str(self.spacer_len),
+                str(self.max_mismatches),
+                str(self.count_mismatch_threshold),
+            ]
+        )
+        digest = hashlib.sha256(raw.encode()).hexdigest()[:20]
+        return os.path.join(self.cache_dir, "offtarget", f"{digest}.json")
+
+    def _cache_read(self) -> dict:
+        path = self._cache_file()
+        if not path or not os.path.exists(path):
+            return {}
+        try:
+            with open(path) as fh:
+                data = json.load(fh)
+            return data if isinstance(data, dict) else {}
+        except (OSError, ValueError):
+            return {}  # corrupt or unreadable: recompute rather than fail a design
+
+    def _cache_write(self, entries: dict) -> None:
+        path = self._cache_file()
+        if not path or not entries:
+            return
+        try:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            merged = self._cache_read()  # another run may have added entries meanwhile
+            merged.update(entries)
+            tmp = f"{path}.{os.getpid()}.tmp"
+            with open(tmp, "w") as fh:
+                json.dump(merged, fh, sort_keys=True)
+            os.replace(tmp, path)  # atomic: a reader never sees a half-written file
+        except OSError:
+            pass  # a read-only cache must not fail the design
 
     def _write_input(
         self, path: str, protospacers: Sequence[str], spacer_len: int | None = None
@@ -163,36 +230,48 @@ class CasOffinderScorer:
             fh.write("\n".join(lines) + "\n")
 
     def __call__(self, protospacers: List[str]) -> "dict[str, Tuple[float, int, bool]]":
-        results: dict = {sp: {"exact": 0, "near": 0} for sp in protospacers}
         if not protospacers:
             return {}
-        # Group by length. Protospacers are not all 20 nt in practice -- PRIDICT
-        # returns some 19-nt ngRNA spacers -- and mixing lengths makes
-        # cas-offinder abort the ENTIRE run, losing every guide's result rather
-        # than just the odd one. One invocation per distinct length is correct
-        # and keeps the batching (a whole-genome scan is ~100 s, so the number of
-        # invocations, not the number of guides, is what costs).
+        cache = self._cache_read()
+        results: dict = {}
+        todo: List[str] = []
+        for sp in dict.fromkeys(protospacers):  # unique, order-preserving
+            hit = cache.get(sp)
+            if isinstance(hit, list) and len(hit) == 2:
+                results[sp] = {"exact": int(hit[0]), "near": int(hit[1])}
+            else:
+                results[sp] = {"exact": 0, "near": 0}
+                todo.append(sp)
+
+        # Scan only what is not already known. A fully cached batch never starts the binary.
+        # Group by length: protospacers are not all 20 nt in practice -- PRIDICT returns some
+        # 19-nt ngRNA spacers -- and mixing lengths makes cas-offinder abort the ENTIRE run.
+        # One invocation per distinct length keeps the batching (a whole-genome scan is
+        # ~100 s, so the number of invocations, not of guides, is what costs).
         by_length: dict = {}
-        for sp in protospacers:
+        for sp in todo:
             by_length.setdefault(len(sp), []).append(sp)
 
-        with tempfile.TemporaryDirectory() as tmp:
-            for length, group in sorted(by_length.items()):
-                inp = os.path.join(tmp, f"casin_{length}.txt")
-                outp = os.path.join(tmp, f"casout_{length}.txt")
-                self._write_input(inp, group, spacer_len=length)
-                self._run(inp, outp)
-                for row in self._parse_output(outp):
-                    guide = row["guide"]
-                    if guide not in results:
-                        continue
-                    mm = row["mismatches"]
-                    if mm == 0:
-                        results[guide]["exact"] += 1
-                    elif mm <= self.count_mismatch_threshold:
-                        results[guide]["near"] += 1
-                    # mm > count_mismatch_threshold: searched (up to max_mismatches)
-                    # but NOT counted -- distant hits are not functional off-targets.
+        if by_length:
+            with tempfile.TemporaryDirectory() as tmp:
+                for length, group in sorted(by_length.items()):
+                    inp = os.path.join(tmp, f"casin_{length}.txt")
+                    outp = os.path.join(tmp, f"casout_{length}.txt")
+                    self._write_input(inp, group, spacer_len=length)
+                    self._run(inp, outp)
+                    for row in self._parse_output(outp):
+                        guide = row["guide"]
+                        if guide not in results or guide not in todo:
+                            continue
+                        mm = row["mismatches"]
+                        if mm == 0:
+                            results[guide]["exact"] += 1
+                        elif mm <= self.count_mismatch_threshold:
+                            results[guide]["near"] += 1
+                        # mm > count_mismatch_threshold: searched (up to max_mismatches)
+                        # but NOT counted -- distant hits are not functional off-targets.
+            self._cache_write({sp: [results[sp]["exact"], results[sp]["near"]] for sp in todo})
+
         out: dict = {}
         for sp, agg in results.items():
             exact, near = agg["exact"], agg["near"]

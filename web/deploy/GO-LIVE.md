@@ -117,6 +117,32 @@ PEGRNA_API_BASE=https://pegrna.<your-domain> bash web/vercel/deploy.sh --prod
 
 After that the URL never changes and `refresh-backend.sh` is never needed.
 
+## Resource limits (this host is shared)
+
+The box is a 64-core server other people use. A design is not allowed to take it:
+
+| Setting | Default | What it limits |
+|---|---|---|
+| `PEGRNA_THREADS` | 4 | TensorFlow / BLAS / ViennaRNA thread pools in the pipeline |
+| `PEGRNA_NICE` | 10 | scheduling priority of the whole pipeline (0 disables); other people's jobs win contention |
+| `PRIDICT2_THREADS` | 2 | threads per PRIDICT2 worker process (`PRIDICT2_CORES` of them) |
+| `PEGRNA_CASOFFINDER_THREADS` | 16 | cas-offinder's CPU backend (`POCL_MAX_PTHREAD_COUNT`) |
+| `PEGRNA_MAX_CONCURRENCY` | 2 | simultaneous designs |
+
+Why: uncapped, one design ran a PRIDICT2 worker at ~36 cores and a single off-target scan used
+69 CPU-minutes; the load average hit 63. Capped, the same design runs at nice 10 with
+cas-offinder at ~5 cores and a load average of ~3.5. `--cores` on PRIDICT2 limits its
+*processes*, not the threads inside each, which is why the thread variables exist.
+
+**Off-target results are cached** per guide under `PEGRNA_CACHE_DIR` (keyed on the genome file,
+PAM and mismatch settings; replacing the genome invalidates it). The first design for a new set
+of guides pays for a genome scan; repeats do not. After deploying, run the example once to warm
+it, so the first visitor to try the demo does not pay:
+
+```bash
+bash scripts/warm-cache.sh
+```
+
 ## Routine operations
 
 **Ship a code change**
@@ -164,10 +190,17 @@ so in a banner and the UI shows a callout. Never order DNA off a stand-in.
 
 ## Known behaviour that is not a bug
 
-- **`api` designs often end in "no design".** Docking is the discriminating
-  gate and Boltz-2 is a diffusion model, so results vary run to run. Measured
-  on this deployment: interface ipTM 0.50–0.54 against a 0.6 floor. That is the
-  gate working.
+- **`api` designs can still end in "no design".** Each gate is a real verdict, and a
+  design that is genuinely poor (a guide with dozens of near-matches in the genome, an
+  extension that folds over the spacer, one that sequesters the Cas9 scaffold) is
+  rejected. The result is reproducible: the same inputs give the same verdict every
+  time, because Boltz-2 returns identical scores for identical requests.
+- **Docking is judged against a neutral RNA of the same length, not against 0.6.**
+  Interface ipTM falls with RNA length regardless of design quality, so the usual
+  AlphaFold-Multimer floor of 0.6 is out of reach for any tjPE-sized pegRNA. The gate
+  averages 5 diffusion samples and asks whether the design looks like a neutral
+  extension of its own length or like an RNA that has lost Cas9. See
+  `gate_thresholds.DOCKING_REFERENCE` and `scripts/analysis/`.
 - **A design takes ~15 minutes.** cas-offinder alone is ~100 s (batched once per
   design, not per candidate); the rest is Boltz-2.
 - **PRIDICT2 can pick a different spacer here than on a laptop.** The box pins

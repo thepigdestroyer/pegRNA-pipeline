@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import csv
 import os
+import shutil
 import subprocess
 from pathlib import Path
 from uuid import uuid4
@@ -107,6 +108,12 @@ class PridictLocalRunner:
             return self._collect(outdir, rows)
         finally:
             input_csv.unlink(missing_ok=True)
+            # Every run leaves a predictions/<uuid>/ directory (~1 MB) that nothing
+            # reads once the CSVs are parsed. On a long-lived deployment that is an
+            # unbounded leak onto a shared disk, so drop it. Set
+            # PEGRNA_KEEP_PRIDICT_OUTPUT=1 to keep them for debugging.
+            if not os.environ.get("PEGRNA_KEEP_PRIDICT_OUTPUT"):
+                shutil.rmtree(outdir, ignore_errors=True)
 
     @staticmethod
     def _write_input_csv(path: Path, rows: list[dict]) -> None:
@@ -132,6 +139,22 @@ class PridictLocalRunner:
         env = dict(os.environ)
         env.setdefault("TF_USE_LEGACY_KERAS", "1")
         env.setdefault("TF_CPP_MIN_LOG_LEVEL", "3")
+        # PRIDICT's ``--cores N`` limits its worker PROCESSES, not the threads each one starts:
+        # PyTorch and TensorFlow default to one intra-op thread per core. Measured on the
+        # shared 64-core deployment host, one design ran a worker at ~36 cores (355 threads)
+        # for minutes -- on a machine other people use. Cap it per process.
+        # PRIDICT2_THREADS (default 2) governs this subprocess outright, deliberately overriding
+        # any pipeline-wide OMP/MKL setting inherited from the parent.
+        threads = os.environ.get("PRIDICT2_THREADS", "2")
+        for var in (
+            "OMP_NUM_THREADS",
+            "MKL_NUM_THREADS",
+            "OPENBLAS_NUM_THREADS",
+            "NUMEXPR_NUM_THREADS",
+            "TF_NUM_INTRAOP_THREADS",
+        ):
+            env[var] = threads
+        env["TF_NUM_INTEROP_THREADS"] = "1"
         return env
 
     def _run_subprocess(self, input_basename: str, reldir: str) -> None:

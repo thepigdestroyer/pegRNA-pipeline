@@ -30,6 +30,10 @@ chk "PRIDICT2 env present"          "ssh dsi 'test -x ~/pegrna/envs/pridict2/bin
 chk "nvidia key is mode 600"        "ssh dsi 'test \$(stat -c %a ~/.config/pegrna/nvidia.key) = 600'"
 chk "jmoore3 instance untouched"    "ssh dsi 'curl -s --max-time 10 localhost:8092/api/health | grep -q jmoore3'"
 chk "disk under 90%"                "ssh dsi '[ \$(df --output=pcent / | tail -1 | tr -dc 0-9) -lt 90 ]'"
+# The host is shared; a design must not be able to take it (see GO-LIVE.md, "Resource limits").
+chk "resource caps configured"      "ssh dsi 'grep -q ^PEGRNA_THREADS= ~/.config/pegrna/pegrna.env && grep -q ^PEGRNA_NICE= ~/.config/pegrna/pegrna.env && grep -q ^PRIDICT2_THREADS= ~/.config/pegrna/pegrna.env && grep -q ^PEGRNA_CASOFFINDER_THREADS= ~/.config/pegrna/pegrna.env'"
+chk "off-target cache enabled"      "ssh dsi 'grep -q ^PEGRNA_CACHE_DIR= ~/.config/pegrna/pegrna.env'"
+chk "host not saturated (load < 48)" "ssh dsi '[ \$(cut -d. -f1 /proc/loadavg) -lt 48 ]'"
 
 echo
 echo "ZERO STAND-IN GATES"
