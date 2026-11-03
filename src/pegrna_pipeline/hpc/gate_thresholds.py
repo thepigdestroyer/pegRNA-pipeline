@@ -49,20 +49,30 @@ __all__ = ["GateThresholds", "THRESHOLDS", "DOCKING_REFERENCE", "DOCKING_CALIBRA
 #: spread. ADR 0024 has the validation: leave-one-out on 90 sequences and a held-out spacer.
 #:
 #: Independent sequences behind each row (neutral / non-binder): 96 nt 5/5, 126 nt 8/6,
-#: 156 nt 9/6, 194 nt 16/12, 232 nt 15/8. It is an empirical null, not a theory; the 232 nt
-#: non-binder column is the thinnest. Measure more with scripts/analysis/calibrate_docking_gate.py.
+#: 156 nt 9/6, 194 nt 16/12, 232 nt 23/16, then 256, 296 and 336 nt 6/6 each. It is an empirical
+#: null, not a theory. Measure more with scripts/analysis/calibrate_docking_gate.py.
+#:
+#: The last three rows are kept so a long design is REPORTED against references of its own length,
+#: but they are not trusted to judge (see DOCKING_CALIBRATED_RANGE).
 DOCKING_REFERENCE = (
     (96, 0.660, 0.392),
     (126, 0.602, 0.343),
     (156, 0.571, 0.324),
     (194, 0.499, 0.294),
-    (232, 0.419, 0.252),
+    (232, 0.422, 0.255),
+    (256, 0.397, 0.250),
+    (296, 0.347, 0.235),
+    (336, 0.287, 0.232),
 )
 
-#: Inside this total-RNA-length range the reference above is interpolated; outside it
-#: the gate cannot judge a design and reports advisory-only rather than inventing a
-#: number. 96 nt is spacer + scaffold with no extension, the shortest possible pegRNA.
-DOCKING_CALIBRATED_RANGE = (96, 240)
+#: The total-RNA lengths the gate may DECIDE on; past the top it reports and does not accept or
+#: reject. Also derived, not typed (``docking_reference.py --emit``): the range ends at the last row
+#: whose gap between neutral and non-binder is at least 4 between-sequence standard deviations with
+#: no leave-one-out error. That is 232 nt. The next row fails it (256 nt: 3.1 sd), the 336 nt row
+#: is down to 2.4 sd, and leave-one-out errs there. Boltz-2's ipTM keeps falling with length for
+#: normal and non-binding RNAs alike, until the gap is smaller than its own sequence-to-sequence
+#: noise. 96 nt is spacer + scaffold with no extension, the shortest possible pegRNA.
+DOCKING_CALIBRATED_RANGE = (96, 232)
 
 
 @dataclass(frozen=True)
@@ -140,27 +150,36 @@ class GateThresholds:
                 "Midway between the length-matched NON-BINDER and NEUTRAL references "
                 "(DOCKING_REFERENCE): 'does this look more like a neutral extension of its "
                 "own length, or like an RNA that has lost Cas9?'. Measured on the Boltz-2 NIM "
-                "with 5 diffusion samples per call. Neutral and non-binder differ by 0.17 "
-                "(232 nt) to 0.27 (96 nt); the between-sequence sd is 0.03-0.05 for neutral "
-                "designs and 0.01-0.07 for non-binders. Leave-one-out over 90 sequences "
-                "(each judged by a table built without it): 53/53 neutral accepted, 37/37 "
-                "non-binders rejected. On a 0 (non-binder) to 1 (neutral) scale neutral designs "
-                "sit at 1.00 +- 0.21 (lowest 0.51) and non-binders at 0.00 +- 0.18 (highest "
-                "0.42), so 0.5 separates them, and any cutoff from 0.45 to 0.50 makes no "
-                "error. A second spacer never used to build the table was judged correctly "
-                "12/12. Single draws are far noisier (sd 0.03-0.11; one scrambled non-binder "
-                "draw reached 0.634), which is why 5 samples are averaged. It is a check that "
-                "Cas9 can still bind, not of the scaffold's folding: it rejects every "
-                "complement of 40+ nt over the scaffold's 5' two-thirds but only 4 of 12 "
-                "24-nt complements, and none that target the 3' hairpin (ADR 0024)."
+                "with 5 diffusion samples per call. In the trusted range (96-232 nt) neutral "
+                "and non-binder differ by 0.17 (232 nt) to 0.27 (96 nt); the between-sequence "
+                "sd is 0.03-0.05 for neutral designs and 0.02-0.07 for non-binders. "
+                "Leave-one-out over 106 sequences (each judged by a table built without it): "
+                "61/61 neutral accepted, 45/45 non-binders rejected. On a 0 (non-binder) to "
+                "1 (neutral) scale neutral designs sit at 1.00 +- 0.21 (lowest 0.51) and "
+                "non-binders at 0.00 +- 0.17 (highest 0.42), so 0.5 separates them, and any "
+                "cutoff from 0.45 to 0.50 makes no error. A second spacer never used to build "
+                "the table was judged correctly 12/12. Single draws are far noisier (sd "
+                "0.03-0.11; one scrambled non-binder draw reached 0.634), which is why 5 samples "
+                "are averaged. It is a check that Cas9 can still bind, not of the scaffold's "
+                "folding: it rejects every complement of 40+ nt over the scaffold's 5' "
+                "two-thirds but only 4 of 12 24-nt complements, and none that target the 3' "
+                "hairpin (ADR 0024)."
             ),
             "docking_borderline_margin": (
                 "0.15 of the neutral-to-non-binder span either side of the cutoff. The closest "
                 "calls in the leave-one-out data (lowest neutral 0.51, highest non-binder 0.42 "
                 "on the 0..1 scale) both lie inside +-0.15 of the 0.5 cutoff. The band flags "
-                "3.8% of neutral designs (still accepted) and 5.4% of non-binders (still "
+                "3.3% of neutral designs (still accepted) and 4.4% of non-binders (still "
                 "rejected), leaving 96% of verdicts clear. A flagged verdict is decided by the "
                 "rule but is not robust, and is reported as such."
+            ),
+            "docking_calibrated_range": (
+                "Ends at 232 nt, derived from the measurements (scripts/analysis/"
+                "docking_reference.py): the last row whose neutral-to-non-binder gap is >= 4 "
+                "between-sequence sd with no leave-one-out error. 256 nt is 3.1 sd, 296 nt "
+                "4.6 sd but with a leave-one-out error, 336 nt 2.4 sd with one. Past 232 nt "
+                "the gate reports the ipTM against references of that length and does not "
+                "accept or reject."
             ),
             "docking_max_drop": (
                 "Derived from the AF-Multimer confidence bands (one full 0.2-wide "

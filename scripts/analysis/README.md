@@ -10,7 +10,9 @@ here, not by assertion.
 | `scan_structure_gate.py` | Which region pairs does the folding gate actually trip on, and at what probability? |
 | `calibrate_structure_gate.py` | What fraction of *random* pegRNAs pass the folding gate at each threshold? |
 | `calibrate_docking_gate.py` | **Measures** Boltz-2 ipTM for neutral, non-binder and scaffold-sequestering RNAs, and appends to `data/docking_calibration.jsonl` (spends NVIDIA credits; resumable) |
-| `docking_reference.py` | **Derives** `DOCKING_REFERENCE` from that file, and tests the gate on it (leave-one-out, a held-out spacer, the sequestering sweep) |
+| `docking_reference.py` | **Derives** `DOCKING_REFERENCE` and `DOCKING_CALIBRATED_RANGE` from that file, and tests the gate on it (leave-one-out, a held-out spacer, the sequestering sweep, real candidates) |
+| `sample_pool_candidates.py` | Measures the docking gate on the **pegRNAs the pipeline itself produces** (spends NVIDIA credits; resumable) |
+| `probe_legacy_pa.py` | Shows the legacy Prime Assembly path cannot pair real PRIDICT output (needs PRIDICT2; run on DSI; issue #29) |
 
 A gate that rejects ~all random designs is not screening out bad ones; a threshold that sits
 inside the model's own sampling noise is not a threshold. These scripts exist to tell the
@@ -28,7 +30,9 @@ matching it.
 |---|---|
 | `legacy-calibration`, `legacy-holdout` | the first measurements (2026-11-03), imported from files that lived in `/tmp`; sequences were not recorded except for the pipeline's own designs |
 | `calibration` | the extended grid from `calibrate_docking_gate.py`, with sequences |
+| `long` | 256, 296 and 336 nt designs: they show where the gate stops being able to judge |
 | `spacer2` | a second spacer, **never** used to build the table: it tests it |
+| `pool` | real candidate pegRNAs from `sample_pool_candidates.py` (class `candidate`): they test the table, they are not in it |
 
 ```bash
 python scripts/analysis/calibrate_docking_gate.py --dry-run          # what would be measured
@@ -40,3 +44,8 @@ python scripts/analysis/docking_reference.py --check                 # exit 1 if
 
 A run skips any RNA already in the file, so re-running after a stall or a rate limit continues
 where it stopped. Use `--seed` to draw different random sequences.
+
+The table **and the range it may judge** are both derived from this file: the range ends at the last
+row whose neutral-to-non-binder gap is at least 4 between-sequence standard deviations with no
+leave-one-out error (232 nt today; the model's scores for normal and non-binding RNAs converge past
+that). `docking_reference.py --check` fails if either constant in `gate_thresholds.py` disagrees.

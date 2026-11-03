@@ -244,6 +244,14 @@ def _iptm_confidence_band(iptm: float, *, floor: float) -> str:
     return f"likely-incorrect (<{floor:g})"
 
 
+#: Appended to the advisory message so a reader sees WHY a long design is not judged, not only that
+#: it is not.
+_WHY_NOT_JUDGED = (
+    " (past about 230 nt the model's score for a normal RNA and a non-binder converge until the "
+    "gap is smaller than its own noise)"
+)
+
+
 @dataclass(frozen=True)
 class DockingReference:
     """What interface ipTM looks like at one total-RNA length."""
@@ -308,7 +316,7 @@ def passes_calibrated_docking_gate(
     so 0.6 is unreachable for tjPE-sized pegRNAs (neutral 194/232-nt extensions average
     0.50/0.42). Why not a drop from the apo scaffold: any long RNA "drops". Why keep the gate
     at all: it separates a neutral extension from an RNA that has lost Cas9 (a scrambled
-    backbone) with no error in 90 leave-one-out sequences and 12 held-out ones, and it rejects
+    backbone) with no error in 106 leave-one-out sequences and 12 held-out ones, and it rejects
     an extension built to tie up most of the scaffold (a 40-60 nt complement scores like a
     scrambled backbone). What it does NOT do is detect localized pairing: a 24-nt complement
     to almost any part of the scaffold mostly passes (ADR 0024). It is a check that Cas9 can
@@ -322,7 +330,10 @@ def passes_calibrated_docking_gate(
     Outside the calibrated length range there is no valid reference, so the result is
     ADVISORY ONLY: it passes, is flagged in ``metrics['advisory']`` and in the message, and
     the caller surfaces a warning. A safety gate that cannot be validated must say so rather
-    than silently accept or reject.
+    than silently accept or reject. The range is where the data support a verdict, not a
+    place where measurement stopped: past about 230 nt Boltz-2's score for a normal RNA and for
+    a non-binder converge until the gap is inside the model's own sequence-to-sequence noise
+    (2.4 sd at 336 nt), and leave-one-out starts to err.
     """
     samples = [float(v) for v in scorer.interface_iptm_samples(pegrna, cas9)]
     if not samples:
@@ -365,7 +376,7 @@ def passes_calibrated_docking_gate(
                     "note": (
                         f"advisory: ipTM {mean:.2f} at {len(pegrna)} nt is outside the calibrated "
                         f"{DOCKING_CALIBRATED_RANGE[0]}-{DOCKING_CALIBRATED_RANGE[1]} nt range, so it "
-                        f"is reported but does not accept or reject"
+                        f"is reported but does not accept or reject{_WHY_NOT_JUDGED}"
                     ),
                 }
             )
@@ -373,7 +384,7 @@ def passes_calibrated_docking_gate(
         return True, (
             f"ADVISORY ONLY - {len(pegrna)} nt is outside the calibrated "
             f"{DOCKING_CALIBRATED_RANGE[0]}-{DOCKING_CALIBRATED_RANGE[1]} nt range, so docking "
-            f"cannot be judged here: {detail}"
+            f"cannot be judged here{_WHY_NOT_JUDGED}: {detail}"
         )
     flag = f" [BORDERLINE: {borderline_text}]" if borderline else ""
     if mean < cutoff - 1e-9:

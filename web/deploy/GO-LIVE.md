@@ -214,6 +214,14 @@ so in a banner and the UI shows a callout. Never order DNA off a stand-in.
   averages 5 diffusion samples and asks whether the design looks like a neutral
   extension of its own length or like an RNA that has lost Cas9. See
   `gate_thresholds.DOCKING_REFERENCE` and `scripts/analysis/`.
+- **Docking only judges pegRNAs up to 232 nt; longer designs get an advisory.** Past that
+  the model's score for a normal RNA and for a non-binder converge until the gap is smaller
+  than its own noise (measured to 336 nt), so the design is reported against references of
+  its own length and a "Check these before you order" line says it was not judged. How much
+  cargo fits depends on the second nick: up to about 60 bp stays inside with the nearest nick,
+  and the farther nicks the 40-90 bp window allows cut that to about 25 bp (measured on the
+  CTCF locus; a FLAG tag, 24 bp, fits almost everywhere). The range is derived from the data,
+  not typed (`scripts/analysis/docking_reference.py`).
 - **A design takes ~15 minutes.** cas-offinder alone is ~100 s (batched once per
   design, not per candidate); the rest is Boltz-2.
 - **PRIDICT2 can pick a different spacer here than on a laptop.** The box pins

@@ -146,7 +146,8 @@ this to a machine other people use.
    (`gate_thresholds.DOCKING_REFERENCE`, linear interpolation). The apo baseline is no
    longer used, saving one NIM request per design. Scorers without per-sample output keep the
    legacy absolute-floor gate.
-4. Outside the calibrated length range (96-240 nt) the docking gate is **advisory**: it passes,
+4. Outside the calibrated length range (96-232 nt; originally typed as 240, now derived from the
+   data, see the second addendum) the docking gate is **advisory**: it passes,
    says so in the message, sets `metrics['advisory']`, and the design carries a warning. A
    safety gate that cannot be validated must say so rather than silently accept or reject.
 5. Everything a design starts is resource-capped: the pipeline process gets `PEGRNA_THREADS`
@@ -265,6 +266,57 @@ this work cannot answer (there is no wet-lab control), and a gate that rejects o
 signal repeats the mistake this ADR is about. So no rejecting rule is added; the gap and the
 evidence are filed as an issue, with an advisory warning as the cautious first step.
 
+## Second addendum: where the gate stops working, and what real designs do (issue #28)
+
+The first addendum left the long end and the real-design question open. Both are now measured:
+111 more measurements brought the file from 122 to 233 records (`scripts/analysis/data/`).
+
+**The calibrated range is a finding, and it is 232 nt, not the 240 that had been typed.** Rows were
+measured to 336 nt (6 neutral and 6 non-binder sequences each at 256, 296 and 336 nt), and the 232 nt
+row was raised from 8 to 16 non-binders (23 neutral).
+
+| total RNA | neutral | non-binder | gap | gap in between-sequence sd | n |
+|---|---|---|---|---|---|
+| 194 nt | 0.499 | 0.294 | 0.205 | 4.3 | 16 / 12 |
+| 232 nt | 0.422 | 0.255 | 0.167 | 5.2 | 23 / 16 |
+| 256 nt | 0.397 | 0.250 | 0.147 | **3.1** | 6 / 6 |
+| 296 nt | 0.347 | 0.235 | 0.112 | 4.6, but a leave-one-out error | 6 / 6 |
+| 336 nt | 0.287 | 0.232 | 0.055 | **2.4**, a leave-one-out error | 6 / 6 |
+
+Boltz-2's ipTM keeps falling with length for normal and non-binding RNAs alike, and the two curves
+converge until the gap is smaller than the model's own sequence-to-sequence noise. With the cutoff
+midway a row is only worth trusting when the gap is at least 4 standard deviations (each class then
+sits 2 sd from the cutoff). The range is therefore *derived*: it ends at the last row that meets
+that and makes no leave-one-out error. `docking_reference.py --emit` produces it and
+`tests/test_docking_reference.py` checks it, as for the table.
+
+Inside the range the evidence got stronger: **61/61** neutral designs accepted and **45/45**
+non-binders rejected, leave-one-out (up from 53 and 37), the same closest calls as before (lowest
+neutral 0.51, highest non-binder 0.42), and any cutoff from 0.45 to 0.50 still makes no error. The
+second spacer is still 12/12. The borderline band flags 3.3% of neutral designs and 4.4% of
+non-binders. Past the range 2 of 36 sequences are misjudged, shown for the record and used nowhere.
+
+**Real pipeline designs, measured.** The reference was built from random and scrambled extensions,
+so 59 pegRNAs the pipeline itself produces were measured (CTCF: 8 cargos from the UI's motif
+library, 2 spacers, all four 5' nicks; 194-316 nt).
+
+* **Inside the range (18 designs): all 18 accepted**, none borderline. They sit at 0.89 to 1.68 on
+  the 0 (non-binder) to 1 (neutral) scale, median 1.36. Real designs score **above** the
+  random-extension baseline, so that baseline is conservative for them, not flattering.
+* The first designs production would try (walk order): 9 of 9 accepted.
+* **The old 0.6 floor would have passed 1 of the 59.** This is the measured answer to whether it
+  was too harsh.
+* **Beyond the range (41 designs): reported, not judged.** For information only, against the
+  references of their own length they sit at 0.78 to 1.83, none below 0.5. That is not a verdict;
+  it is a reason not to expect trouble.
+
+**The consequence to say plainly.** Most realistic designs fall outside the range: 41 of 59. A
+cargo up to about 60 bp stays inside with the nearest second nick, and the farther nicks the 40-90 bp
+window allows cut that to about 25 bp (a 24 bp FLAG tag fits almost everywhere). A longer cargo gets
+an advisory in place of a docking verdict. That is the honest state of this model, not a setting to
+tune; a fixed-length truncation probe (docking only the part of the extension next to the scaffold)
+is a possible way to recover a verdict and is recorded in #28 as an experiment, not built.
+
 ## Consequences and limitations
 
 - **The docking reference is an empirical null from 90 sequences**, derived from committed data
@@ -276,7 +328,9 @@ evidence are filed as an issue, with an advisory warning as the cautious first s
   shuffled). Real RTTs have structure of their own. It says nothing about wet-lab editing
   efficiency: ipTM is a model's confidence in an interface, not an affinity. Neutral designs spread
   by about a fifth of the neutral-to-non-binder span, which is why borderline verdicts exist.
-- Past 240 nt the dynamic range between neutral and non-binder is narrow (0.17 at 232 nt) and
-  unmeasured further out, which is why the gate steps down to advisory rather than extrapolate.
+- Past 232 nt the gate reports and does not decide. This was first a guess (the dynamic range was
+  0.17 at 232 nt and unmeasured further out); it was then measured to 336 nt, and the second
+  addendum shows the gap closing into the model's own noise, so the range is a finding, not a
+  placeholder.
 - Findings 2 and 3 (ngRNA off-target tolerance, inconsistent spacer sanity) were left
   unchanged here and are settled in ADR 0025.

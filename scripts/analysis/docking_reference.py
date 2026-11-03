@@ -34,7 +34,11 @@ from collections import defaultdict
 from pathlib import Path
 
 from pegrna_pipeline.hpc.complex_dock import docking_reference
-from pegrna_pipeline.hpc.gate_thresholds import DOCKING_REFERENCE, THRESHOLDS
+from pegrna_pipeline.hpc.gate_thresholds import (
+    DOCKING_CALIBRATED_RANGE,
+    DOCKING_REFERENCE,
+    THRESHOLDS,
+)
 
 HERE = Path(__file__).resolve().parent
 DATA = HERE / "data" / "docking_calibration.jsonl"
@@ -44,6 +48,11 @@ HELD_OUT_SOURCES = frozenset({"spacer2"})
 NEUTRAL = frozenset({"neutral", "neutral-shuffled", "control-canonical"})
 NONBINDER = frozenset({"nonbinder", "control-scrambled"})
 BACKBONE_LEN = 96  # spacer (20) + scaffold (76); total RNA length = 96 + extension
+#: A row is only trusted when the neutral-to-non-binder gap is at least this many between-sequence
+#: standard deviations. With the cutoff midway, a gap of 4 sd puts each class 2 sd from it, so each
+#: is misjudged about 2% of the time if its spread is roughly normal. A narrower row is not a gate.
+MIN_SEPARATION_SD = 4.0
+MIN_SEQUENCES_PER_CLASS = 5
 
 
 def load(path: Path = DATA) -> list:
@@ -86,6 +95,44 @@ def build_table(records: list) -> list:
         )
         for e in exts
     ]
+
+
+def row_quality(records: list) -> list:
+    """Per table row: ``(length, span, sd, separation, n_neutral, n_nonbinder)``, where ``sd`` is
+    the larger of the two classes' between-sequence spread and ``separation = span / sd``."""
+    ref = reference_records(records)
+    c = cells(ref)
+    out = []
+    for length, neutral, nonbinder in build_table(ref):
+        e = length - BACKBONE_LEN
+        n, b = c[("neutral", e)], c[("nonbinder", e)]
+        sd = max(_sd(n), _sd(b))
+        span = neutral - nonbinder
+        out.append((length, span, sd, span / sd if sd > 0 else float("inf"), len(n), len(b)))
+    return out
+
+
+def calibrated_range(records: list, fraction: float = THRESHOLDS.docking_pass_fraction) -> tuple:
+    """``(lowest, highest)`` total RNA length the gate may judge, derived from the data.
+
+    Walks up the table and stops at the first row that is not trustworthy: too few sequences,
+    a gap under ``MIN_SEPARATION_SD`` between-sequence sd, or any leave-one-out error. The range
+    ends at the last trustworthy row; past it the gate reports and does not decide."""
+    errors = defaultdict(int)
+    for r, _f, ok in leave_one_out(records, fraction):
+        errors[r["ext_len"] + BACKBONE_LEN] += ok != (kind_of(r) == "neutral")
+    top = BACKBONE_LEN
+    for length, _span, _sd_, sep, n_neutral, n_nonbinder in row_quality(records):
+        trusted = (
+            n_neutral >= MIN_SEQUENCES_PER_CLASS
+            and n_nonbinder >= MIN_SEQUENCES_PER_CLASS
+            and sep >= MIN_SEPARATION_SD
+            and errors[length] == 0
+        )
+        if not trusted:
+            break
+        top = length
+    return (BACKBONE_LEN, top)
 
 
 def evaluate(record: dict, table, fraction: float):
@@ -148,10 +195,28 @@ def report(records: list, fraction: float) -> None:
             f"  | n={len(nn):2d} sd {_sd(nn):.3f}   n={len(nb):2d} sd {_sd(nb):.3f}"
         )
 
-    loo = leave_one_out(records, fraction)
+    print(
+        "\nROW QUALITY   (gap between the classes, in between-sequence standard deviations; "
+        f"a row is trusted from {MIN_SEPARATION_SD:g})"
+    )
+    for length, span, sd, sep, nn, nb in row_quality(records):
+        print(
+            f"  {length:4d}   span {span:.3f}   sd {sd:.3f}   separation {sep:4.1f}   "
+            f"{'trusted' if sep >= MIN_SEPARATION_SD else 'NOT trusted'}   (n={nn}/{nb})"
+        )
+    derived = calibrated_range(records, fraction)
+    print(
+        f"  calibrated range derived from the data: {derived[0]}-{derived[1]} nt   "
+        f"(in source: {DOCKING_CALIBRATED_RANGE[0]}-{DOCKING_CALIBRATED_RANGE[1]})"
+    )
+
+    loo_all = leave_one_out(records, fraction)
+    in_range_top = derived[1]
+    loo = [x for x in loo_all if x[0]["len"] <= in_range_top]
+    beyond = [x for x in loo_all if x[0]["len"] > in_range_top]
     print(
         f"\nLEAVE-ONE-OUT   (pass fraction {fraction:g}; each sequence judged by a table built "
-        "without it)"
+        f"without it; the statistics below are for the trusted range, up to {in_range_top} nt)"
     )
     per = defaultdict(lambda: [0, 0])
     for r, _f, ok in loo:
@@ -178,6 +243,12 @@ def report(records: list, fraction: float) -> None:
             f"non-binder mean {st.fmean(fb):.2f} sd {_sd(fb):.2f} (highest {max(fb):.2f})"
         )
 
+    if beyond:
+        wrong = sum(ok != (kind_of(r) == "neutral") for r, _f, ok in beyond)
+        print(
+            f"  BEYOND the trusted range ({len(beyond)} sequences): {wrong} judged wrongly; "
+            "shown for the record, not used for any statistic here"
+        )
     print(
         "\nPASS FRACTION SWEEP  (leave-one-out; the fraction is where on that scale the cutoff sits)"
     )
@@ -247,10 +318,78 @@ def report(records: list, fraction: float) -> None:
                 f"{'accepted' if ok else 'REJECTED'}"
             )
 
+    candidates = [r for r in records if r["class"] == "candidate"]
+    if candidates:
+        report_candidates(candidates, table, fraction, derived[1])
+
     controls = [r for r in records if r["class"] == "control-scaffold-only"]
     for r in controls:
         print(
             f"\n(scaffold alone, {r['len']} nt: mean {r['mean']:.3f}; outside the calibrated range)"
+        )
+
+
+OLD_FLOOR = 0.6  # the interface-ipTM floor the gate used before it was calibrated
+
+
+def candidate_summary(candidates: list, table, fraction: float, top: int) -> dict:
+    """What the gate does to the pegRNAs the pipeline itself produces."""
+    inside = [r for r in candidates if r["len"] <= top]
+    beyond = [r for r in candidates if r["len"] > top]
+    judged = [(r, *evaluate(r, table, fraction)) for r in inside]
+    margin = THRESHOLDS.docking_borderline_margin
+    return {
+        "n": len(candidates),
+        "inside": len(inside),
+        "beyond": len(beyond),
+        "accepted": sum(ok for _, _f, ok in judged),
+        "borderline": sum(abs(f - fraction) < margin for _, f, _ok in judged),
+        "old_floor_pass": sum(r["mean"] >= OLD_FLOOR for r in candidates),
+        "old_floor_pass_inside": sum(r["mean"] >= OLD_FLOOR for r in inside),
+        "f_values": sorted(f for _, f, _ok in judged),
+        "head": [(r, f, ok) for r, f, ok in judged if r.get("head")],
+    }
+
+
+def report_candidates(candidates: list, table, fraction: float, top: int) -> None:
+    c = candidate_summary(candidates, table, fraction, top)
+    print(
+        f"\nREAL POOL CANDIDATES   (the pegRNAs the pipeline itself produces: {c['n']} measured; "
+        "not in the table, so this is a test of it)"
+    )
+    print(
+        f"  inside the trusted range (<= {top} nt): {c['inside']}   accepted by the gate: "
+        f"{c['accepted']}/{c['inside']}   borderline: {c['borderline']}"
+    )
+    if c["f_values"]:
+        fv = c["f_values"]
+        print(
+            f"     position on the 0 (non-binder) .. 1 (neutral) scale: lowest {fv[0]:.2f}, "
+            f"median {st.median(fv):.2f}, highest {fv[-1]:.2f}"
+        )
+    print(
+        f"  beyond it: {c['beyond']} (reported, not judged: they pass as advisory-only)   "
+        f"| passing the OLD 0.6 floor: {c['old_floor_pass']}/{c['n']} overall, "
+        f"{c['old_floor_pass_inside']}/{c['inside']} inside the range"
+    )
+    head = c["head"]
+    if head:
+        first = sum(ok for _, _f, ok in head)
+        print(
+            f"  the first candidates production would try (walk order): accepted {first}/{len(head)}"
+        )
+    by = defaultdict(list)
+    for r in candidates:
+        by[r.get("cargo", "?")].append(r)
+    print("   cargo            n   length (nt)   mean ipTM range   position (inside the range)")
+    for cargo, rs in sorted(by.items(), key=lambda kv: min(r["len"] for r in kv[1])):
+        lens = [r["len"] for r in rs]
+        ms = [r["mean"] for r in rs]
+        fs = [evaluate(r, table, fraction)[0] for r in rs if r["len"] <= top]
+        pos = f"{min(fs):.2f}..{max(fs):.2f}" if fs else "-"
+        print(
+            f"   {cargo:14s} {len(rs):3d}   {min(lens):3d}-{max(lens):3d}      "
+            f"{min(ms):.2f}-{max(ms):.2f}          {pos}"
         )
 
 
@@ -264,7 +403,11 @@ def emit(records: list) -> str:
             f"    ({length}, {neutral:.3f}, {nonbinder:.3f}),"
             f"  # n = {len(c[('neutral', e)])} neutral, {len(c[('nonbinder', e)])} non-binder"
         )
-    return "DOCKING_REFERENCE = (\n" + "\n".join(rows) + "\n)"
+    lo, hi = calibrated_range(records)
+    return (
+        "DOCKING_REFERENCE = (\n" + "\n".join(rows) + "\n)\n\n"
+        f"DOCKING_CALIBRATED_RANGE = ({lo}, {hi})"
+    )
 
 
 def stale(records: list) -> list:
@@ -282,6 +425,12 @@ def stale(records: list) -> list:
         for name, a, b in (("neutral", w[1], h[1]), ("non-binder", w[2], h[2])):
             if abs(a - b) > 0.0006:
                 problems.append(f"{w[0]} nt {name}: data {a:.3f}, source {b:.3f}")
+    want_range = calibrated_range(records)
+    if tuple(DOCKING_CALIBRATED_RANGE) != want_range:
+        problems.append(
+            f"DOCKING_CALIBRATED_RANGE: data implies {want_range}, source has "
+            f"{tuple(DOCKING_CALIBRATED_RANGE)}"
+        )
     return problems
 
 

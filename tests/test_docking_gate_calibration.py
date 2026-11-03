@@ -176,10 +176,11 @@ def test_a_very_long_pegrna_is_advisory_not_rejected_and_not_silently_accepted()
 
 
 def test_the_calibrated_range_boundary():
-    assert docking_reference(240).calibrated
-    assert not docking_reference(241).calibrated
-    assert docking_reference(96).calibrated
-    assert not docking_reference(95).calibrated
+    from pegrna_pipeline.hpc.gate_thresholds import DOCKING_CALIBRATED_RANGE
+
+    lo, hi = DOCKING_CALIBRATED_RANGE
+    assert docking_reference(hi).calibrated and not docking_reference(hi + 1).calibrated
+    assert docking_reference(lo).calibrated and not docking_reference(lo - 1).calibrated
 
 
 def test_metrics_report_value_cutoff_and_both_references():
