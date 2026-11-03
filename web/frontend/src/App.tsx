@@ -401,16 +401,16 @@ export default function App() {
                     />
                   </Field>
                   <Field
-                    label="Anchor amino acid"
+                    label="Anchor amino acid (optional)"
                     htmlFor="rtt_aa"
-                    help="The residue immediately before the insertion point, as a single letter. The pipeline re-encodes it with a synonymous codon."
+                    help="Does not change the design: the recoded arm and the RTT are built from the genome and your cargo, so any residue, or none, gives the same pegRNA. Kept so older configs still load."
                   >
                     <input
                       id="rtt_aa"
                       className="input"
                       value={form.rtt_aa}
                       onChange={(e) => set("rtt_aa", e.target.value.toUpperCase().slice(0, 1))}
-                      placeholder="L"
+                      placeholder="not needed"
                     />
                   </Field>
                 </div>
