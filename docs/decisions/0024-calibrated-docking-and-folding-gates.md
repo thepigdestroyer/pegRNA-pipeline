@@ -49,15 +49,18 @@ The rule discards the guides it should (dozens of near-matches). It is strict at
 margin: a random guide has ~0.6 expected hits at <=2 mismatches by chance alone, so
 "zero" removes roughly half of ordinary guides, and nick 61 fails on one hit. For a
 nick-only guide a small tolerance is defensible, but ADR 0010 chose zero deliberately and
-nothing here shows it causing harm, so it is unchanged. It is the one gate where a case
-for relaxing exists; it is not what failed the demo.
+nothing here shows it causing harm, so the default is unchanged. It is the one gate where a
+case for relaxing exists; it is not what failed the demo. (Follow-up, ADR 0025: the tolerance
+is now an explicit, configurable, always-disclosed setting, default still zero. It also found
+that the existing `max_offtargets` parameter could never take effect above 0.)
 
-### 3. Spacer sanity is applied inconsistently (noted, not changed)
+### 3. Spacer sanity is applied inconsistently (resolved in ADR 0025)
 
 The PRIDICT path rejects any spacer with a homopolymer run >= 5, which includes the
 `CCCCC` in nick 101's guide; the enumerated path never applies the check. Only `TTTT` (a
 Pol III terminator) is a hard biological rule. The same guide is accepted by one path and
-rejected by the other.
+rejected by the other. ADR 0025 puts both paths on one definition: `TTTT` and GC are hard
+rules, a homopolymer is an advisory.
 
 ### 4. Folding gate: 0.5 was too harsh for ViennaRNA
 
@@ -77,7 +80,9 @@ everything rather than the worst of them. At 0.99 it removes the worst 15-20% ta
 
 ### 5. Docking gate: the absolute floor was invalid
 
-Boltz-2 NIM, SpCas9 + RNA, interface ipTM, mean of 5 diffusion samples:
+Boltz-2 NIM, SpCas9 + RNA, interface ipTM, mean of 5 diffusion samples. This is the FIRST
+measurement (1-5 sequences per length); the Addendum below extends it to 122 measurements and
+supersedes these numbers, which it found to be close.
 
 | total RNA | neutral extension | designed pegRNA | scaffold-sequestering (positive ctrl) | non-binder |
 |---|---|---|---|---|
@@ -92,8 +97,9 @@ Boltz-2 NIM, SpCas9 + RNA, interface ipTM, mean of 5 diffusion samples:
 - The designed pegRNAs sit at or above neutral extensions of the same length. They were
   rejected for being long, not for being bad.
 - The gate has real sensitivity: an extension built to sequester the scaffold scores
-  0.28-0.33, 0.2-0.3 below neutral. The folding gate deliberately ignores every pair touching
-  the scaffold, so this is the only check that can see that failure. It should be kept.
+  0.28-0.33, 0.2-0.3 below neutral, and the folding gate deliberately ignores every pair touching
+  the scaffold. It should be kept. (The Addendum qualifies this: it sees extensive sequestration,
+  not localized pairing, so it is not "the only check that can see" the failure in general.)
 - A single sample is too noisy to threshold: sd 0.03-0.11. A scrambled non-binder drew
   0.634 once; one draw of a 194-nt design reached 0.628.
 - The service is **deterministic**: identical requests return identical scores (sd 0.000
@@ -154,6 +160,11 @@ this to a machine other people use.
    backoff, and if it persists the run fails as what it is. It is never recorded as a
    candidate rejection. The calibrated gate also refuses to run if the service stops
    returning `pair_chains_iptm_scores`, since the references were measured on that metric.
+   Each call has a 300 s socket timeout and a 600 s overall budget (a request once hung for
+   over 30 minutes). `NVCF-POLL-SECONDS` is deliberately not sent: on this endpoint it turns a
+   slow job into a 504 whose request id is not pollable (the status route answers 404).
+7. A docking verdict within 15 points of the cutoff is flagged BORDERLINE (Addendum): still
+   decided by the rule, reported as not robust, and a borderline pass adds a warning.
 
 ## Out-of-sample check
 
@@ -183,18 +194,89 @@ cleared its cutoff by 0.021, and at 232 nt neutral and non-binder references are
 apart. The honest summary is "no evidence of a high false-reject rate, from a small sample,
 with the gate working least well where the signal is smallest".
 
+## Addendum: extended calibration (issue #23)
+
+The first reference rested on 1-5 sequences per length and had one open miss. It was extended to
+**122 five-sample measurements**. The raw records are committed
+(`scripts/analysis/data/docking_calibration.jsonl`), the table is now *derived* from them
+(`scripts/analysis/docking_reference.py`), and `tests/test_docking_reference.py` fails if
+`DOCKING_REFERENCE` stops matching them or if any figure below stops being true.
+
+**The table** (neutral / non-binder; independent sequences behind each):
+
+| total RNA | neutral | non-binder | n |
+|---|---|---|---|
+| 96 nt | 0.660 | 0.392 | 5 / 5 |
+| 126 nt | 0.602 | 0.343 | 8 / 6 |
+| 156 nt | 0.571 | 0.324 | 9 / 6 |
+| 194 nt | 0.499 | 0.294 | 16 / 12 |
+| 232 nt | 0.419 | 0.252 | 15 / 8 |
+
+The first table was close. The largest changes: the 126 nt non-binder, which had been
+interpolated at 0.386, measures 0.343; and the 96 nt non-binder moves from 0.448 to 0.392. Every
+earlier fixture is judged the same way.
+
+**Validation.**
+
+* *Leave-one-out over 90 sequences* (each judged by a table rebuilt without it): **53/53 neutral
+  accepted, 37/37 non-binders rejected**. Zero errors in that many judgements bounds each error
+  rate below about 6% and 8% respectively (95%, rule of three), not at zero.
+* On a scale where 0 is the non-binder reference and 1 the neutral one, neutral designs sit at
+  1.00 +- 0.21 (lowest 0.51) and non-binders at 0.00 +- 0.18 (highest 0.42). Any cutoff from 0.45 to
+  0.50 makes no error; 0.40 and below accepts 2 of 37 non-binders, 0.55 rejects 1 of 53 neutral
+  designs (and 0.70 rejects 4). **0.5 is kept**: it is the midpoint, and the data give no reason to
+  move it.
+* *A second spacer* (`TTCTCTGGGCTGTGTTTAAA`, the CTCF example's nick 194, AT-richer than the first)
+  was never used to build the table: **6/6 neutral accepted, 6/6 non-binders rejected**.
+* The pipeline's own designs sit at 1.22 and 1.08 on that scale.
+
+**Borderline verdicts.** The closest calls on either side (lowest neutral 0.51, highest non-binder
+0.42) are within 0.15 of the cutoff, so a verdict inside that band is not robust. The gate now says
+so: BORDERLINE in the message and the metrics, and a warning on a borderline pass. It does not
+change what the rule decides. The band flags 3.8% of neutral designs (still accepted) and 5.4% of
+non-binders (still rejected); 96% of verdicts are clear.
+
+**What the gate sees of scaffold sequestration** (this settles the 3'-end question). Extensions
+reverse-complementary to a segment of the scaffold, 24 nt at six positions, two sequences each, plus
+four longer complements:
+
+| complement of scaffold[a:b] | ipTM position (0 = non-binder, 1 = neutral) | verdict |
+|---|---|---|
+| 0:24 (repeat, loop) | 0.54, 0.46 | accepted, rejected |
+| 10:34 | 0.61, 0.60 | both accepted |
+| 20:44 (anti-repeat, nexus) | 0.46, 0.30 | both rejected |
+| 30:54 (stem loop 1-2) | 0.64, 0.67 | both accepted |
+| 40:64 | 1.07, 0.43 | accepted, rejected |
+| 52:76 (3' hairpin) | 0.93, 0.98 | both accepted |
+| 0:40, 0:60 (x2), 10:70 (40-60 nt) | 0.05, 0.00, -0.09, -0.08 | all rejected |
+| 30:76 (46 nt, 3' end) | 0.51 | accepted |
+
+So the gate rejects every large complement over the scaffold's 5' two-thirds and 4 of 12 24-nt
+complements, and it is blind to the 3' hairpin. The earlier "miss" (`RC(scaffold[30:76])`) is the
+model's insensitivity there, not a threshold problem: lowering the cutoff far enough to catch it
+would reject normal designs. The earlier claim that this gate is "the only check that can see"
+sequestration was too strong. It is a check that Cas9 can still bind. It is not a check of the
+scaffold's folding.
+
+That leaves a real gap, and the data point at the tool for it: in ViennaRNA's MFE structure,
+30 neutral designs pair at most 13 scaffold nucleotides with the extension, and **all 12** sweep
+constructs pair at least 22. Whether pairing at that level lowers editing is a biological question
+this work cannot answer (there is no wet-lab control), and a gate that rejects on an unvalidated
+signal repeats the mistake this ADR is about. So no rejecting rule is added; the gap and the
+evidence are filed as an issue, with an advisory warning as the cautious first step.
+
 ## Consequences and limitations
 
-- **The docking reference is an empirical null from small samples** (n = 1-5 sequences per
-  length). It was fitted and then tested on the same data, so its fit to those sequences
-  proves little; the holdout above is the honest estimate. Extend it with
-  `scripts/analysis/calibrate_docking_gate.py --per-length 8` before relying on a result near
-  the decision boundary.
-- It was measured on four extension lengths with one spacer and one scaffold, and on
-  synthetic controls. It says nothing about wet-lab editing efficiency. ipTM is a model's
-  confidence in an interface, not an affinity.
-- The non-binder reference at 126 nt is interpolated, not measured.
+- **The docking reference is an empirical null from 90 sequences**, derived from committed data
+  and tested leave-one-out and on a held-out spacer. It is no longer a table typed from a few
+  measurements, but it is still an estimate: the 232 nt non-binder column rests on 8 sequences and
+  is the thinnest. Extend it with `scripts/analysis/calibrate_docking_gate.py` (it resumes, and
+  skips anything already measured).
+- It was measured with one scaffold and two spacers, on synthetic extensions (random or
+  shuffled). Real RTTs have structure of their own. It says nothing about wet-lab editing
+  efficiency: ipTM is a model's confidence in an interface, not an affinity. Neutral designs spread
+  by about a fifth of the neutral-to-non-binder span, which is why borderline verdicts exist.
 - Past 240 nt the dynamic range between neutral and non-binder is narrow (0.17 at 232 nt) and
   unmeasured further out, which is why the gate steps down to advisory rather than extrapolate.
-- Off-target zero-tolerance (finding 2) and the inconsistent spacer sanity check (finding 3)
-  are unchanged and remain open questions.
+- Findings 2 and 3 (ngRNA off-target tolerance, inconsistent spacer sanity) were left
+  unchanged here and are settled in ADR 0025.

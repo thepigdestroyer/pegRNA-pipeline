@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import statistics
 from dataclasses import dataclass
-from typing import Optional, Protocol, Tuple
+from typing import Optional, Protocol, Sequence, Tuple
 
 from pegrna_pipeline.hpc.gate_thresholds import (
     DOCKING_CALIBRATED_RANGE,
@@ -262,16 +262,20 @@ class DockingReference:
         return self.nonbinder + fraction * self.span
 
 
-def docking_reference(length: int) -> DockingReference:
+def docking_reference(
+    length: int, table: Optional[Sequence[Tuple[int, float, float]]] = None
+) -> DockingReference:
     """Neutral and non-binder interface ipTM at ``length`` nt (piecewise-linear).
 
     Interpolates ``DOCKING_REFERENCE``; the endpoints are held flat just beyond the table
     (96 nt is the shortest possible pegRNA; the dynamic range barely changes past 232 nt),
     and ``calibrated`` is False outside ``DOCKING_CALIBRATED_RANGE`` so callers can refuse
-    to treat an extrapolated number as a verdict.
+    to treat an extrapolated number as a verdict. ``table`` substitutes another
+    ``(length, neutral, non-binder)`` table; the calibration analysis uses it to test the
+    gate's own interpolation against references built with a sequence left out.
     """
     lo, hi = DOCKING_CALIBRATED_RANGE
-    pts = DOCKING_REFERENCE
+    pts = DOCKING_REFERENCE if table is None else table
     x = min(max(length, pts[0][0]), pts[-1][0])
     for (l0, n0, b0), (l1, n1, b1) in zip(pts, pts[1:]):
         if l0 <= x <= l1:
@@ -288,6 +292,7 @@ def passes_calibrated_docking_gate(
     *,
     scorer,
     pass_fraction: float = THRESHOLDS.docking_pass_fraction,
+    borderline_margin: float = THRESHOLDS.docking_borderline_margin,
     metrics: Optional[dict] = None,
 ) -> Tuple[bool, str]:
     """Is this pegRNA's Cas9 interface more like a neutral extension of ITS length, or like
@@ -301,10 +306,18 @@ def passes_calibrated_docking_gate(
 
     Why not an absolute floor: ipTM falls with RNA length independently of binding quality,
     so 0.6 is unreachable for tjPE-sized pegRNAs (neutral 194/232-nt extensions average
-    0.48/0.43). Why not a drop from the apo scaffold: any long RNA "drops". Why keep the gate
-    at all: an extension engineered to sequester the scaffold scores 0.28-0.33, 0.2-0.3 below
-    neutral, and the folding gate deliberately ignores any pair touching the scaffold, so
-    this is the only check that can see that failure.
+    0.50/0.42). Why not a drop from the apo scaffold: any long RNA "drops". Why keep the gate
+    at all: it separates a neutral extension from an RNA that has lost Cas9 (a scrambled
+    backbone) with no error in 90 leave-one-out sequences and 12 held-out ones, and it rejects
+    an extension built to tie up most of the scaffold (a 40-60 nt complement scores like a
+    scrambled backbone). What it does NOT do is detect localized pairing: a 24-nt complement
+    to almost any part of the scaffold mostly passes (ADR 0024). It is a check that Cas9 can
+    still bind, not a check of the scaffold's folding.
+
+    A verdict within ``borderline_margin`` (as a fraction of the neutral-to-non-binder span)
+    of the cutoff is still decided by the rule, but flagged BORDERLINE in the message and in
+    ``metrics`` because it is not robust: the closest calls in the calibration data fall in
+    that band.
 
     Outside the calibrated length range there is no valid reference, so the result is
     ADVISORY ONLY: it passes, is flagged in ``metrics['advisory']`` and in the message, and
@@ -319,6 +332,13 @@ def passes_calibrated_docking_gate(
     ref = docking_reference(len(pegrna))
     cutoff = ref.cutoff(pass_fraction)
     frac = (mean - ref.nonbinder) / ref.span
+    borderline = ref.calibrated and abs(frac - pass_fraction) < borderline_margin
+    borderline_text = (
+        f"ipTM {mean:.2f} is {100 * frac:.0f}% of the way from non-binder to neutral "
+        f"at {len(pegrna)} nt, within {100 * borderline_margin:.0f} points of the "
+        f"{100 * pass_fraction:.0f}% cutoff, so this verdict is not robust"
+    )
+    borderline_note = "borderline: " + borderline_text
     detail = (
         f"interface ipTM {mean:.2f} (mean of {n}, range {min(samples):.2f}-{max(samples):.2f}) "
         f"at {len(pegrna)} nt; neutral extension {ref.neutral:.2f}, non-binder "
@@ -336,6 +356,8 @@ def passes_calibrated_docking_gate(
                     "extra": f"neutral {ref.neutral:.2f} \u00b7 non-binder {ref.nonbinder:.2f} at {len(pegrna)} nt",
                 }
             )
+            if borderline:
+                metrics.update({"borderline": True, "note": borderline_note})
         else:
             metrics.update(
                 {
@@ -353,9 +375,13 @@ def passes_calibrated_docking_gate(
             f"{DOCKING_CALIBRATED_RANGE[0]}-{DOCKING_CALIBRATED_RANGE[1]} nt range, so docking "
             f"cannot be judged here: {detail}"
         )
+    flag = f" [BORDERLINE: {borderline_text}]" if borderline else ""
     if mean < cutoff - 1e-9:
-        return False, f"scaffold-Cas9 interface looks like a non-binder at this length: {detail}"
-    return True, f"scaffold-Cas9 interface consistent with a neutral extension: {detail}"
+        return (
+            False,
+            f"scaffold-Cas9 interface looks like a non-binder at this length: {detail}{flag}",
+        )
+    return True, f"scaffold-Cas9 interface consistent with a neutral extension: {detail}{flag}"
 
 
 def passes_docking_gate(

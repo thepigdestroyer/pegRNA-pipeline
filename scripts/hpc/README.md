@@ -117,10 +117,12 @@ biological result.
 | Parameter | Where | Default | Note |
 |---|---|---|---|
 | microhomology max-run `L` | `run_recoded_tjpe(max_run=)` | 8 | conservative; validate |
-| RiNALMo pairing threshold | `RiNALMoScorer(threshold=)` | 0.5 | val-tune 0.01–0.30 |
-| Boltz-2 interface-drop | `passes_docking_gate(max_drop=)` | 0.15 | no published cutoff |
+| pegRNA folding, RiNALMo pairing threshold | `RiNALMoScorer(threshold=)` | 0.5 | val-tune 0.01–0.30 |
+| pegRNA folding, ViennaRNA pairing threshold | `structure_threshold` (config) | 0.99 | the scorer's own calibrated default; 0.5 rejects ~90% of random pegRNAs (ADR 0024) |
+| Boltz-2 docking | `THRESHOLDS.docking_pass_fraction` | 0.5 | how far from the length-matched non-binder to the length-matched neutral reference a design must sit; the references are `DOCKING_REFERENCE`, derived from `scripts/analysis/data/` (ADR 0024). The old `max_drop` / 0.6 floor applies only to scorers that return no per-sample ipTM |
 | splice Δ | `passes_splice_gate(max_delta=)` | 0.2 | SpliceAI convention |
 | nick distance | `ngrna_distance_*` | 40–70 | <70 bp untested (Zheng) |
+| second-nick off-target tolerance | `ngrna_max_offtargets` (config / UI) | 0 | near-matches (≤2 mismatches) the ngRNA may have; exact duplicates are never tolerated; always disclosed on the result (ADR 0025) |
 
 ## Definition of production-ready
 

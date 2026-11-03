@@ -31,31 +31,32 @@ __all__ = ["GateThresholds", "THRESHOLDS", "DOCKING_REFERENCE", "DOCKING_CALIBRA
 #:
 #: NEUTRAL    = spacer + scaffold + a neutral (random / shuffled) 3' extension: what a
 #:              pegRNA that does nothing wrong scores at this length.
-#: NON-BINDER = a scrambled backbone with the same extension, or an extension built to
-#:              pair with and sequester the scaffold: what a pegRNA that has lost Cas9
-#:              scores at this length.
+#: NON-BINDER = a SCRAMBLED backbone (plus the same kind of extension): an RNA that has
+#:              lost Cas9.
 #:
-#: Why this exists. ipTM falls steadily with RNA length for reasons unrelated to binding
-#: quality, so the AlphaFold-Multimer rule-of-thumb floor of 0.6 is simply out of reach
-#: for any tjPE-sized pegRNA: neutral extensions of 194/232 nt average 0.48/0.43. The
-#: informative question is whether a design looks like a neutral extension of ITS OWN
-#: length or like a non-binder of that length -- and that signal is large (0.2-0.3).
-#: Provenance and replication: scripts/analysis/calibrate_docking_gate.py.
+#: THIS TABLE IS DERIVED, NOT TYPED. It is the output of
+#:     python scripts/analysis/docking_reference.py --emit
+#: on scripts/analysis/data/docking_calibration.jsonl, and tests/test_docking_reference.py fails
+#: when the two disagree. To change a number, add measurements; do not edit it. (Scaffold-
+#: sequestering extensions and the pipeline's own designs are deliberately NOT in the table:
+#: they are what it is tested on.)
 #:
-#: Row sources (n = independent sequences):
-#:   96  canonical sgRNA 0.693 (n=1) | scrambled 0.448 (n=1)
-#:   126 neutral 0.606 (n=2)         | non-binder interpolated
-#:   156 neutral 0.615 (n=3)         | scaffold-sequestering extension 0.325 (n=1)
-#:   194 neutral 0.480 (n=5)         | scrambled+ext 0.272 (n=2), sequestering 0.276 (n=1)
-#:   232 neutral 0.432 (n=5)         | scrambled+ext 0.262 (n=2)
-#: The sample sizes are small. The reference is an empirical null, not a theory; extend it
-#: (the script takes --per-length) before leaning on a result near the decision boundary.
+#: Why it exists. ipTM falls steadily with RNA length for reasons unrelated to binding quality,
+#: so the AlphaFold-Multimer rule-of-thumb floor of 0.6 is out of reach for any tjPE-sized
+#: pegRNA: neutral extensions of 194 / 232 nt average 0.50 / 0.42. The informative question is
+#: whether a design looks like a neutral extension of ITS OWN length or like a non-binder of
+#: that length, and the gap between them (0.17-0.27) is several times the sequence-to-sequence
+#: spread. ADR 0024 has the validation: leave-one-out on 90 sequences and a held-out spacer.
+#:
+#: Independent sequences behind each row (neutral / non-binder): 96 nt 5/5, 126 nt 8/6,
+#: 156 nt 9/6, 194 nt 16/12, 232 nt 15/8. It is an empirical null, not a theory; the 232 nt
+#: non-binder column is the thinnest. Measure more with scripts/analysis/calibrate_docking_gate.py.
 DOCKING_REFERENCE = (
-    (96, 0.693, 0.448),
-    (126, 0.606, 0.386),
-    (156, 0.615, 0.325),
-    (194, 0.480, 0.274),
-    (232, 0.432, 0.262),
+    (96, 0.660, 0.392),
+    (126, 0.602, 0.343),
+    (156, 0.571, 0.324),
+    (194, 0.499, 0.294),
+    (232, 0.419, 0.252),
 )
 
 #: Inside this total-RNA-length range the reference above is interpolated; outside it
@@ -83,6 +84,10 @@ class GateThresholds:
     # absolute-floor / apo-drop pair above remains for scorers that cannot sample.
     docking_samples: int = 5
     docking_pass_fraction: float = 0.5
+    # A docking verdict this close to the cutoff (as a fraction of the neutral-to-non-binder
+    # span, so 0.15 = 15% of it) is flagged BORDERLINE: still decided by the rule, but reported
+    # as not robust. See the citation for where the number comes from.
+    docking_borderline_margin: float = 0.15
 
     # --- microhomology recode ceiling (bp); recoder minimises below this ---
     microhomology_max_run: int = 8
@@ -135,13 +140,27 @@ class GateThresholds:
                 "Midway between the length-matched NON-BINDER and NEUTRAL references "
                 "(DOCKING_REFERENCE): 'does this look more like a neutral extension of its "
                 "own length, or like an RNA that has lost Cas9?'. Measured on the Boltz-2 NIM "
-                "with 5 diffusion samples per call: neutral and non-binder differ by 0.17 "
-                "(232 nt) to 0.29 (156 nt) while sequence-to-sequence sd of a neutral design "
-                "is 0.02-0.05, so the midpoint is ~2-3 sd from either. A scaffold-sequestering "
-                "extension (positive control) scores 0.28-0.33, 0.2-0.3 below neutral, so the "
-                "gate detects the interference it exists to catch. Single draws are far "
-                "noisier (sd 0.03-0.11): one scrambled non-binder draw reached 0.634 and one "
-                "draw of a 194-nt design 0.628, which is why 5 samples are averaged."
+                "with 5 diffusion samples per call. Neutral and non-binder differ by 0.17 "
+                "(232 nt) to 0.27 (96 nt); the between-sequence sd is 0.03-0.05 for neutral "
+                "designs and 0.01-0.07 for non-binders. Leave-one-out over 90 sequences "
+                "(each judged by a table built without it): 53/53 neutral accepted, 37/37 "
+                "non-binders rejected. On a 0 (non-binder) to 1 (neutral) scale neutral designs "
+                "sit at 1.00 +- 0.21 (lowest 0.51) and non-binders at 0.00 +- 0.18 (highest "
+                "0.42), so 0.5 separates them, and any cutoff from 0.45 to 0.50 makes no "
+                "error. A second spacer never used to build the table was judged correctly "
+                "12/12. Single draws are far noisier (sd 0.03-0.11; one scrambled non-binder "
+                "draw reached 0.634), which is why 5 samples are averaged. It is a check that "
+                "Cas9 can still bind, not of the scaffold's folding: it rejects every "
+                "complement of 40+ nt over the scaffold's 5' two-thirds but only 4 of 12 "
+                "24-nt complements, and none that target the 3' hairpin (ADR 0024)."
+            ),
+            "docking_borderline_margin": (
+                "0.15 of the neutral-to-non-binder span either side of the cutoff. The closest "
+                "calls in the leave-one-out data (lowest neutral 0.51, highest non-binder 0.42 "
+                "on the 0..1 scale) both lie inside +-0.15 of the 0.5 cutoff. The band flags "
+                "3.8% of neutral designs (still accepted) and 5.4% of non-binders (still "
+                "rejected), leaving 96% of verdicts clear. A flagged verdict is decided by the "
+                "rule but is not robust, and is reported as such."
             ),
             "docking_max_drop": (
                 "Derived from the AF-Multimer confidence bands (one full 0.2-wide "

@@ -278,3 +278,100 @@ def test_nim_requests_the_configured_number_of_samples(monkeypatch):
     monkeypatch.setattr(complex_dock_nim.urllib.request, "urlopen", fake_urlopen)
     Boltz2NIMDockScorer(api_key="x", samples=3)._predict_samples("ACGU" * 10, "M" * 30)
     assert seen["payload"]["diffusion_samples"] == 3
+
+
+# ---- borderline verdicts ----------------------------------------------------------------
+#
+# In the calibration data the closest calls on either side (the lowest neutral design and the
+# highest non-binder) both sit within 15 points of the cutoff, so a verdict there is not robust.
+# The flag reports that; it must never change what the rule decides.
+
+
+def _mean_at(length: int, f: float) -> float:
+    """The mean ipTM that sits ``f`` of the way from non-binder (0) to neutral (1)."""
+    ref = docking_reference(length)
+    return ref.nonbinder + f * ref.span
+
+
+def _gate_at(length: int, f: float, **kw):
+    metrics = {}
+    ok, why = passes_calibrated_docking_gate(
+        _rna(length), "nCas9", scorer=_Samples([_mean_at(length, f)] * 5), metrics=metrics, **kw
+    )
+    return ok, why, metrics
+
+
+@pytest.mark.parametrize("length", [126, 156, 194, 232])
+def test_a_verdict_just_inside_the_band_is_flagged_either_way(length):
+    ok_lo, why_lo, m_lo = _gate_at(length, 0.42)
+    ok_hi, why_hi, m_hi = _gate_at(length, 0.58)
+    assert (ok_lo, ok_hi) == (False, True), "the flag must not move the verdict"
+    assert m_lo["borderline"] and m_hi["borderline"]
+    assert "BORDERLINE" in why_lo and "BORDERLINE" in why_hi
+    assert "not robust" in m_lo["note"]
+
+
+@pytest.mark.parametrize("f", [0.0, 0.2, 0.3, 0.7, 0.9, 1.1])
+def test_a_clear_verdict_is_not_flagged(f):
+    ok, why, metrics = _gate_at(194, f)
+    assert ok is (f >= 0.5)
+    assert "borderline" not in metrics and "BORDERLINE" not in why
+
+
+def test_the_band_is_fifteen_points_either_side_of_the_cutoff():
+    assert _gate_at(194, 0.5 - 0.14)[2].get("borderline")
+    assert _gate_at(194, 0.5 + 0.14)[2].get("borderline")
+    assert not _gate_at(194, 0.5 - 0.16)[2].get("borderline")
+    assert not _gate_at(194, 0.5 + 0.16)[2].get("borderline")
+
+
+def test_the_flag_never_changes_the_verdict():
+    for i in range(0, 121, 3):
+        f = i / 100
+        flagged, _, _ = _gate_at(194, f)
+        unflagged, _, _ = _gate_at(194, f, borderline_margin=0.0)
+        assert flagged == unflagged == (f >= 0.5 - 1e-9), f
+
+
+def test_the_margin_is_configurable():
+    assert not _gate_at(194, 0.5, borderline_margin=0.0)[2].get("borderline")
+    assert _gate_at(194, 0.05, borderline_margin=1.0)[2].get("borderline")
+
+
+def test_the_advisory_range_is_never_called_borderline():
+    ok, why, metrics = _gate_at(300, 0.5)
+    assert ok and why.startswith("ADVISORY ONLY") and "borderline" not in metrics
+
+
+def test_the_margin_comes_from_the_documented_threshold():
+    from pegrna_pipeline.hpc.gate_thresholds import THRESHOLDS
+
+    assert THRESHOLDS.docking_borderline_margin == 0.15
+    assert "docking_borderline_margin" in THRESHOLDS.citations
+
+
+def test_a_borderline_pass_reaches_the_designs_warnings():
+    """A reader ordering DNA needs to see it without opening the full report."""
+    import test_pridict_ngrna_wiring as W
+
+    from pegrna_pipeline.hpc.recoded_tjpe_workflow import run_recoded_tjpe
+
+    class OnTheLine:
+        def interface_iptm_samples(self, pegrna, cas9):  # noqa: ARG002
+            return [_mean_at(len(pegrna), 0.55)] * 5
+
+    res = run_recoded_tjpe(**W._wf_inputs(dock_scorer=OnTheLine()))
+    assert any(w.startswith("docking gate: borderline") for w in res.warnings), res.warnings
+
+
+def test_a_clear_pass_adds_no_docking_warning():
+    import test_pridict_ngrna_wiring as W
+
+    from pegrna_pipeline.hpc.recoded_tjpe_workflow import run_recoded_tjpe
+
+    class Comfortable:
+        def interface_iptm_samples(self, pegrna, cas9):  # noqa: ARG002
+            return [_mean_at(len(pegrna), 0.95)] * 5
+
+    res = run_recoded_tjpe(**W._wf_inputs(dock_scorer=Comfortable()))
+    assert not any("docking" in w for w in res.warnings)
