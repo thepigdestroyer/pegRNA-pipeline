@@ -18,6 +18,8 @@ from __future__ import annotations
 
 from typing import Dict, Tuple
 
+from pegrna_pipeline.hpc.gate_thresholds import THRESHOLDS
+
 __all__ = ["ViennaRNAStructureScorer"]
 
 
@@ -27,7 +29,14 @@ class ViennaRNAStructureScorer:
     Requires the ``ViennaRNA`` package (``pip install ViennaRNA`` or
     ``conda install -c bioconda viennarna``). Loads lazily and raises a helpful
     ImportError if missing (fail-loud, consistent with the other real adapters).
+
+    ``recommended_threshold`` is the cross-region pair-probability cutoff calibrated
+    for THIS folder (see ``THRESHOLDS.citations['vienna_pair_prob']``). The workflow
+    uses it unless the caller overrides it, because the generic 0.5 default belongs to
+    RiNALMo and rejects ~90% of random tjPE-sized pegRNAs under ViennaRNA.
     """
+
+    recommended_threshold: float = THRESHOLDS.vienna_pair_prob
 
     def __init__(self, *, floor: float = 0.01) -> None:
         self.floor = floor

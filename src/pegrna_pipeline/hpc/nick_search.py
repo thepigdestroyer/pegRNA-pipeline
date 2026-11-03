@@ -13,7 +13,39 @@ from typing import Callable, Dict, List, Tuple
 
 from Bio.Seq import Seq
 
-__all__ = ["enumerate_nick_sites", "screen_nick_candidates", "NickCandidate"]
+__all__ = [
+    "enumerate_nick_sites",
+    "screen_nick_candidates",
+    "nick_usable_for_arm",
+    "NickCandidate",
+]
+
+ARM_SIDES = ("3prime", "5prime", "auto")
+
+
+def nick_usable_for_arm(nick_position: int, site_s: int, arm_side: str) -> bool:
+    """Can a nick at ``nick_position`` serve a design whose arm sits on ``arm_side``?
+
+    ``arm_side`` selects which side of the insertion site S the recode/replacement
+    arm occupies, and the second nick must lie on that same side: ``"5prime"`` needs
+    the nick 5' of S (the arm is carved out of the CDS upstream of the stop codon),
+    ``"3prime"`` needs it 3' of S, and ``"auto"`` accepts either. A nick exactly at S
+    has no arm and is never usable.
+
+    This is the single definition of that rule. It has to be applied wherever a
+    candidate pool is BUILT, not just where it is walked: a pool whose every member
+    the walk will discard is not a pool, and must not suppress the fallback to
+    other candidate sources.
+    """
+    if arm_side not in ARM_SIDES:
+        raise ValueError(f"arm_side must be one of {ARM_SIDES}; got {arm_side!r}")
+    if nick_position == site_s:
+        return False
+    if arm_side == "5prime":
+        return nick_position < site_s
+    if arm_side == "3prime":
+        return nick_position > site_s
+    return True
 
 
 @dataclass(frozen=True)

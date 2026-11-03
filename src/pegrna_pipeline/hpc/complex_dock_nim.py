@@ -30,10 +30,18 @@ import json
 import os
 import re
 import time
+import urllib.error
 import urllib.request
 from typing import Optional
 
+from pegrna_pipeline.hpc.complex_dock import DockingServiceError
+from pegrna_pipeline.hpc.gate_thresholds import THRESHOLDS
+
 __all__ = ["Boltz2NIMDockScorer"]
+
+#: HTTP statuses worth retrying: rate limiting and transient server trouble.
+_TRANSIENT_HTTP = frozenset({429, 500, 502, 503, 504})
+_MAX_BACKOFF_S = 60.0
 
 DEFAULT_NIM_URL = "https://health.api.nvidia.com/v1/biology/mit/boltz2/predict"
 _SPCAS9_UNIPROT = "Q99ZW2"  # S. pyogenes Cas9
@@ -49,7 +57,8 @@ class Boltz2NIMDockScorer:
         recycling_steps: int = 3,
         sampling_steps: int = 50,
         timeout: int = 900,
-        retries: int = 2,
+        retries: int = 6,
+        samples: int = THRESHOLDS.docking_samples,
     ) -> None:
         self.api_key = api_key or os.environ.get("NVIDIA_API_KEY")
         self.url = url or os.environ.get("BOLTZ_NIM_URL") or DEFAULT_NIM_URL
@@ -57,6 +66,10 @@ class Boltz2NIMDockScorer:
         self.sampling_steps = sampling_steps
         self.timeout = timeout
         self.retries = retries
+        #: Diffusion samples per request. A single draw is too noisy to threshold (sd
+        #: 0.03-0.11; a scrambled non-binder drew 0.634 once), so the calibrated gate
+        #: averages several, which cost one request and about the same wall time.
+        self.samples = max(1, int(samples))
         if apo_scaffold is None:
             from pegrna_pipeline.hpc.tjpe_workflow import STANDARD_SGRNA_SCAFFOLD  # noqa: PLC0415
 
@@ -94,9 +107,9 @@ class Boltz2NIMDockScorer:
         return "".join(line.strip() for line in text.splitlines() if not line.startswith(">"))
 
     # -- NIM call ------------------------------------------------------------
-    def _predict_iptm(self, rna: str, protein: str) -> float:
+    def _predict_samples(self, rna: str, protein: str) -> list:
         if not self.api_key:
-            raise RuntimeError(
+            raise DockingServiceError(
                 "Boltz2NIMDockScorer needs an NVIDIA API key: set NVIDIA_API_KEY "
                 "(nvapi-...) from build.nvidia.com. No key -> cannot run the docking gate."
             )
@@ -110,7 +123,7 @@ class Boltz2NIMDockScorer:
             ],
             "recycling_steps": self.recycling_steps,
             "sampling_steps": self.sampling_steps,
-            "diffusion_samples": 1,
+            "diffusion_samples": self.samples,
             "step_scale": 1.638,
             "output_format": "mmcif",
             "concatenate_msas": False,
@@ -120,57 +133,94 @@ class Boltz2NIMDockScorer:
             "Content-Type": "application/json",
             "Authorization": f"Bearer {self.api_key}",
         }
-        last_err = None
+        last_err: Optional[BaseException] = None
         for attempt in range(self.retries + 1):
             try:
                 req = urllib.request.Request(self.url, data=data, headers=headers, method="POST")
                 with urllib.request.urlopen(req, timeout=self.timeout) as resp:  # noqa: S310
                     body = json.loads(resp.read().decode())
-                return self._extract_iptm(body)
-            except Exception as exc:  # noqa: BLE001 - retry transient 5xx/timeouts
+                return self._extract_samples(body)
+            except urllib.error.HTTPError as exc:
                 last_err = exc
-                if attempt < self.retries:
-                    time.sleep(5 * (attempt + 1))
-        raise RuntimeError(f"Boltz-2 NIM request failed after {self.retries + 1} tries: {last_err}")
+                if exc.code not in _TRANSIENT_HTTP:
+                    # 401/403 (key), 422 (payload), ...: retrying cannot help.
+                    detail = ""
+                    try:
+                        detail = exc.read().decode(errors="replace")[:300]
+                    except Exception:  # noqa: BLE001
+                        pass
+                    raise DockingServiceError(
+                        f"Boltz-2 NIM rejected the request (HTTP {exc.code}): {detail}"
+                    ) from exc
+                retry_after = exc.headers.get("Retry-After") if exc.headers else None
+                try:
+                    wait = float(retry_after) if retry_after else 0.0
+                except ValueError:
+                    wait = 0.0
+                wait = wait or min(5.0 * 2**attempt, _MAX_BACKOFF_S)
+            except (urllib.error.URLError, TimeoutError, OSError, ValueError) as exc:
+                # ValueError covers a non-JSON body (json.JSONDecodeError): a flaky proxy
+                # or a truncated response, retried like a dropped connection.
+                last_err = exc
+                wait = min(5.0 * 2**attempt, _MAX_BACKOFF_S)
+            if attempt < self.retries:
+                time.sleep(min(wait, _MAX_BACKOFF_S))
+        raise DockingServiceError(
+            f"Boltz-2 NIM unavailable after {self.retries + 1} attempts: {last_err}. "
+            "This is the docking service failing, not a verdict on the design."
+        )
 
-    def _extract_iptm(self, body: dict) -> float:
-        """Pull the chain-pair interface ipTM from the NIM response.
+    @staticmethod
+    def _interface_value(matrix: dict) -> Optional[float]:
+        """The pegRNA<->Cas9 entry of one sample's pair-chains matrix (max off-diagonal)."""
+        off = [
+            float(v)
+            for i, row in matrix.items()
+            if isinstance(row, dict)
+            for j, v in row.items()
+            if i != j
+        ]
+        return max(off) if off else None
 
-        Verified against the live NVIDIA Boltz-2 NIM response schema: the
-        interface metrics are TOP-LEVEL lists (one entry per diffusion sample):
+    def _extract_samples(self, body: dict) -> list:
+        """The interface ipTM of EVERY diffusion sample in the NIM response.
 
-        * ``pair_chains_iptm_scores``: ``[{"0": {"0": .., "1": ..}, "1": {..}}]``
-          keyed by CHAIN INDEX (order in the polymers list). We send P (rna) then
-          C (protein), so the pegRNA<->Cas9 interface is ["0"]["1"] — taken as the
-          max off-diagonal to be robust to ordering.
-        * ``iptm_scores``: ``[float]`` — the global interface ipTM (fallback).
-        * ``confidence_scores``: ``[float]`` — aggregate confidence (last-resort
+        Verified against the live NVIDIA Boltz-2 NIM response schema: the interface
+        metrics are TOP-LEVEL lists with one entry per diffusion sample:
+
+        * ``pair_chains_iptm_scores``: ``[{"0": {"0": .., "1": ..}, "1": {..}}, ...]``
+          keyed by CHAIN INDEX (order in the polymers list). We send P (rna) then C
+          (protein), so the pegRNA<->Cas9 interface is the off-diagonal entry.
+        * ``iptm_scores``: ``[float, ...]`` -- the global interface ipTM (fallback).
+        * ``confidence_scores``: ``[float, ...]`` -- aggregate confidence (last-resort
           proxy; flagged via ``last_metric_source``).
         """
         pcs = body.get("pair_chains_iptm_scores")
-        if isinstance(pcs, list) and pcs and isinstance(pcs[0], dict):
-            mat = pcs[0]
-            off = [
-                float(v)
-                for i, row in mat.items()
-                if isinstance(row, dict)
-                for j, v in row.items()
-                if i != j
-            ]
-            if off:
+        if isinstance(pcs, list) and pcs and all(isinstance(m, dict) for m in pcs):
+            vals = [self._interface_value(m) for m in pcs]
+            if vals and all(v is not None for v in vals):
                 self.last_metric_source = "pair_chains_iptm_scores"
-                return max(off)
-        iptm = body.get("iptm_scores")
-        if isinstance(iptm, list) and iptm:
-            self.last_metric_source = "iptm_scores"
-            return float(iptm[0])
-        scores = body.get("confidence_scores")
-        if isinstance(scores, list) and scores:
-            self.last_metric_source = "confidence_scores(proxy)"
-            return float(scores[0])
-        raise RuntimeError(
+                return vals
+        for key, source in (
+            ("iptm_scores", "iptm_scores"),
+            ("confidence_scores", "confidence_scores(proxy)"),
+        ):
+            scores = body.get(key)
+            if isinstance(scores, list) and scores:
+                self.last_metric_source = source
+                return [float(v) for v in scores]
+        raise DockingServiceError(
             "Boltz-2 NIM response had no usable confidence metric " f"(keys: {sorted(body.keys())})"
         )
+
+    def _extract_iptm(self, body: dict) -> float:
+        """First sample's interface ipTM (kept for callers that want a single number)."""
+        return self._extract_samples(body)[0]
+
+    def _predict_iptm(self, rna: str, protein: str) -> float:
+        """Mean interface ipTM over the diffusion samples (legacy single-number view)."""
+        vals = self._predict_samples(rna, protein)
+        return sum(vals) / len(vals)
 
     # -- ComplexDockScorer interface ----------------------------------------
     def apo_interface_iptm(self, cas9: str) -> float:
@@ -182,3 +232,20 @@ class Boltz2NIMDockScorer:
 
     def interface_iptm(self, pegrna: str, cas9: str) -> float:
         return self._predict_iptm(pegrna, self._resolve_cas9(cas9))
+
+    def interface_iptm_samples(self, pegrna: str, cas9: str) -> list:
+        """Per-sample interface ipTM, for the length-calibrated gate.
+
+        The calibration in ``gate_thresholds.DOCKING_REFERENCE`` was measured on
+        ``pair_chains_iptm_scores``. If the service stops returning it and the scorer falls
+        back to the global ipTM or an aggregate-confidence proxy, comparing that against
+        references for a different quantity would be a silent miscalibration, so refuse.
+        """
+        vals = self._predict_samples(pegrna, self._resolve_cas9(cas9))
+        if self.last_metric_source != "pair_chains_iptm_scores":
+            raise DockingServiceError(
+                f"Boltz-2 NIM returned '{self.last_metric_source}' instead of "
+                "pair_chains_iptm_scores; the docking calibration was measured on the latter "
+                "and does not apply to this metric."
+            )
+        return vals

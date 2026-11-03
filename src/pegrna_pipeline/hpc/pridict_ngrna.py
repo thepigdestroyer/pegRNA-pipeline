@@ -33,6 +33,7 @@ from dataclasses import dataclass
 from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
 from pegrna_pipeline.hpc.data_types import NgRNADesign
+from pegrna_pipeline.hpc.nick_search import nick_usable_for_arm
 from pegrna_pipeline.hpc.tjpe_workflow import derive_rc_pbs2, select_tjpe_ngrna
 
 __all__ = [
@@ -147,6 +148,7 @@ def build_pridict_ngrnas(
     pbs2_length: int = 17,
     min_ontarget: float = 0.5,
     max_offtargets: int = 0,
+    arm_side: str = "auto",
 ) -> List[InjectedNgRNA]:
     """Select + off-target-gate PRIDICT nicking guides into injectable ngRNAs (best-first).
 
@@ -155,14 +157,18 @@ def build_pridict_ngrnas(
 
     1. Admissible = distance window + opposite strand + spacer sanity (via
        :func:`_rank_admissible` / :func:`select_tjpe_ngrna`), ordered by DeepCas9 desc.
-    2. Off-target gate on each protospacer (one batched scorer call). A candidate with a
+    2. Arm side: a nick on the wrong side of S for ``arm_side`` is dropped HERE, before
+       the (slow) off-target scan -- see :func:`nick_usable_for_arm` for why this must
+       happen when the pool is built and not only when it is walked.
+    3. Off-target gate on each protospacer (one batched scorer call). A candidate with a
        flagged off-target, more than ``max_offtargets`` in-tier hits, or on-target below
        ``min_ontarget`` is skipped -- the NICK lever advances to the next candidate.
-    3. rcPBS2 = :func:`derive_rc_pbs2` over the window 5' of ``site_s + distance_to_edit``;
+    4. rcPBS2 = :func:`derive_rc_pbs2` over the window 5' of ``site_s + distance_to_edit``;
        a candidate whose PBS2 window falls off the genome window is skipped.
 
     Returns ``[]`` when no admissible, off-target-clean, rcPBS2-derivable ngRNA exists,
-    so the caller can fall back to the genome-enumerated path.
+    so the caller can fall back to the genome-enumerated path. ``arm_side="auto"`` (the
+    default) applies no side filter, preserving the behaviour of existing callers.
     """
     ngrnas = nicking_rows_to_ngrnas(nicking_rows)
     ordered = _rank_admissible(
@@ -171,6 +177,9 @@ def build_pridict_ngrnas(
         max_distance=ngrna_distance_max,
         pegrna_strand=pegrna_strand,
     )
+    ordered = [
+        ng for ng in ordered if nick_usable_for_arm(site_s + ng.distance_to_edit, site_s, arm_side)
+    ]
     if not ordered:
         return []
 

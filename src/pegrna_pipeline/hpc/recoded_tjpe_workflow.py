@@ -14,7 +14,7 @@ from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 from pegrna_pipeline.hpc.allele_specificity import find_allele_specific
 from pegrna_pipeline.hpc.codon_expander import _gc_content, enumerate_variants
-from pegrna_pipeline.hpc.complex_dock import passes_docking_gate
+from pegrna_pipeline.hpc.complex_dock import DockingServiceError, passes_docking_gate
 from pegrna_pipeline.hpc.cryptic_splice import passes_cryptic_splice_gate
 from pegrna_pipeline.hpc.full_structure import functional_region_pairing
 from pegrna_pipeline.hpc.gate_thresholds import THRESHOLDS
@@ -552,7 +552,7 @@ def _run_recoded_tjpe_single(
     cas9: str = "nCas9",
     allele_hunt: bool = False,
     het_snps: Optional[Sequence[dict]] = None,
-    structure_threshold: float = 0.5,
+    structure_threshold: Optional[float] = None,
     max_interface_drop: float = 0.15,
     insertion_importance_context: int = 1,
     protein_length: Optional[int] = None,
@@ -632,7 +632,13 @@ def _run_recoded_tjpe_single(
     # scorer that cannot run must not crash the whole walk before any candidate.
     diagnostics: List[str] = []
     try:
-        dock_scorer.apo_interface_iptm(cas9)
+        # The length-calibrated gate (scorers with per-sample ipTMs) compares each
+        # candidate with references measured at its own length and never uses the apo
+        # scaffold, so skip that call: it costs a NIM request and measures nothing it uses.
+        if not hasattr(dock_scorer, "interface_iptm_samples"):
+            dock_scorer.apo_interface_iptm(cas9)
+    except DockingServiceError:
+        raise
     except Exception as exc:  # noqa: BLE001 - scorer/runtime failures are diagnostics
         raise NoValidPegRNA(f"docking apo baseline failed to compute: {exc}") from exc
     tried = 0
@@ -870,6 +876,9 @@ def _run_recoded_tjpe_single(
                 _emit(tried, "importance", "no flanking CDS (n/a)", True)
 
             regions = _regions_for(spacer, rcpbs2, rtt, pbs1)
+            structure_threshold = resolve_structure_threshold(
+                structure_threshold, full_structure_scorer
+            )
             try:
                 pairing = functional_region_pairing(
                     peg,
@@ -910,6 +919,8 @@ def _run_recoded_tjpe_single(
                     max_drop=max_interface_drop,
                     metrics=dk_metrics,
                 )
+            except DockingServiceError:
+                raise  # an outage is not a verdict on this candidate (see its docstring)
             except Exception as exc:  # noqa: BLE001
                 diagnostics.append(f"cand{tried}: docking scorer error: {exc}")
                 continue
@@ -920,6 +931,10 @@ def _run_recoded_tjpe_single(
             gate_info["docking"] = dock_why
             # First survivor wins.
             warnings: List[str] = []
+            if dk_metrics.get("advisory"):
+                # Outside the calibrated length range the docking gate can only report,
+                # not judge. The design is accepted on the other gates, and says so.
+                warnings.append("docking gate is advisory-only for this design: " + dock_why)
             if arm.max_run_after > max_run:
                 warnings.append("microhomology advisory: residual run above target")
             if arm.microhomology_flag:
@@ -1057,6 +1072,19 @@ def run_recoded_tjpe(
                 break  # a synonymous cargo swap cannot rescue a cargo-independent failure
     assert last is not None  # _cargo_variants always yields >= 1 attempt
     raise last
+
+
+def resolve_structure_threshold(explicit: Optional[float], scorer: Any) -> float:
+    """Cross-region pair-probability cutoff: explicit > the scorer's own > generic.
+
+    A base-pair-probability boundary only means something relative to the folder that
+    produced it, so the default lives on the scorer. An explicit value (config or
+    argument) always wins.
+    """
+    if explicit is not None:
+        return float(explicit)
+    rec = getattr(scorer, "recommended_threshold", None)
+    return float(rec) if rec is not None else THRESHOLDS.rinalmo_pair_prob
 
 
 def _regions_for(spacer: str, rcpbs2: str, rtt: str, pbs1: str) -> Dict[str, Tuple[int, int]]:

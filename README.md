@@ -225,14 +225,20 @@ override them, but they are rationally defensible out of the box:
 | AlphaFold pLDDT | **≥70** | "confident" band (Jumper 2021; AFDB) — gate-enabler for burial calls |
 | AlphaFold RSA buried | **<0.25** | interior/core rASA (Levy 2010); Tien 2013 max-ASA normalisation |
 | AlphaFold contact no. | **>18** | densely-packed core; CN ~ mutational sensitivity (Yeh 2014) |
-| docking ipTM floor | **0.6** | AF-Multimer/AF3 "likely incorrect" below 0.6 (Evans 2022; Abramson 2024) |
-| docking ipTM drop | **0.2** | one full confidence band vs apo scaffold–Cas9 baseline |
+| docking (interface ipTM) | **midway** between the length-matched *neutral* and *non-binder* references | Measured on Boltz-2, 5 samples averaged. ipTM falls with RNA length regardless of design quality, so the AF-Multimer floor of 0.6 is unreachable for tjPE-sized pegRNAs; a scaffold-sequestering extension scores 0.2–0.3 below neutral, so the gate still catches it. [ADR 0024](docs/decisions/0024-calibrated-docking-and-folding-gates.md) |
 | microhomology max-run | **8 bp** | RecA MEPS ~8 bp / MMEJ onset ~6–8 bp; recoder minimises below this |
-| RiNALMo pair prob | **0.5** | sigmoid pair-call boundary (RiNALMo val-tunes 0.01–0.30 for F1) |
+| pegRNA folding, RiNALMo pair prob | **0.5** | sigmoid pair-call boundary (RiNALMo val-tunes 0.01–0.30 for F1) |
+| pegRNA folding, ViennaRNA pair prob | **0.99** | calibrated against 300 random pegRNAs per size: at 0.5 only 9–12% of random tjPE-sized designs pass, at 0.99 80–84% ([ADR 0024](docs/decisions/0024-calibrated-docking-and-folding-gates.md)) |
 | nick distance | **40–70 bp** | experimental design; smaller preferred (NOT auto-calibrated) |
 
 These are *rational priors*; final tuning still benefits from a wet-lab
 calibration set, but the pipeline no longer ships unjustified numbers.
+
+Two of them started life as values borrowed from a different tool or a different
+molecule size, and were replaced once measured (the docking floor and the ViennaRNA
+folding cutoff). A threshold that rejects nearly every *random* design is not
+screening out bad ones, and a threshold that sits inside the model's own sampling noise
+is not a threshold. `scripts/analysis/` holds the scripts that produce the numbers.
 
 ## Testing
 

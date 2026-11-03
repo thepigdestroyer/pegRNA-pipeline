@@ -148,7 +148,7 @@ export function ResultPanel({ result }: { result: DesignResult }) {
           <Callout tone="neutral">
             In <span className="font-medium">api</span> mode, “no candidate survived” is a genuine
             verdict from the checks — not a crash. The blocking step is marked in the panel above.
-            Docking in particular is stochastic, so the same inputs can pass on another run.
+            Results are reproducible: the same inputs give the same verdict every time.
           </Callout>
         )}
 

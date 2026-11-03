@@ -92,7 +92,7 @@ export const PIPELINE: PipelineStep[] = [
     engine: "Boltz-2",
     gate: true,
     keywords: ["interface iptm", "docking"],
-    why: "Confirms the scaffold still binds nCas9 after everything else was changed.",
+    why: "Checks the extension has not stopped the scaffold binding nCas9, by comparing against what a neutral RNA of the same length scores. Longer RNAs always score lower, so the comparison has to be length-matched.",
   },
   {
     id: "report",

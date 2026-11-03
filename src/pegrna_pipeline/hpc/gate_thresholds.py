@@ -24,7 +24,44 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Dict
 
-__all__ = ["GateThresholds", "THRESHOLDS"]
+__all__ = ["GateThresholds", "THRESHOLDS", "DOCKING_REFERENCE", "DOCKING_CALIBRATED_RANGE"]
+
+#: Boltz-2 NIM interface ipTM for SpCas9 + RNA, by TOTAL RNA length in nt, as the mean
+#: over 5 diffusion samples. Columns: (length, NEUTRAL, NON-BINDER).
+#:
+#: NEUTRAL    = spacer + scaffold + a neutral (random / shuffled) 3' extension: what a
+#:              pegRNA that does nothing wrong scores at this length.
+#: NON-BINDER = a scrambled backbone with the same extension, or an extension built to
+#:              pair with and sequester the scaffold: what a pegRNA that has lost Cas9
+#:              scores at this length.
+#:
+#: Why this exists. ipTM falls steadily with RNA length for reasons unrelated to binding
+#: quality, so the AlphaFold-Multimer rule-of-thumb floor of 0.6 is simply out of reach
+#: for any tjPE-sized pegRNA: neutral extensions of 194/232 nt average 0.48/0.43. The
+#: informative question is whether a design looks like a neutral extension of ITS OWN
+#: length or like a non-binder of that length -- and that signal is large (0.2-0.3).
+#: Provenance and replication: scripts/analysis/calibrate_docking_gate.py.
+#:
+#: Row sources (n = independent sequences):
+#:   96  canonical sgRNA 0.693 (n=1) | scrambled 0.448 (n=1)
+#:   126 neutral 0.606 (n=2)         | non-binder interpolated
+#:   156 neutral 0.615 (n=3)         | scaffold-sequestering extension 0.325 (n=1)
+#:   194 neutral 0.480 (n=5)         | scrambled+ext 0.272 (n=2), sequestering 0.276 (n=1)
+#:   232 neutral 0.432 (n=5)         | scrambled+ext 0.262 (n=2)
+#: The sample sizes are small. The reference is an empirical null, not a theory; extend it
+#: (the script takes --per-length) before leaning on a result near the decision boundary.
+DOCKING_REFERENCE = (
+    (96, 0.693, 0.448),
+    (126, 0.606, 0.386),
+    (156, 0.615, 0.325),
+    (194, 0.480, 0.274),
+    (232, 0.432, 0.262),
+)
+
+#: Inside this total-RNA-length range the reference above is interpolated; outside it
+#: the gate cannot judge a design and reports advisory-only rather than inventing a
+#: number. 96 nt is spacer + scaffold with no extension, the shortest possible pegRNA.
+DOCKING_CALIBRATED_RANGE = (96, 240)
 
 
 @dataclass(frozen=True)
@@ -40,13 +77,22 @@ class GateThresholds:
     # --- scaffold-nCas9 docking (Boltz-2 / AF-multimer ipTM) ---
     docking_min_iptm: float = 0.6
     docking_max_drop: float = 0.2
+    # Length-calibrated gate (used whenever the scorer returns per-sample ipTMs): a design
+    # passes when it lies at least this far (0.5 = midway) from the length-matched
+    # non-binder reference toward the length-matched neutral reference. The legacy
+    # absolute-floor / apo-drop pair above remains for scorers that cannot sample.
+    docking_samples: int = 5
+    docking_pass_fraction: float = 0.5
 
     # --- microhomology recode ceiling (bp); recoder minimises below this ---
     microhomology_max_run: int = 8
 
-    # --- RiNALMo full-pegRNA 2D base-pair probability decision boundary ---
+    # --- full-pegRNA 2D base-pair probability decision boundary ---
+    # The boundary is a property of the FOLDER, not of the gate: RiNALMo emits a
+    # sigmoid score with one calibration, ViennaRNA's partition function another.
     rinalmo_pair_prob: float = 0.5
     rinalmo_min_accessibility: float = 0.5
+    vienna_pair_prob: float = 0.99
 
     # --- PBS2 (second-strand primer-binding site) selection ---
     # PBS2 is genome-determined at the ngRNA nick, so its LENGTH is scanned to hit
@@ -85,6 +131,18 @@ class GateThresholds:
                 "(AF3) — ipTM >0.8 high, 0.6-0.8 medium, <0.6 likely incorrect; "
                 "0.6 = floor for a credible interface."
             ),
+            "docking_pass_fraction": (
+                "Midway between the length-matched NON-BINDER and NEUTRAL references "
+                "(DOCKING_REFERENCE): 'does this look more like a neutral extension of its "
+                "own length, or like an RNA that has lost Cas9?'. Measured on the Boltz-2 NIM "
+                "with 5 diffusion samples per call: neutral and non-binder differ by 0.17 "
+                "(232 nt) to 0.29 (156 nt) while sequence-to-sequence sd of a neutral design "
+                "is 0.02-0.05, so the midpoint is ~2-3 sd from either. A scaffold-sequestering "
+                "extension (positive control) scores 0.28-0.33, 0.2-0.3 below neutral, so the "
+                "gate detects the interference it exists to catch. Single draws are far "
+                "noisier (sd 0.03-0.11): one scrambled non-binder draw reached 0.634 and one "
+                "draw of a 194-nt design 0.628, which is why 5 samples are averaged."
+            ),
             "docking_max_drop": (
                 "Derived from the AF-Multimer confidence bands (one full 0.2-wide "
                 "band): a >0.2 ipTM drop vs the apo scaffold-Cas9 baseline indicates "
@@ -101,6 +159,15 @@ class GateThresholds:
                 "predicted pair; RiNALMo (Penic et al. 2024) val-tunes 0.01-0.30 for "
                 "max F1 on natural families — 0.5 used here to avoid over-blocking on "
                 "low-probability pairs."
+            ),
+            "vienna_pair_prob": (
+                "Calibrated against a null, not borrowed from RiNALMo. 300 random "
+                "pegRNAs per size (same spacer + scaffold, random rcPBS2/RTT/PBS1), "
+                "fraction with ZERO cross-region pairs at p>=0.5/0.8/0.9/0.99: "
+                "139 nt 35/62/73/88%; 191 nt 9/37/54/80%; 228 nt 12/37/54/84%. At 0.5 a "
+                "gate rejects ~90% of random tjPE-sized designs and so screens out almost "
+                "everything; at 0.99 it removes the worst ~15-20% tail. Seeded; "
+                "reproducible with scripts/analysis/calibrate_structure_gate.py."
             ),
             "rinalmo_min_accessibility": (
                 "A functional region is flagged occluded when mean unpaired "

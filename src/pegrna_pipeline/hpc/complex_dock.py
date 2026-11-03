@@ -5,18 +5,52 @@ scaffold↔Cas9 interface confidence (ipTM / interface-pLDDT, + optional
 binding-affinity proxy) of the candidate against a cached apo baseline and flag
 if docking degrades. ``ComplexDockScorer`` is a Protocol so Boltz-2 (GPU/HPC) or
 a fake are interchangeable; the apo baseline is computed once and reused across
-candidates. Threshold has no published pegRNA-Cas9 value → starts advisory,
-calibrate on real data. Fallbacks: Chai-1 (contact restraints) > Protenix >
-RoseTTAFold2NA.
+candidates. Fallbacks: Chai-1 (contact restraints) > Protenix > RoseTTAFold2NA.
+
+Calibration. This module originally noted that no published pegRNA-Cas9 threshold exists
+and that it should be calibrated on real data. It now has been, and the result is that the
+AlphaFold-Multimer absolute floor (ipTM >= 0.6) does not transfer: interface ipTM falls with
+total RNA length regardless of design quality, so no tjPE-sized pegRNA, neutral or not, can
+reach 0.6 (see ``gate_thresholds.DOCKING_REFERENCE``). Scorers that return per-sample ipTMs
+are therefore judged by :func:`passes_calibrated_docking_gate`, against references measured
+at the candidate's own length. The absolute-floor gate remains for scorers that cannot.
 """
 
 from __future__ import annotations
 
+import statistics
+from dataclasses import dataclass
 from typing import Optional, Protocol, Tuple
 
-from pegrna_pipeline.hpc.gate_thresholds import THRESHOLDS
+from pegrna_pipeline.hpc.gate_thresholds import (
+    DOCKING_CALIBRATED_RANGE,
+    DOCKING_REFERENCE,
+    THRESHOLDS,
+)
 
-__all__ = ["ComplexDockScorer", "DockFake", "Boltz2DockScorer", "passes_docking_gate"]
+__all__ = [
+    "ComplexDockScorer",
+    "DockFake",
+    "Boltz2DockScorer",
+    "DockingReference",
+    "DockingServiceError",
+    "docking_reference",
+    "passes_calibrated_docking_gate",
+    "passes_docking_gate",
+]
+
+
+class DockingServiceError(RuntimeError):
+    """The docking SERVICE failed (rate limit, outage, bad credentials, timeout).
+
+    This is not a verdict on a design and must never be recorded as one. Only a
+    successfully obtained ipTM may reject a candidate; a rate limit that gets
+    reported as "docking scorer error" and skipped turns infrastructure trouble into
+    a confident-looking "no valid pegRNA", which is the mirror image of the failure the
+    stand-in disclosure guards against (there a placeholder is mistaken for a pass,
+    here an outage is mistaken for a fail). The workflow lets this propagate so the
+    run fails loudly as what it is.
+    """
 
 
 class ComplexDockScorer(Protocol):
@@ -210,6 +244,120 @@ def _iptm_confidence_band(iptm: float, *, floor: float) -> str:
     return f"likely-incorrect (<{floor:g})"
 
 
+@dataclass(frozen=True)
+class DockingReference:
+    """What interface ipTM looks like at one total-RNA length."""
+
+    length: int
+    neutral: float  # a pegRNA with a neutral extension of this length
+    nonbinder: float  # an RNA of this length that has lost Cas9
+    calibrated: bool  # False when ``length`` is outside the measured range
+
+    @property
+    def span(self) -> float:
+        return self.neutral - self.nonbinder
+
+    def cutoff(self, fraction: float) -> float:
+        """The ipTM that sits ``fraction`` of the way from non-binder to neutral."""
+        return self.nonbinder + fraction * self.span
+
+
+def docking_reference(length: int) -> DockingReference:
+    """Neutral and non-binder interface ipTM at ``length`` nt (piecewise-linear).
+
+    Interpolates ``DOCKING_REFERENCE``; the endpoints are held flat just beyond the table
+    (96 nt is the shortest possible pegRNA; the dynamic range barely changes past 232 nt),
+    and ``calibrated`` is False outside ``DOCKING_CALIBRATED_RANGE`` so callers can refuse
+    to treat an extrapolated number as a verdict.
+    """
+    lo, hi = DOCKING_CALIBRATED_RANGE
+    pts = DOCKING_REFERENCE
+    x = min(max(length, pts[0][0]), pts[-1][0])
+    for (l0, n0, b0), (l1, n1, b1) in zip(pts, pts[1:]):
+        if l0 <= x <= l1:
+            t = (x - l0) / (l1 - l0)
+            return DockingReference(
+                length, n0 + t * (n1 - n0), b0 + t * (b1 - b0), lo <= length <= hi
+            )
+    raise AssertionError("unreachable: DOCKING_REFERENCE must cover its own range")
+
+
+def passes_calibrated_docking_gate(
+    pegrna: str,
+    cas9: str,
+    *,
+    scorer,
+    pass_fraction: float = THRESHOLDS.docking_pass_fraction,
+    metrics: Optional[dict] = None,
+) -> Tuple[bool, str]:
+    """Is this pegRNA's Cas9 interface more like a neutral extension of ITS length, or like
+    an RNA that has lost Cas9?
+
+    ``scorer.interface_iptm_samples`` returns the interface ipTM of several independent
+    diffusion samples; their mean is compared with the references measured at this
+    pegRNA's own length (:func:`docking_reference`). The design passes when it lies at least
+    ``pass_fraction`` (default 0.5, midway) of the way from the non-binder reference up to
+    the neutral one.
+
+    Why not an absolute floor: ipTM falls with RNA length independently of binding quality,
+    so 0.6 is unreachable for tjPE-sized pegRNAs (neutral 194/232-nt extensions average
+    0.48/0.43). Why not a drop from the apo scaffold: any long RNA "drops". Why keep the gate
+    at all: an extension engineered to sequester the scaffold scores 0.28-0.33, 0.2-0.3 below
+    neutral, and the folding gate deliberately ignores any pair touching the scaffold, so
+    this is the only check that can see that failure.
+
+    Outside the calibrated length range there is no valid reference, so the result is
+    ADVISORY ONLY: it passes, is flagged in ``metrics['advisory']`` and in the message, and
+    the caller surfaces a warning. A safety gate that cannot be validated must say so rather
+    than silently accept or reject.
+    """
+    samples = [float(v) for v in scorer.interface_iptm_samples(pegrna, cas9)]
+    if not samples:
+        raise DockingServiceError("docking scorer returned no ipTM samples")
+    mean = statistics.fmean(samples)
+    n = len(samples)
+    ref = docking_reference(len(pegrna))
+    cutoff = ref.cutoff(pass_fraction)
+    frac = (mean - ref.nonbinder) / ref.span
+    detail = (
+        f"interface ipTM {mean:.2f} (mean of {n}, range {min(samples):.2f}-{max(samples):.2f}) "
+        f"at {len(pegrna)} nt; neutral extension {ref.neutral:.2f}, non-binder "
+        f"{ref.nonbinder:.2f}; {100 * frac:.0f}% of the way from non-binder to neutral "
+        f"(needs >= {100 * pass_fraction:.0f}%, i.e. ipTM >= {cutoff:.2f})"
+    )
+    if metrics is not None:
+        if ref.calibrated:
+            metrics.update(
+                {
+                    "metric": f"interface ipTM (mean of {n})",
+                    "value": round(mean, 3),
+                    "cutoff": round(cutoff, 3),
+                    "cmp": ">=",
+                    "extra": f"neutral {ref.neutral:.2f} \u00b7 non-binder {ref.nonbinder:.2f} at {len(pegrna)} nt",
+                }
+            )
+        else:
+            metrics.update(
+                {
+                    "advisory": True,
+                    "note": (
+                        f"advisory: ipTM {mean:.2f} at {len(pegrna)} nt is outside the calibrated "
+                        f"{DOCKING_CALIBRATED_RANGE[0]}-{DOCKING_CALIBRATED_RANGE[1]} nt range, so it "
+                        f"is reported but does not accept or reject"
+                    ),
+                }
+            )
+    if not ref.calibrated:
+        return True, (
+            f"ADVISORY ONLY - {len(pegrna)} nt is outside the calibrated "
+            f"{DOCKING_CALIBRATED_RANGE[0]}-{DOCKING_CALIBRATED_RANGE[1]} nt range, so docking "
+            f"cannot be judged here: {detail}"
+        )
+    if mean < cutoff - 1e-9:
+        return False, f"scaffold-Cas9 interface looks like a non-binder at this length: {detail}"
+    return True, f"scaffold-Cas9 interface consistent with a neutral extension: {detail}"
+
+
 def passes_docking_gate(
     pegrna: str,
     cas9: str,
@@ -239,7 +387,13 @@ def passes_docking_gate(
     (interface ipTM vs the min-ipTM floor, plus apo baseline / drop vs max-drop, and the
     AF-multimer band) for the caller's progress display; it never changes the return
     value.
+
+    A scorer that exposes ``interface_iptm_samples`` is judged by
+    :func:`passes_calibrated_docking_gate` instead; ``max_drop`` / ``min_iptm`` then do not
+    apply (see its docstring for why the absolute floor cannot).
     """
+    if hasattr(scorer, "interface_iptm_samples"):
+        return passes_calibrated_docking_gate(pegrna, cas9, scorer=scorer, metrics=metrics)
     apo = scorer.apo_interface_iptm(cas9)
     cand = scorer.interface_iptm(pegrna, cas9)
     drop = apo - cand

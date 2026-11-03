@@ -228,7 +228,7 @@ def design_recoded(
     pam: str = "NGG",
     max_mismatches: int = 3,
     protein_length: Optional[int] = None,
-    structure_threshold: float = 0.5,
+    structure_threshold: Optional[float] = None,
     progress_cb=None,
 ) -> RecodedDesignOutput:
     """Run the recoded TJ-PE design end-to-end and (optionally) write a report.
@@ -312,6 +312,11 @@ def design_recoded(
             ngrna_distance_max=ngrna_distance_max,
             offtarget_scorer=scorers.offtarget_scorer,
             pbs2_length=pridict_pbs2_length,
+            # A guide on the wrong side of S for this arm is unusable, so it must not
+            # count toward "PRIDICT supplied something": only an EMPTY list triggers the
+            # fallback to genome-enumerated nicks, and a pool the walk will discard
+            # wholesale would otherwise suppress it.
+            arm_side=arm_side,
         )
         injected_ngrnas = injected or None
 
