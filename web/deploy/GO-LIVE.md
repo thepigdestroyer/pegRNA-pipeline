@@ -1,221 +1,161 @@
-# Go live on the DSI box — production runbook
+# Production deployment
 
-Target: `146-169-8-141.dsi.ic.ac.uk` as `mj1824`, storage `/mnt/data2/mj1824`.
+What is actually deployed, how to operate it, and the one step that still needs
+a human.
 
-Every step below is idempotent — safe to re-run.
+```
+Browser
+  └─ https://pegrna-designer.vercel.app        Vercel: static React app only
+       └─ direct XHR (CORS)                    NOT proxied — see "Why direct"
+            └─ Cloudflare Tunnel               outbound only; no inbound port
+                 └─ DSI 127.0.0.1:8093         FastAPI + the whole model stack
+```
 
----
+## Why direct, not proxied
 
-## 0. Prerequisites you have to do yourself
+A Vercel function is capped at **300 s** on this plan. A real `api` design with
+live Boltz-2 docking takes **~15 minutes**, so a proxied design would always
+time out. The browser therefore calls the backend directly, which makes it
+cross-origin — hence `PEGRNA_CORS_ORIGINS` on the backend.
 
-| Thing | Why it can't be automated |
+## Where things live (DSI box, as `mj1824`)
+
+`/mnt/data2/mj1824` **does not exist** — Hiru's note pointed there, but all
+three `/mnt` volumes are root-owned. Everything is under `$HOME`:
+
+| Path | What |
 |---|---|
-| **Be on the Imperial network** | `146.169.8.141:22` is filtered from outside. Imperial retired its central SSH gateway and the old VPNs; access is via **Unified Access**, which needs your Microsoft login + MFA. |
-| **NVIDIA API key** | Personal credential tied to your NVIDIA account (see §2). |
+| `~/pegrna/prime-editing` | the repo (pushed by rsync, no git credentials on the box) |
+| `~/pegrna/envs/` | `pegrna-web`, `pegrna-real`, `pridict2` (~6.5 GB) |
+| `~/pegrna/PRIDICT2/` | PRIDICT2 + trained weights |
+| `~/pegrna/genomes/hg38.2bit` | off-target genome (835 MB) |
+| `~/pegrna/runs/` | per-run outputs, pruned to `PEGRNA_KEEP_RUNS` |
+| `~/.config/pegrna/pegrna.env` | all configuration |
+| `~/.config/pegrna/nvidia.key` | Boltz-2 key, mode 600 |
 
-Log in with your **Imperial short-form username and Microsoft account password** —
-per Hiru, `.141` is on Imperial auth now. Type the password rather than pasting it:
+**Port 8093**, because `8092` is `jmoore3`'s separate instance. Do not take 8092.
 
-```bash
-ssh -vvv mj1824@146.169.8.141
-```
+## Services
 
-If auth still fails, send Hiru the full `-vvv` output.
-
----
-
-## 1. Deploy
-
-### Option A — push the tree from your laptop (no credentials on the box)
-
-Preferred for a shared machine: nothing secret is stored there, and the private
-repo needs no token.
+Both are `systemd --user` units with lingering enabled, so they survive logout
+and reboot.
 
 ```bash
-# from your laptop, with the repo checked out
-rsync -az --delete \
-  --exclude '.venv' --exclude 'node_modules' --exclude 'web/runs' \
-  ~/Documents/Opencode/pegRNA-pipeline/ \
-  mj1824@146-169-8-141.dsi.ic.ac.uk:/mnt/data2/mj1824/pegrna/prime-editing/
-
-ssh mj1824@146-169-8-141.dsi.ic.ac.uk \
-  'PEGRNA_ROOT=/mnt/data2/mj1824/pegrna PEGRNA_SKIP_PULL=1 \
-   bash /mnt/data2/mj1824/pegrna/prime-editing/web/deploy/deploy.sh'
-```
-
-Re-run the same two commands to ship a change.
-
-### Option B — clone on the box
-
-**The repo is private**, so this needs credentials stored there. Use a GitHub
-Personal Access Token with `repo` scope
-(<https://github.com/settings/tokens>), used once and then cached:
-
-```bash
-ssh mj1824@146.169.8.141
-
-export PEGRNA_ROOT=/mnt/data2/mj1824/pegrna
-mkdir -p "$PEGRNA_ROOT"
-
-# Clone once, with the token inline. git stores it in the remote URL, so the
-# later `git pull` in deploy.sh just works.
-read -rsp 'GitHub PAT: ' GH_PAT; echo
-git clone "https://${GH_PAT}@github.com/thepigdestroyer/pegRNA-pipeline.git" \
-  "$PEGRNA_ROOT/prime-editing"
-unset GH_PAT
-
-bash "$PEGRNA_ROOT/prime-editing/web/deploy/deploy.sh"
-```
-
-`deploy.sh` then builds `pegrna-web`, `pegrna-real` and `pridict2`, installs the
-`systemd --user` unit, starts it on `127.0.0.1:8092`, and health-checks it.
-
-> The frontend ships **pre-built** in `web/static/`, so the box needs no Node.
-
-> If you would rather not leave a token in the remote URL, use a read-only
-> **deploy key** instead: `ssh-keygen -t ed25519 -f ~/.ssh/pegrna_deploy -N ''`,
-> add the `.pub` under the repo's *Settings → Deploy keys*, and clone the
-> `git@github.com:` URL.
-
----
-
-## 2. NVIDIA key — turns docking from a stand-in into a real model
-
-1. Sign in at **<https://build.nvidia.com>** (free NVIDIA account).
-2. Open **<https://build.nvidia.com/mit/boltz2>**.
-3. Click **Get API Key**. The value starts with `nvapi-`.
-4. Install it on the box, owner-only:
-
-```bash
-mkdir -p ~/.config/pegrna
-printf '%s' 'nvapi-REPLACE_ME' > ~/.config/pegrna/nvidia.key
-chmod 600 ~/.config/pegrna/nvidia.key
+systemctl --user status pegrna-web pegrna-tunnel
 systemctl --user restart pegrna-web
+tail -f ~/pegrna/cloudflared.log
+curl -s localhost:8093/api/health | python3 -m json.tool
 ```
 
-Boltz-2 calls are heavy — minutes each, and they consume credits. The free pool
-is fine for validation; sustained use needs credits on the NVIDIA account.
+## Access control
 
-Never commit it, and never put it in the systemd unit. The app reads
-`NVIDIA_API_KEY`, else `~/.config/pegrna/nvidia.key`.
+`api` mode costs NVIDIA credits and occupies the box for ~15 minutes, so it is
+token-gated. `fake` mode is open to everyone, so the site still works as a
+public demo.
 
-**Check it took:**
+```
+PEGRNA_API_MODE_TOKEN=<token>     # required for api mode only
+PEGRNA_ACCESS_TOKEN=              # unset: would gate the entire site
+```
+
+The UI asks for the token only when `/api/health` reports
+`api_mode_token_required: true`, and remembers it in `localStorage`.
+
+## ⚠ The one outstanding step: a named tunnel
+
+The deployment currently uses a Cloudflare **quick tunnel**, which is not
+production-grade and Cloudflare says so itself:
+
+- the hostname is **random and changes on every restart**
+- there is **no uptime guarantee**
+- provisioning is **rate-limited** — restart it a few times in a row and you get
+  HTTP 429 and no tunnel at all until it clears
+
+Because the frontend bakes the backend URL in at build time, a new hostname
+breaks the site until it is rebuilt. `scripts/refresh-backend.sh` does that in
+one command, but it is a workaround.
+
+**The fix needs a Cloudflare login (about five minutes) and then never recurs:**
 
 ```bash
-curl -s localhost:8092/api/health | grep -o '"nvidia_key":[a-z]*'   # want: true
+# on the DSI box
+~/pegrna/bin/cloudflared tunnel login          # opens a browser URL
+~/pegrna/bin/cloudflared tunnel create pegrna
+~/pegrna/bin/cloudflared tunnel route dns pegrna pegrna.<your-domain>
+
+mkdir -p ~/.cloudflared
+cat > ~/.cloudflared/config.yml <<'EOF'
+tunnel: pegrna
+credentials-file: /home/mj1824/.cloudflared/<TUNNEL-ID>.json
+ingress:
+  - hostname: pegrna.<your-domain>
+    service: http://127.0.0.1:8093
+  - service: http_status:404
+EOF
 ```
 
----
-
-## 3. Genome FASTA — turns off-target into a real model
+Then point the unit at `cloudflared tunnel run pegrna`, and deploy the site once
+against that permanent hostname:
 
 ```bash
-PEGRNA_ROOT=/mnt/data2/mj1824/pegrna \
-  bash $PEGRNA_ROOT/prime-editing/scripts/install_genome.sh
-systemctl --user restart pegrna-web
+PEGRNA_API_BASE=https://pegrna.<your-domain> bash web/vercel/deploy.sh --prod
 ```
 
-~900 MB download, ~3.1 GB unpacked, to `/mnt/data2` (not the home quota).
-`PEGRNA_GENOME` is already set in `pegrna.env` to the path this writes.
+After that the URL never changes and `refresh-backend.sh` is never needed.
 
----
+## Routine operations
 
-## 4. Verify there are no stand-ins left
-
-This is the acceptance test for "production". Run a real design and confirm
-`stand_in_gates` is **empty**:
+**Ship a code change**
 
 ```bash
-curl -s -X POST localhost:8092/api/design \
-  -H 'Content-Type: application/json' \
-  -d "{\"mode\":\"api\",\"config\":$(cat $PEGRNA_ROOT/prime-editing/examples/ctcf_cterm/config_autospacer_flag.json)}" \
-  | python3 -c 'import json,sys; r=json.load(sys.stdin); print("ok:", r["ok"]); print("stand_in_gates:", r["gates"].get("stand_in_gates"))'
+rsync -az --delete --exclude .venv --exclude node_modules --exclude web/runs \
+  ./ dsi:/home/mj1824/pegrna/prime-editing/
+ssh dsi 'systemctl --user restart pegrna-web'
 ```
 
-Expected on a complete production deployment:
-
-```
-ok: True
-stand_in_gates: []
-```
-
-Anything listed there is a check that returned a **placeholder, not a verdict**.
-The report says so in a banner and the UI shows a callout — do not let a design
-go to synthesis off a stand-in.
-
----
-
-## 5. Publish — without opening a port
-
-Hiru's objection was explicit: *"it's not a good idea to expose ports on machines
-which aren't dedicated towards hosting."* Tailscale Funnel satisfies that. The
-app binds **loopback only**; the tunnel is an **outbound** connection to
-Tailscale's relays, so **no inbound port is opened** and no root is needed
-(userspace networking).
+**Ship a frontend change** (needs Node locally; the box has none)
 
 ```bash
-bash $PEGRNA_ROOT/prime-editing/web/deploy/funnel.sh up
-bash $PEGRNA_ROOT/prime-editing/web/deploy/funnel.sh status   # prints the public URL
+cd web/frontend && npm run build          # commit web/static/ too
+PEGRNA_API_BASE=https://<backend> bash web/vercel/deploy.sh --prod
 ```
 
-Needs, one time in the Tailscale admin console: HTTPS + MagicDNS enabled, and
-the `funnel` node attribute granted to this node.
-
-To take it down: `funnel.sh down`.
-
-### If it should not be public at all
-
-Skip §5 and use an SSH tunnel per user — nothing is exposed:
+**The site loads but cannot design** — the tunnel hostname changed:
 
 ```bash
-ssh -L 8092:127.0.0.1:8092 mj1824@146.169.8.141
-# then browse http://localhost:8092
+scripts/refresh-backend.sh --prod
 ```
 
----
+## Verifying it is really production
 
-## 6. Lock it down before sharing the URL
-
-A Funnel URL is public to anyone who has it. At minimum set an access token:
+The meaningful check is that no gate is a placeholder:
 
 ```bash
-# in ~/.config/pegrna/pegrna.env
-PEGRNA_ACCESS_TOKEN=<a long random string>
+ssh dsi 'set -a; . ~/.config/pegrna/pegrna.env; set +a
+  export NVIDIA_API_KEY=$(cat ~/.config/pegrna/nvidia.key)
+  export PATH=$HOME/pegrna/envs/pegrna-real/bin:$PATH
+  ~/pegrna/envs/pegrna-real/bin/python -c "
+import os
+from pegrna_pipeline.hpc.scorer_factory import make_scorers
+s = make_scorers(mode=\"api\", uniprot_acc=\"P49711\",
+                 genome=os.environ[\"PEGRNA_GENOME\"],
+                 nvidia_api_key=os.environ[\"NVIDIA_API_KEY\"])
+print(\"stub_gates:\", s.stub_gates or \"() — all real\")"'
 ```
 
-```bash
-systemctl --user restart pegrna-web
-```
+Expected: `stub_gates: () — all real`.
 
-Clients then need `X-Access-Token` (or `?token=`). Also worth reviewing in
-`pegrna.env`: `PEGRNA_MAX_CONCURRENCY` (default 2 — this also protects your
-NVIDIA credit pool), `PEGRNA_TIMEOUT`, `PEGRNA_KEEP_RUNS`.
+Anything listed there returned a **placeholder, not a verdict**. The report says
+so in a banner and the UI shows a callout. Never order DNA off a stand-in.
 
----
+## Known behaviour that is not a bug
 
-## Operating it
-
-```bash
-systemctl --user status pegrna-web
-systemctl --user restart pegrna-web
-journalctl --user -u pegrna-web -f
-curl -s localhost:8092/api/health | python3 -m json.tool
-```
-
-`loginctl enable-linger mj1824` is set by `deploy.sh` so the service survives
-logout.
-
-### Shipping a change
-
-```bash
-cd $PEGRNA_ROOT/prime-editing && git pull --ff-only
-systemctl --user restart pegrna-web
-```
-
-If the change touched `web/frontend/`, rebuild it **before** committing (needs
-Node, so do it on your laptop, not here):
-
-```bash
-cd web/frontend && npm ci && npm run build
-git add ../static && git commit
-```
+- **`api` designs often end in "no design".** Docking is the discriminating
+  gate and Boltz-2 is a diffusion model, so results vary run to run. Measured
+  on this deployment: interface ipTM 0.50–0.54 against a 0.6 floor. That is the
+  gate working.
+- **A design takes ~15 minutes.** cas-offinder alone is ~100 s (batched once per
+  design, not per candidate); the rest is Boltz-2.
+- **PRIDICT2 can pick a different spacer here than on a laptop.** The box pins
+  torch 2.0.1, the version PRIDICT2 upstream supports; a newer torch gives
+  slightly different outputs. The box is the reference.

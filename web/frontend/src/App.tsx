@@ -66,6 +66,7 @@ const EMPTY_FORM: FormState = {
 export default function App() {
   const [theme, toggleTheme] = useTheme();
   const [health, setHealth] = useState<Health | null>(null);
+  const [backendDown, setBackendDown] = useState(false);
   const [modes, setModes] = useState<Mode[]>(["fake"]);
   const [mode, setMode] = useState<Mode>("fake");
   const [motifs, setMotifs] = useState<MotifGroups>({});
@@ -100,7 +101,12 @@ export default function App() {
   const resultRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
-    getHealth().then(setHealth).catch(() => undefined);
+    getHealth()
+      .then((h) => {
+        setHealth(h);
+        setBackendDown(false);
+      })
+      .catch(() => setBackendDown(true));
     getModes()
       .then((m) => {
         setModes(m.modes);
@@ -267,6 +273,14 @@ export default function App() {
         <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_380px]">
           {/* ---- form column ---- */}
           <div className="space-y-5">
+            {backendDown && (
+              <Callout tone="error" title="The design server is not responding">
+                The page has loaded, but it cannot reach the machine that runs the pipeline.
+                It may be offline, or its address may have changed. Designs will not run until
+                it is back.
+              </Callout>
+            )}
+
             <Callout tone="info">
               New here? Load the worked <strong>CTCF</strong> example below to see every field
               filled in correctly, then change one thing at a time.

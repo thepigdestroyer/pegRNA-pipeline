@@ -59,8 +59,26 @@ export function statusMessage(code: number): string {
   }
 }
 
+/**
+ * The design backend is a lab machine behind a tunnel, so "unreachable" is a
+ * normal state, not an exceptional one. `fetch` reports it as the famously
+ * unhelpful "Failed to fetch", so translate it into something a user can act on.
+ */
+export const BACKEND_UNREACHABLE =
+  "Cannot reach the design server. It may be offline, or its address may have changed.";
+
+function isNetworkError(err: unknown): boolean {
+  return err instanceof TypeError;
+}
+
 async function getJSON<T>(url: string): Promise<T> {
-  const r = await fetch(apiURL(url));
+  let r: Response;
+  try {
+    r = await fetch(apiURL(url));
+  } catch (err) {
+    if (isNetworkError(err)) throw new Error(BACKEND_UNREACHABLE);
+    throw err;
+  }
   if (!r.ok) throw new Error(statusMessage(r.status));
   return (await r.json()) as T;
 }
@@ -87,15 +105,21 @@ export async function streamDesign(
   onProgress: (ev: ProgressEvent) => void,
   signal?: AbortSignal,
 ): Promise<DesignResult> {
-  const r = await fetch(apiURL("/api/design/stream"), {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      ...(getToken() ? { "X-Access-Token": getToken() } : {}),
-    },
-    body: JSON.stringify({ config, mode }),
-    signal,
-  });
+  let r: Response;
+  try {
+    r = await fetch(apiURL("/api/design/stream"), {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...(getToken() ? { "X-Access-Token": getToken() } : {}),
+      },
+      body: JSON.stringify({ config, mode }),
+      signal,
+    });
+  } catch (err) {
+    if (isNetworkError(err)) throw new Error(BACKEND_UNREACHABLE);
+    throw err;
+  }
 
   if (!r.ok) {
     let detail = "";
