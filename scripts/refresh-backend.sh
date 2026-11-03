@@ -25,13 +25,15 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 log() { printf '\033[1;34m==>\033[0m %s\n' "$*"; }
 
 log "reading the live tunnel URL from $SSH_HOST"
-URL="$(ssh "$SSH_HOST" \
-  "grep -oE 'https://[a-z0-9-]+\.trycloudflare\.com' ~/pegrna/cloudflared.log | tail -1" \
-  2>/dev/null || true)"
+# tunnel-run.sh publishes whichever provider actually came up (cloudflared, or
+# localhost.run when Cloudflare is rate-limiting), so read the published URL
+# rather than grepping for one provider's hostname pattern.
+URL="$(ssh "$SSH_HOST" 'cat ~/pegrna/tunnel-url.txt 2>/dev/null' | tr -d '[:space:]')"
 
 if [ -z "$URL" ]; then
-  echo "error: no tunnel URL found in ~/pegrna/cloudflared.log on $SSH_HOST." >&2
-  echo "       Is the tunnel running?  ssh $SSH_HOST systemctl --user status pegrna-tunnel" >&2
+  echo "error: no tunnel URL published on $SSH_HOST (~/pegrna/tunnel-url.txt is empty)." >&2
+  echo "       Check the tunnel:  ssh $SSH_HOST systemctl --user status pegrna-tunnel" >&2
+  echo "       Recent attempts:   ssh $SSH_HOST tail -20 ~/pegrna/cloudflared.log" >&2
   exit 1
 fi
 log "tunnel: $URL"

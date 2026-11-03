@@ -61,10 +61,24 @@ PEGRNA_ACCESS_TOKEN=              # unset: would gate the entire site
 The UI asks for the token only when `/api/health` reports
 `api_mode_token_required: true`, and remembers it in `localStorage`.
 
+## Tunnel providers and failover
+
+`tunnel-run.sh` tries providers in order and publishes whichever comes up to
+`~/pegrna/tunnel-url.txt`:
+
+1. **cloudflared quick tunnel** — preferred, but Cloudflare rate-limits
+   account-less provisioning (HTTP 429). Once tripped it stays tripped for a
+   while, which would otherwise leave the site dark.
+2. **localhost.run** (`ssh -R`) — no account, no extra software; used only when
+   cloudflared cannot provision.
+
+Both give a random hostname, so the failover keeps the site *up* but does not
+make the URL *stable*.
+
 ## ⚠ The one outstanding step: a named tunnel
 
-The deployment currently uses a Cloudflare **quick tunnel**, which is not
-production-grade and Cloudflare says so itself:
+The deployment currently uses a **quick tunnel**, which is not production-grade
+and Cloudflare says so itself:
 
 - the hostname is **random and changes on every restart**
 - there is **no uptime guarantee**
