@@ -108,6 +108,9 @@ class GateThresholds:
     rinalmo_pair_prob: float = 0.5
     rinalmo_min_accessibility: float = 0.5
     vienna_pair_prob: float = 0.99
+    # ADVISORY (never rejects): warn when the 3' extension pairs with at least this many
+    # scaffold nucleotides at the folding gate's own pair-probability cutoff. See citations.
+    scaffold_pairing_advisory_nt: int = 15
 
     # --- PBS2 (second-strand primer-binding site) selection ---
     # PBS2 is genome-determined at the ngRNA nick, so its LENGTH is scanned to hit
@@ -206,6 +209,16 @@ class GateThresholds:
                 "gate rejects ~90% of random tjPE-sized designs and so screens out almost "
                 "everything; at 0.99 it removes the worst ~15-20% tail. Seeded; "
                 "reproducible with scripts/analysis/calibrate_structure_gate.py."
+            ),
+            "scaffold_pairing_advisory_nt": (
+                "Calibrated on ViennaRNA at p >= 0.99, the folding gate's own cutoff. Scaffold "
+                "nucleotides paired with the extension: 56 synthetic neutral designs of 126-336 "
+                "nt 0-11 (median 0, and it does not grow with length), 12 designs built to "
+                "pair with the scaffold 18-29, and none of the 130 distinct pegRNAs of the real "
+                "CTCF candidate pool (8 cargos, 2 spacers, 4 nicks) reaches it (max 9, median "
+                "0; at p >= 0.5 the median would be 11). 15 sits between 11 and 18. Advisory only: whether "
+                "such pairing lowers editing is not established here, so nothing is rejected "
+                "on it (ADR 0026)."
             ),
             "rinalmo_min_accessibility": (
                 "A functional region is flagged occluded when mean unpaired "

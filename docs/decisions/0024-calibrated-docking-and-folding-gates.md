@@ -317,6 +317,14 @@ an advisory in place of a docking verdict. That is the honest state of this mode
 tune; a fixed-length truncation probe (docking only the part of the extension next to the scaffold)
 is a possible way to recover a verdict and is recorded in #28 as an experiment, not built.
 
+**Found on the way: the walk evaluated each design up to six times, and `rtt_aa` does nothing.** The
+CTCF pool of 18 candidates (6 synonymous-codon "RTT variants" x 3 PBS lengths) is 3 distinct
+pegRNAs, because the walk uses only a variant's PBS length. Five different anchor residues give
+byte-identical pegRNAs. A design that failed therefore re-ran the docking gate for every repeat,
+each a ~40 s paid request, and the UI claimed the pipeline "re-encodes" the anchor residue with a
+synonymous codon, which it never did. The walk now evaluates each distinct design once, `rtt_aa` is
+optional, and the UI says it does not change the design (`tests/test_walk_evaluates_each_design_once.py`).
+
 ## Consequences and limitations
 
 - **The docking reference is an empirical null from 90 sequences**, derived from committed data

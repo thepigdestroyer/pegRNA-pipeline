@@ -194,7 +194,7 @@ def _design_peg1_via_pridict(
 def design_recoded(
     *,
     spacer: Optional[str] = None,
-    rtt_aa: str,
+    rtt_aa: Optional[str] = None,
     cargo: str,
     genome: str,
     site_s: int,

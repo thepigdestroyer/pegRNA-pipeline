@@ -16,7 +16,10 @@ from pegrna_pipeline.hpc.allele_specificity import find_allele_specific
 from pegrna_pipeline.hpc.codon_expander import _gc_content, enumerate_variants
 from pegrna_pipeline.hpc.complex_dock import DockingServiceError, passes_docking_gate
 from pegrna_pipeline.hpc.cryptic_splice import passes_cryptic_splice_gate
-from pegrna_pipeline.hpc.full_structure import functional_region_pairing
+from pegrna_pipeline.hpc.full_structure import (
+    functional_region_pairing,
+    scaffold_extension_pairing,
+)
 from pegrna_pipeline.hpc.gate_thresholds import THRESHOLDS
 from pegrna_pipeline.hpc.guide_sanity import assess_spacer
 from pegrna_pipeline.hpc.nick_search import (
@@ -63,7 +66,7 @@ class PbsRttVariant:
 def enumerate_pbs_rtt_variants(
     *,
     spacer: str,
-    rtt_aa: str,
+    rtt_aa: Optional[str] = None,
     pbs_lengths: Tuple[int, ...],
     max_rtt_variants: int = 100,
     ranking: str = "cai",
@@ -79,12 +82,22 @@ def enumerate_pbs_rtt_variants(
     recoded arm are ranked by human Codon Adaptation Index so the most
     human-expressed recoding is preferred for PRIDICT2 + assembly. Pass
     ``ranking="gc_c"`` for the legacy synthesis-stability order.
+
+    ``rtt_aa`` is OPTIONAL and does not change any pegRNA: the walk uses only a variant's PBS
+    length (the RTT is the cargo plus the genome-derived arm), so five different anchor residues
+    produce byte-identical designs. Without it there is one variant per PBS length.
     """
-    rtts = enumerate_variants(rtt_aa, max_variants=max_rtt_variants, ranking=ranking)
+    rtts = (
+        enumerate_variants(rtt_aa, max_variants=max_rtt_variants, ranking=ranking)
+        if rtt_aa
+        else [None]
+    )
     out: List[PbsRttVariant] = []
     for rv in rtts:
         for length in pbs_lengths:
-            out.append(PbsRttVariant(spacer=spacer, rtt_dna=rv.dna, pbs_length=length))
+            out.append(
+                PbsRttVariant(spacer=spacer, rtt_dna=rv.dna if rv else "", pbs_length=length)
+            )
     return out
 
 
@@ -537,7 +550,7 @@ class _NickPlan:
 def _run_recoded_tjpe_single(
     *,
     spacer: str,
-    rtt_aa: str,
+    rtt_aa: Optional[str] = None,
     cargo: str,
     genome: str,
     site_s: int,
@@ -757,7 +770,16 @@ def _run_recoded_tjpe_single(
                 diagnostics.append(f"nick {pos}: rcPBS2 select: {rcpbs2_why}")
                 continue
 
+        # The RTT variant never enters the assembled pegRNA: only its PBS length does (the RTT is
+        # the cargo plus the genome-derived arm). So every variant of one PBS length at this nick
+        # is the SAME design, and the pool of 6 variants x 3 PBS lengths is really 3 designs. A
+        # design that failed once fails identically again (every gate is deterministic), and the
+        # repeats were not free: each re-ran the docking gate, a ~40 s paid Boltz-2 request.
+        seen_pbs_lengths: set = set()
         for variant in variants:
+            if variant.pbs_length in seen_pbs_lengths:
+                continue
+            seen_pbs_lengths.add(variant.pbs_length)
             tried += 1
             # Sense flap + predicted allele, ordered by which side of S the arm
             # sits (cargo always at S). Then orient per strand (Rv -> rev-comp).
@@ -925,11 +947,22 @@ def _run_recoded_tjpe_single(
                 structure_threshold, full_structure_scorer
             )
             try:
+                # Fold once: the gate and the scaffold advisory read the same probability map
+                # (a GPU folder would otherwise run twice per candidate).
+                pair_map = full_structure_scorer.pair_probs(peg)
                 pairing = functional_region_pairing(
                     peg,
                     regions=regions,
                     scorer=full_structure_scorer,
                     threshold=structure_threshold,
+                    pairs=pair_map,
+                )
+                scaffold_pairing = scaffold_extension_pairing(
+                    peg,
+                    regions=regions,
+                    scorer=full_structure_scorer,
+                    threshold=structure_threshold,
+                    pairs=pair_map,
                 )
             except Exception as exc:  # noqa: BLE001
                 diagnostics.append(f"cand{tried}: structure scorer error: {exc}")
@@ -944,7 +977,10 @@ def _run_recoded_tjpe_single(
                     "value": pairing.cross_region_pairs,
                     "cutoff": 0,
                     "cmp": "==",
-                    "extra": f"base-pair prob ≥ {structure_threshold}",
+                    "extra": (
+                        f"base-pair prob ≥ {structure_threshold} · extension pairs with "
+                        f"{scaffold_pairing.paired_nt} scaffold nt"
+                    ),
                 },
             )
             if pairing.cross_region_pairs > 0:
@@ -952,7 +988,8 @@ def _run_recoded_tjpe_single(
                 continue
             gate_info["structure"] = (
                 f"{pairing.cross_region_pairs} cross-region pairs "
-                f"(threshold p>={structure_threshold})"
+                f"(threshold p>={structure_threshold}); extension pairs with "
+                f"{scaffold_pairing.paired_nt} scaffold nt"
             )
 
             dk_metrics: Dict[str, Any] = {}
@@ -976,6 +1013,17 @@ def _run_recoded_tjpe_single(
             gate_info["docking"] = dock_why
             # First survivor wins.
             warnings: List[str] = []
+            if scaffold_pairing.paired_nt >= THRESHOLDS.scaffold_pairing_advisory_nt:
+                # Advisory only. The folding gate leaves scaffold pairs out and the docking gate
+                # sees only some of them, so nothing else flags this (ADR 0026).
+                warnings.append(
+                    f"the extension pairs with {scaffold_pairing.paired_nt} scaffold nucleotides "
+                    f"(p >= {structure_threshold}; flagged from "
+                    f"{THRESHOLDS.scaffold_pairing_advisory_nt}). Ordinary designs pair with far "
+                    "fewer; designs built to tie up the scaffold pair with 18 or more. Neither "
+                    "the folding gate nor the docking gate reliably catches this, so check the "
+                    "predicted structure before ordering"
+                )
             if dk_metrics.get("borderline"):
                 warnings.append("docking gate: " + dk_metrics["note"])
             if dk_metrics.get("advisory"):

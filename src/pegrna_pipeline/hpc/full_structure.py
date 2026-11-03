@@ -15,7 +15,7 @@ the fake; the real adapters load heavy deps lazily and run on CX3.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Dict, Protocol, Tuple
+from typing import Dict, Optional, Protocol, Tuple
 
 __all__ = [
     "FullStructureScorer",
@@ -24,7 +24,9 @@ __all__ = [
     "RNAformerScorer",
     "AutoStructureScorer",
     "StructureScore",
+    "ScaffoldPairing",
     "functional_region_pairing",
+    "scaffold_extension_pairing",
     "region_accessibility",
 ]
 
@@ -63,6 +65,7 @@ def functional_region_pairing(
     regions: Dict[str, Tuple[int, int]],
     scorer: FullStructureScorer,
     threshold: float = 0.5,
+    pairs: Optional[Dict[Tuple[int, int], float]] = None,
 ) -> StructureScore:
     """Count pairings (prob ≥ ``threshold``) that couple two DISTINCT functional
     regions, excluding any pair touching the scaffold.
@@ -75,7 +78,7 @@ def functional_region_pairing(
     RiNALMo does not flag it either). Genuinely disruptive couplings — e.g. the
     spacer sequestered by the RTT cargo — are still counted."""
     expected = ({"spacer", "pbs1"},)  # intrinsic PBS–protospacer complementarity
-    pairs = scorer.pair_probs(seq)
+    pairs = pairs if pairs is not None else scorer.pair_probs(seq)
     count = 0
     for (i, j), p in pairs.items():
         if p < threshold:
@@ -88,6 +91,54 @@ def functional_region_pairing(
         if ri != rj and {ri, rj} not in expected:
             count += 1
     return StructureScore(cross_region_pairs=count)
+
+
+@dataclass(frozen=True)
+class ScaffoldPairing:
+    """How much of the scaffold the 3' extension is paired with."""
+
+    paired_nt: (
+        int  # distinct scaffold nucleotides with a partner (prob >= threshold) in the extension
+    )
+    pairs: int  # base pairs between the scaffold and the extension
+
+
+def scaffold_extension_pairing(
+    seq: str,
+    *,
+    regions: Dict[str, Tuple[int, int]],
+    scorer: FullStructureScorer,
+    threshold: float = 0.5,
+    pairs: Optional[Dict[Tuple[int, int], float]] = None,
+) -> ScaffoldPairing:
+    """Scaffold nucleotides paired (prob >= ``threshold``) with the 3' extension.
+
+    :func:`functional_region_pairing` leaves every pair that touches the scaffold out, because the
+    scaffold is designed to fold on itself. A pair BETWEEN the scaffold and the extension is a
+    different thing: it competes with that native fold. This measures it, so it can be reported.
+    The extension is every region except the spacer and the scaffold; scaffold-scaffold and
+    spacer-scaffold pairs are not counted.
+
+    Reporting only. Whether pairing at a given level lowers editing is not established here (see
+    ADR 0026), so nothing is rejected on this number. Pass ``pairs`` to reuse a probability map
+    already computed for the folding gate instead of folding the sequence again.
+    """
+    if "scaffold" not in regions:
+        return ScaffoldPairing(paired_nt=0, pairs=0)
+    pairs = pairs if pairs is not None else scorer.pair_probs(seq)
+    nts = set()
+    n_pairs = 0
+    for (i, j), p in pairs.items():
+        if p < threshold:
+            continue
+        ri, rj = _region_of(i, regions), _region_of(j, regions)
+        if ri == "scaffold" and rj not in (None, "scaffold", "spacer"):
+            nts.add(i)
+            n_pairs += 1
+        elif rj == "scaffold" and ri not in (None, "scaffold", "spacer"):
+            nts.add(j)
+            n_pairs += 1
+    return ScaffoldPairing(paired_nt=len(nts), pairs=n_pairs)
 
 
 def region_accessibility(
