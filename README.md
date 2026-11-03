@@ -18,10 +18,21 @@ according to insert size and the editing strategy needed:
 |--------|-------------------|-----------------------------------------------------------------------------|
 | `pe7`  | ≤ 40 bp           | Standard PE7 (PE3-strategy): one pegRNA + one opposite-strand ngRNA pair.   |
 | `tjpe` | ≤ ~500 bp         | Tethered-junction PE: codon-enumerated first 8 aa + ngRNA-driven RC-PBS2.   |
-| `pa`   | > 500 bp / >1 kb  | Prime Assembly: two pegRNAs install upstream + downstream flaps + gBlock.   |
+| `pa`   | > 500 bp / >1 kb  | Prime Assembly **(prototype: cannot pair real PRIDICT output, see below)**. |
 
 Each mode dispatches in `pegrna_pipeline.hpc.driver.run_driver` and writes a
 text + CSV report via `pegrna_pipeline.hpc.report_writer.write_reports`.
+
+**`pa` is a prototype, not a supported mode.** Prime Assembly (Liu et al., *Nature* 2026) uses two
+pegRNAs on opposite strands whose ~35 nt 3' flaps anneal to the two ends of a linear donor. The
+prototype was never run against real PRIDICT output, and does not work with it: its pair filter
+reads `Editing_Position` (PRIDICT's distance from the nick, 0-17 bp) as a coordinate and needs a
+difference of 30-80, so no pair can pass; and PRIDICT's insert-at-one-site designs cannot have
+the nick spacing a pair needs in any case. The hand-written test fixtures hid this. It is not
+reachable from the web app, and `pegrna run --mode pa` warns before queuing anything. What a
+real implementation needs, and the decision it is waiting on, is in
+[ADR 0027](docs/decisions/0027-prime-assembly-status-and-what-a-designer-needs.md) and issue #29.
+Use `tjpe` for large inserts in the meantime.
 
 Foundations layer (agent + codon expander) in active development.
 

@@ -173,6 +173,17 @@ def run_cmd(
 
     import yaml
 
+    if mode == "pa":
+        # Said before anything is queued: a PBS job would otherwise run for a long time and
+        # end in "no compatible pairs", with nothing to say why.
+        click.echo(
+            "WARNING: Prime Assembly (--mode pa) is a prototype. Against real PRIDICT output its "
+            "pair filter can never find a pair (it compares a distance-from-nick as if it were a "
+            "coordinate), so this run will report no compatible pairs. See issue #29 / ADR 0027. "
+            "Use --mode tjpe for the supported design.",
+            err=True,
+        )
+
     from pegrna_pipeline.agent.db import RunsDB
     from pegrna_pipeline.agent.launcher import HPCLauncher
 
