@@ -12,8 +12,12 @@ export default defineConfig({
   // VITE_BASE=/ — with the wrong base the bundle 404s and nothing renders.
   base: process.env.VITE_BASE ?? "/static/",
   build: {
-    outDir: "../static",
-    emptyOutDir: false, // index.html is replaced; nothing else lives there
+    // The default build goes to ../static, which FastAPI serves and which is COMMITTED. A build
+    // for any other host (Vercel) must set VITE_OUT_DIR so it cannot overwrite that one: this
+    // is how a Vercel-flavoured bundle, with a tunnel URL baked in, once got committed in its
+    // place and left the repo's own copy of the UI unable to load.
+    outDir: process.env.VITE_OUT_DIR ?? "../static",
+    emptyOutDir: Boolean(process.env.VITE_OUT_DIR), // ../static also holds the committed index.html
     rollupOptions: {
       output: {
         entryFileNames: "assets/[name]-[hash].js",

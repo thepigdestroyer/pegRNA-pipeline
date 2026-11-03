@@ -28,7 +28,6 @@ set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FRONTEND="$HERE/../frontend"
-STATIC="$HERE/../static"
 
 : "${PEGRNA_API_BASE:?set PEGRNA_API_BASE to the public URL of the pipeline backend}"
 PEGRNA_API_BASE="${PEGRNA_API_BASE%/}"
@@ -41,17 +40,22 @@ else
   echo "             Deploying anyway, but the site will not be able to design." >&2
 fi
 
-echo "==> building the frontend against that backend"
-cd "$FRONTEND"
-[ -d node_modules ] || npm ci
-VITE_BASE=/ VITE_API_BASE="$PEGRNA_API_BASE" npm run build
-
 # Stage OUTSIDE the repository (see the git-metadata note above).
 STAGE="$(mktemp -d)"
 trap 'rm -rf "$STAGE"' EXIT
-echo "==> staging into $STAGE"
 mkdir -p "$STAGE/public"
-cp -R "$STATIC/." "$STAGE/public/"
+
+echo "==> building the frontend against that backend"
+cd "$FRONTEND"
+[ -d node_modules ] || npm ci
+# VITE_BASE=/ because Vercel serves these files from the root, whereas the default build
+# targets FastAPI's /static mount. VITE_OUT_DIR sends the output straight to the staging
+# directory: building into ../static would overwrite the COMMITTED FastAPI-served bundle with
+# one that has this deployment's backend URL baked in (which has happened).
+VITE_OUT_DIR="$STAGE/public" VITE_BASE=/ VITE_API_BASE="$PEGRNA_API_BASE" \
+  sh -c 'npx tsc -b && npx vite build'
+
+echo "==> staging into $STAGE"
 cp "$HERE/vercel.json" "$STAGE/"
 # Carry the project link across so this deploys to the same Vercel project.
 [ -d "$HERE/.vercel" ] && cp -R "$HERE/.vercel" "$STAGE/"

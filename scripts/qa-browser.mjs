@@ -10,13 +10,31 @@
  *
  *   node scripts/qa-browser.mjs
  *
- * Needs the api-mode token in /tmp/peg-e2e/api-token.txt (or edit TOKEN below).
+ * Needs the api-mode token: macOS keychain item `pegrna-api-mode-token`, or the
+ * PEGRNA_API_MODE_TOKEN environment variable.
  */
 import { chromium } from "playwright";
-import { readFileSync } from "fs";
+import { execSync } from "child_process";
 
 const SITE = "https://pegrna-designer.vercel.app";
-const TOKEN = readFileSync("/tmp/peg-e2e/api-token.txt", "utf8").trim();
+// The api-mode token lives in the macOS keychain (service: pegrna-api-mode-token), never in
+// a file in the repo. PEGRNA_API_MODE_TOKEN overrides it, for CI or non-macOS hosts.
+function loadToken() {
+  if (process.env.PEGRNA_API_MODE_TOKEN) return process.env.PEGRNA_API_MODE_TOKEN;
+  try {
+    return execSync("security find-generic-password -s pegrna-api-mode-token -w", {
+      stdio: ["ignore", "pipe", "ignore"],
+    })
+      .toString()
+      .trim();
+  } catch {
+    throw new Error(
+      "No api-mode token: set PEGRNA_API_MODE_TOKEN, or store one with\n" +
+        "  security add-generic-password -a $USER -s pegrna-api-mode-token -w <token>",
+    );
+  }
+}
+const TOKEN = loadToken();
 
 const browser = await chromium.launch();
 const ctx = await browser.newContext({ viewport: { width: 1440, height: 1050 } });
@@ -79,9 +97,22 @@ ok(`real design completed in ${mins} min without the stream dropping`);
 const verdict = (await page.locator("text=/Design found|No design/").first().innerText()).trim();
 console.log(`  verdict: ${verdict}`);
 
+// The shipped real-models example is the demo. It must produce a design: it failed once with
+// "no candidate survived after 0 tried" because of a pool-construction bug, and a browser
+// check that accepts either verdict would have passed straight through that.
+verdict === "Design found"
+  ? ok("the shipped demo produces a design")
+  : fail(`the shipped demo returned "${verdict}"`);
+
 // Whatever the verdict, no gate may be a placeholder.
 const standIn = await page.locator("text=did not run a real model").count();
 standIn === 0 ? ok("no stand-in gates reported") : fail("a gate was a placeholder");
+
+// The docking step must report its length-matched comparison, not the retired 0.6 floor.
+const docking = await page.locator("li", { hasText: "Cas9 binding" }).first().innerText();
+/neutral/i.test(docking) && /non-binder/i.test(docking)
+  ? ok("docking is judged against a length-matched reference")
+  : fail(`docking row does not show the calibrated comparison: ${docking.slice(0, 160)}`);
 
 const gateRows = await page.locator("ol li").count();
 console.log(`  pipeline steps shown: ${gateRows}`);
