@@ -138,17 +138,19 @@ def test_the_failure_is_still_an_insert_side_failure_so_the_insert_lever_still_f
     assert _is_insert_side_failure(exc.value.diagnostics)
 
 
-def test_the_progress_event_carries_the_helix_too():
+def test_the_progress_event_carries_the_helix_where_the_web_readout_shows_it():
+    """The readout prints ``extra`` under the count when there is a cutoff, and ``info`` when there is not."""
     events = []
     with pytest.raises(NoValidPegRNA):
         run_recoded_tjpe(
             **_failing_inputs(),
             on_gate=lambda cand, gate, info, passed, metrics=None: events.append(
-                (gate, passed, info)
+                (gate, passed, info, metrics or {})
             ),
         )
-    gate, passed, info = next(e for e in events if e[0] == "structure")
+    gate, passed, info, metrics = next(e for e in events if e[0] == "structure")
     assert passed is False and "4 cross-region pairs" in info and "rcPBS2[0..3]" in info
+    assert "rcPBS2[0..3]" in metrics["extra"] and metrics["value"] == 4
 
 
 def test_a_passing_structure_says_nothing_extra():

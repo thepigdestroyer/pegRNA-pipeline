@@ -951,7 +951,10 @@ def _run_recoded_tjpe_single(
                         {
                             "metric": "SpliceAI Δ",
                             "value": sp_metrics.get("value"),
-                            "note": f"advisory, not binding: {where}",
+                            "note": (
+                                f"SpliceAI Δ {sp_metrics.get('value')}: advisory, not binding "
+                                f"({where})"
+                            ),
                         },
                     )
 
@@ -1038,6 +1041,7 @@ def _run_recoded_tjpe_single(
                     "extra": (
                         f"base-pair prob ≥ {structure_threshold} · extension pairs with "
                         f"{scaffold_pairing.paired_nt} scaffold nt"
+                        + (f" · {pairing.describe()}" if pairing.cross_region_pairs else "")
                     ),
                 },
             )

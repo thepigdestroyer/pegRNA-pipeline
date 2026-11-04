@@ -100,7 +100,7 @@ def test_the_advisory_reaches_the_progress_stream_as_a_pass_with_no_cutoff_to_co
     gate, passed, metrics = next(e for e in events if e[0] == "splice")
     assert passed is True
     assert "cutoff" not in metrics and metrics["value"] == HIGH
-    assert metrics["note"].startswith("advisory, not binding")
+    assert metrics["note"].startswith("SpliceAI Δ 0.34: advisory, not binding")
 
 
 def test_a_context_free_number_cannot_stop_a_design_the_primary_gate_passed():
