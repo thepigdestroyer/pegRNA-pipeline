@@ -1,6 +1,14 @@
 @import "tailwindcss";
 
 /*
+ * `dark:` follows the `.dark` class that the theme toggle sets on <html>. Tailwind's default is
+ * the OS setting, which left the header, footer and action bar (the parts styled with `dark:`)
+ * in the wrong theme whenever the toggle and the OS disagreed, while the body and cards (styled
+ * with `.dark ...` below) switched.
+ */
+@custom-variant dark (&:where(.dark, .dark *));
+
+/*
  * Design tokens. The palette is deliberately calm and high-contrast: this is a
  * tool people read sequences off, so legibility beats decoration. Each pegRNA
  * part gets its own hue, used consistently in the sequence map, the component
@@ -44,6 +52,12 @@
 @layer base {
   html {
     scroll-behavior: smooth;
+    /* Scrollbars, select menus and other native controls follow the chosen theme too. */
+    color-scheme: light;
+  }
+
+  html.dark {
+    color-scheme: dark;
   }
 
   body {
