@@ -1,13 +1,113 @@
 <!doctype html>
-<html lang="en">
+<html lang="en-GB">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>pegRNA designer · prime-editing knock-in</title>
+    <title>pegRNA designer for prime-editing C-terminal tagging</title>
     <meta
       name="description"
-      content="Design pegRNAs for C-terminal protein tagging by prime editing (recoded TJ-PE)."
+      content="Design pegRNAs to knock a tag into the C-terminus of a human gene by prime editing. Each candidate is checked for off-targets, splicing and RNA structure."
     />
+    <link rel="canonical" href="https://pegrna-designer.vercel.app/" />
+    <meta name="author" content="Mrinal Joshi" />
+    <link rel="author" href="https://mrinal.is-a.dev/" />
+    <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#0b0f14" media="(prefers-color-scheme: dark)" />
+    <link rel="icon" href="/static/favicon.svg" type="image/svg+xml" />
+    <link rel="apple-touch-icon" href="/static/apple-touch-icon.png" sizes="180x180" />
+
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="pegRNA designer" />
+    <meta property="og:locale" content="en_GB" />
+    <meta property="og:url" content="https://pegrna-designer.vercel.app/" />
+    <meta property="og:title" content="pegRNA designer for prime-editing C-terminal tagging" />
+    <meta
+      property="og:description"
+      content="Design pegRNAs to knock a tag into the C-terminus of a human gene by prime editing. Each candidate is checked for off-targets, splicing and RNA structure."
+    />
+    <meta property="og:image" content="https://pegrna-designer.vercel.app/og.png" />
+    <meta property="og:image:type" content="image/png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta
+      property="og:image:alt"
+      content="pegRNA designer: knock a tag into the C-terminus of a human gene by prime editing"
+    />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="pegRNA designer for prime-editing C-terminal tagging" />
+    <meta
+      name="twitter:description"
+      content="Design pegRNAs to knock a tag into the C-terminus of a human gene by prime editing. Each candidate is checked for off-targets, splicing and RNA structure."
+    />
+    <meta name="twitter:image" content="https://pegrna-designer.vercel.app/og.png" />
+    <meta
+      name="twitter:image:alt"
+      content="pegRNA designer: knock a tag into the C-terminus of a human gene by prime editing"
+    />
+
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@graph": [
+          {
+            "@type": "WebSite",
+            "@id": "https://pegrna-designer.vercel.app/#website",
+            "url": "https://pegrna-designer.vercel.app/",
+            "name": "pegRNA designer",
+            "inLanguage": "en-GB",
+            "author": {
+              "@type": "Person",
+              "@id": "https://mrinal.is-a.dev/#person",
+              "name": "Mrinal Joshi",
+              "url": "https://mrinal.is-a.dev/"
+            },
+            "publisher": { "@id": "https://mrinal.is-a.dev/#person" }
+          },
+          {
+            "@type": "WebApplication",
+            "@id": "https://pegrna-designer.vercel.app/#app",
+            "name": "pegRNA designer",
+            "url": "https://pegrna-designer.vercel.app/",
+            "description": "A web interface for designing pegRNAs that knock a tag into the C-terminus of a human gene by prime editing. Candidates pass a cascade of off-target, splicing, RNA structure and docking checks.",
+            "applicationCategory": "ScienceApplication",
+            "operatingSystem": "Web",
+            "browserRequirements": "Requires JavaScript",
+            "inLanguage": "en-GB",
+            "isAccessibleForFree": true,
+            "image": "https://pegrna-designer.vercel.app/og.png",
+            "mainEntityOfPage": { "@id": "https://pegrna-designer.vercel.app/#webpage" },
+            "author": {
+              "@type": "Person",
+              "@id": "https://mrinal.is-a.dev/#person",
+              "name": "Mrinal Joshi",
+              "url": "https://mrinal.is-a.dev/"
+            }
+          },
+          {
+            "@type": "WebPage",
+            "@id": "https://pegrna-designer.vercel.app/#webpage",
+            "url": "https://pegrna-designer.vercel.app/",
+            "name": "pegRNA designer for prime-editing C-terminal tagging",
+            "description": "Design pegRNAs to knock a tag into the C-terminus of a human gene by prime editing. Each candidate is checked for off-targets, splicing and RNA structure.",
+            "inLanguage": "en-GB",
+            "isPartOf": { "@id": "https://pegrna-designer.vercel.app/#website" },
+            "about": { "@id": "https://pegrna-designer.vercel.app/#app" },
+            "primaryImageOfPage": {
+              "@type": "ImageObject",
+              "url": "https://pegrna-designer.vercel.app/og.png",
+              "width": 1200,
+              "height": 630
+            },
+            "author": {
+              "@type": "Person",
+              "@id": "https://mrinal.is-a.dev/#person",
+              "name": "Mrinal Joshi",
+              "url": "https://mrinal.is-a.dev/"
+            }
+          }
+        ]
+      }
+    </script>
     <script>
       // Apply the saved theme before first paint to avoid a flash of the wrong one.
       (function () {
@@ -24,6 +124,32 @@
     <link rel="stylesheet" crossorigin href="/static/assets/index-pcEErNYB.css">
   </head>
   <body>
-    <div id="root"></div>
+    <!-- Crawlable fallback. main.tsx uses createRoot, which replaces everything inside #root on load. -->
+    <div id="root">
+      <main style="max-width: 48rem; margin: 0 auto; padding: 1.5rem 1rem; font-family: system-ui, sans-serif; line-height: 1.55">
+        <h1>pegRNA designer</h1>
+        <p>
+          Knock a tag into the C-terminus of a human gene, by prime editing. You supply the target
+          (a genome window, the insert site and the strand) and the cargo to insert. The pipeline
+          designs the guides for you, with PRIDICT2 proposing the pegRNA spacer, primer binding
+          site and reverse transcriptase template.
+        </p>
+        <p>
+          Every candidate then passes a cascade of checks: off-target search, recoding and
+          microhomology logic, cryptic splice sites, splicing prediction, structural importance
+          from AlphaFold-DB, RNA secondary structure and docking. The first candidate that passes
+          every check is the design.
+        </p>
+        <p>
+          Run it as a fast dry run with stand-in scorers, or with the real models. For
+          heterozygous cells, supply phased SNPs to ask for an allele-specific design. Designs are
+          engineering previews, so validate them at the bench before ordering. This page needs
+          JavaScript to open the design form.
+        </p>
+        <p>
+          Built by <a href="https://mrinal.is-a.dev/" rel="author">Mrinal Joshi</a>.
+        </p>
+      </main>
+    </div>
   </body>
 </html>
