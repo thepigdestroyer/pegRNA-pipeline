@@ -10,8 +10,10 @@ available.
 
 from __future__ import annotations
 
+import random
+from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import List, Optional
+from typing import Iterator, List, Optional, Tuple
 
 from Bio.Seq import Seq
 
@@ -95,6 +97,135 @@ def recode_min_edits(
     return None
 
 
+def _avoid_kmers(genome: str, max_run: int) -> List[str]:
+    """Every ``max_run + 1``-mer of ``genome``, sorted and unique.
+
+    Order is the point. DnaChisel resolves constraints in the order it is given them, and this used to be
+    built from a ``set`` of strings, whose iteration order changes from process to process (string hashes
+    are randomised). The same arm therefore came out with different edits depending only on
+    ``PYTHONHASHSEED`` (issue #30). Sorted, the order is a property of the input alone.
+    """
+    k = max_run + 1
+    return sorted(
+        {genome[i : i + k] for i in range(len(genome) - max_run) if len(genome[i : i + k]) == k}
+    )
+
+
+def _kmer_orderings(kmers: List[str]) -> List[List[str]]:
+    """The fixed orderings the optimiser is tried under: sorted, reversed, and three seeded shuffles.
+
+    DnaChisel's search is greedy, so different constraint orders reach different (all valid) solutions
+    with different numbers of edits. Trying a few FIXED orders and keeping the best is deterministic and
+    reliably reaches the better answer; the first order alone often did not.
+    """
+    orderings = [list(kmers), list(reversed(kmers))]
+    for seed in (1, 2, 3):
+        shuffled = list(kmers)
+        random.Random(seed).shuffle(shuffled)
+        orderings.append(shuffled)
+    return orderings
+
+
+@contextmanager
+def _fixed_rng(seed: int) -> Iterator[None]:
+    """Pin Python's and NumPy's global RNGs for one solve and restore them after, so a solve cannot
+    depend on, or disturb, whatever else the process has drawn."""
+    py_state = random.getstate()
+    np_state = None
+    try:
+        import numpy as np  # noqa: PLC0415
+
+        np_state = np.random.get_state()
+        np.random.seed(seed)
+    except Exception:  # noqa: BLE001 - numpy is optional here
+        np = None  # type: ignore[assignment]
+    random.seed(seed)
+    try:
+        yield
+    finally:
+        random.setstate(py_state)
+        if np_state is not None and np is not None:
+            np.random.set_state(np_state)
+
+
+def _solve_dnachisel(
+    span: str, kmers: List[str], *, coding: Tuple[int, int], genome: str, max_run: int, seed: int
+) -> Optional[RecodeResult]:
+    """One DnaChisel solve under one constraint order; ``None`` if infeasible.
+
+    The problem is the WHOLE span: protein identity is enforced on the codon-aligned interior
+    ``span[coding[0]:coding[1]]`` and the partial-codon edges are held fixed. Solving only the interior
+    and checking the whole span afterwards (what this used to do) let a run of identical bases cross
+    the interior's boundary into an edge base, so good solutions were thrown away after the fact.
+    """
+    from dnachisel import (  # noqa: PLC0415
+        AvoidChanges,
+        AvoidPattern,
+        DnaOptimizationProblem,
+        EnforceTranslation,
+    )
+
+    lo, hi = coding
+    constraints = [EnforceTranslation(location=(lo, hi))]
+    if lo > 0:
+        constraints.append(AvoidChanges(location=(0, lo)))
+    if hi < len(span):
+        constraints.append(AvoidChanges(location=(hi, len(span))))
+    constraints.extend(AvoidPattern(km) for km in kmers)
+    try:
+        with _fixed_rng(seed):
+            problem = DnaOptimizationProblem(
+                sequence=span.upper(),
+                constraints=constraints,
+                objectives=[AvoidChanges()],
+                logger=None,
+            )
+            problem.resolve_constraints()
+            problem.optimize()
+    except Exception:  # noqa: BLE001
+        return None
+    recoded = problem.sequence
+    run = longest_common_run(recoded, genome)
+    if run > max_run:
+        return None
+    return RecodeResult(recoded, _edit_distance(recoded, span), run)
+
+
+def _dnachisel_candidates(
+    cds_span: str, *, genome: str, frame: int, max_run: int
+) -> List[RecodeResult]:
+    """Every feasible raw DnaChisel solution under the fixed orderings, de-duplicated, in a stable order.
+
+    Raw means before the human-codon tuning of :func:`recode_arm`: the number of edits users see is the
+    one AFTER tuning, and raw counts do not rank solutions the same way, so the choice among candidates
+    has to be made on the tuned result (see :func:`recode_arm`). Only the codon-aligned interior is
+    recoded; partial codons at either edge stay byte-exact. A span with no whole codon has nothing to
+    solve (the greedy recoder handles it).
+    """
+    if frame not in (0, 1, 2):
+        raise ValueError(f"frame must be 0/1/2; got {frame}")
+    pad = (3 - frame) % 3
+    interior = ((len(cds_span) - pad) // 3) * 3
+    if interior < 3:
+        return []
+    try:
+        import dnachisel  # noqa: F401, PLC0415
+    except Exception as exc:  # pragma: no cover - exercised only without dnachisel
+        raise RuntimeError("DnaChisel not available; install '.[recode]'") from exc
+
+    genome = genome.upper()
+    seen = set()
+    found: List[RecodeResult] = []
+    for seed, order in enumerate(_kmer_orderings(_avoid_kmers(genome, max_run))):
+        result = _solve_dnachisel(
+            cds_span, order, coding=(pad, pad + interior), genome=genome, max_run=max_run, seed=seed
+        )
+        if result is not None and result.recoded not in seen:
+            seen.add(result.recoded)
+            found.append(result)
+    return found
+
+
 def recode_min_edits_dnachisel(
     cds_span: str, *, genome: str, frame: int, max_run: int
 ) -> Optional[RecodeResult]:
@@ -103,57 +234,12 @@ def recode_min_edits_dnachisel(
     Constraints: ``EnforceTranslation`` (protein identity) + an ``AvoidPattern``
     for every ``(max_run + 1)``-mer of ``genome`` (so no contiguous identity run
     can exceed ``max_run``). Objective: ``AvoidChanges`` (minimise edits).
-    Returns a :class:`RecodeResult` or ``None`` if infeasible / not below run.
+    Solved under several FIXED constraint orders and deterministic: the same input gives the same
+    answer in every process (issue #30). Returns the fewest-edit solution (ties broken by the
+    recoded string) or ``None`` if infeasible / not below run.
     """
-    if frame not in (0, 1, 2):
-        raise ValueError(f"frame must be 0/1/2; got {frame}")
-    # Recode only the codon-aligned interior; keep partial-codon edges byte-exact.
-    pad = (3 - frame) % 3
-    if pad or (len(cds_span) - pad) % 3:
-        interior_len = ((len(cds_span) - pad) // 3) * 3
-        prefix = cds_span[:pad]
-        interior = cds_span[pad : pad + interior_len]
-        suffix = cds_span[pad + interior_len :]
-        inner = recode_min_edits_dnachisel(interior, genome=genome, frame=0, max_run=max_run)
-        if inner is None:
-            return None
-        recoded = prefix + inner.recoded + suffix
-        run = longest_common_run(recoded, genome)
-        if run > max_run:
-            return None
-        return RecodeResult(recoded, _edit_distance(recoded, cds_span), run)
-    try:
-        from dnachisel import (  # noqa: PLC0415
-            AvoidChanges,
-            AvoidPattern,
-            DnaOptimizationProblem,
-            EnforceTranslation,
-        )
-    except Exception as exc:  # pragma: no cover - exercised only without dnachisel
-        raise RuntimeError("DnaChisel not available; install '.[recode]'") from exc
-
-    genome = genome.upper()
-    k = max_run + 1
-    kmers = {genome[i : i + k] for i in range(len(genome) - max_run)}
-    kmers = {km for km in kmers if len(km) == k}
-    constraints = [EnforceTranslation()]
-    constraints.extend(AvoidPattern(km) for km in kmers)
-    try:
-        problem = DnaOptimizationProblem(
-            sequence=cds_span.upper(),
-            constraints=constraints,
-            objectives=[AvoidChanges()],
-            logger=None,
-        )
-        problem.resolve_constraints()
-        problem.optimize()
-    except Exception:
-        return None
-    recoded = problem.sequence
-    run = longest_common_run(recoded, genome)
-    if run > max_run:
-        return None
-    return RecodeResult(recoded, _edit_distance(recoded, cds_span), run)
+    found = _dnachisel_candidates(cds_span, genome=genome, frame=frame, max_run=max_run)
+    return min(found, key=lambda r: (r.n_edits, r.recoded)) if found else None
 
 
 def _prefer_human_codons(
@@ -202,6 +288,17 @@ def _prefer_human_codons(
     return seq
 
 
+def _tune(
+    result: RecodeResult, *, original: str, genome: str, frame: int, max_run: int
+) -> RecodeResult:
+    tuned = _prefer_human_codons(
+        result.recoded, original=original, genome=genome, frame=frame, max_run=max_run
+    )
+    if tuned == result.recoded:
+        return result
+    return RecodeResult(tuned, _edit_distance(tuned, original), longest_common_run(tuned, genome))
+
+
 def recode_arm(cds_span: str, *, genome: str, frame: int, max_run: int) -> Optional[RecodeResult]:
     """Dispatch to the DnaChisel optimiser when importable, else the pure greedy,
     then apply the human-frequency codon tiebreak (:func:`_prefer_human_codons`).
@@ -212,21 +309,29 @@ def recode_arm(cds_span: str, *, genome: str, frame: int, max_run: int) -> Optio
     each position the recode changed (ADR 0009) -- so the forced microhomology-break
     edits land on human-preferred codons -- without adding edits or disturbing the
     byte-exact unchanged positions.
+
+    DnaChisel is solved under several fixed constraint orders, every candidate is tuned, and the
+    one with the fewest FINAL edits wins (ties broken by the sequence). The final count is what is
+    reported and what the objective asks for; the raw solver count does not rank candidates the
+    same way once tuning has run. The choice is deterministic (issue #30).
     """
+    candidates: List[RecodeResult] = []
     try:
         import dnachisel  # noqa: F401, PLC0415
     except Exception:
-        result = recode_min_edits(cds_span, genome=genome, frame=frame, max_run=max_run)
+        greedy = recode_min_edits(cds_span, genome=genome, frame=frame, max_run=max_run)
+        if greedy is not None:
+            candidates = [greedy]
     else:
-        result = recode_min_edits_dnachisel(cds_span, genome=genome, frame=frame, max_run=max_run)
-        if result is None:
+        candidates = _dnachisel_candidates(cds_span, genome=genome, frame=frame, max_run=max_run)
+        if not candidates:
             # Fall back to greedy if the optimiser failed to find a solution.
-            result = recode_min_edits(cds_span, genome=genome, frame=frame, max_run=max_run)
-    if result is None:
+            greedy = recode_min_edits(cds_span, genome=genome, frame=frame, max_run=max_run)
+            if greedy is not None:
+                candidates = [greedy]
+    if not candidates:
         return None
-    tuned = _prefer_human_codons(
-        result.recoded, original=cds_span, genome=genome, frame=frame, max_run=max_run
-    )
-    if tuned == result.recoded:
-        return result
-    return RecodeResult(tuned, _edit_distance(tuned, cds_span), longest_common_run(tuned, genome))
+    tuned = [
+        _tune(c, original=cds_span, genome=genome, frame=frame, max_run=max_run) for c in candidates
+    ]
+    return min(tuned, key=lambda r: (r.n_edits, r.recoded))
