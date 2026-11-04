@@ -25,6 +25,8 @@ __all__ = [
     "AutoStructureScorer",
     "StructureScore",
     "ScaffoldPairing",
+    "Helix",
+    "StructureScore",
     "functional_region_pairing",
     "scaffold_extension_pairing",
     "region_accessibility",
@@ -47,9 +49,52 @@ class FullStructureFake:
         return self._pairs
 
 
+#: How the report names a region of the pegRNA.
+_REGION_LABEL = {"spacer": "spacer", "rcpbs2": "rcPBS2", "rtt": "RTT", "pbs1": "PBS1"}
+
+
+@dataclass(frozen=True)
+class Helix:
+    """A stack of consecutive base pairs between two DIFFERENT regions of the pegRNA.
+
+    Coordinates are 0-based, inclusive, and local to each region; ``seq_a`` / ``seq_b`` are the two strands
+    5'->3' as they sit in the pegRNA.
+    """
+
+    region_a: str
+    a_lo: int
+    a_hi: int
+    region_b: str
+    b_lo: int
+    b_hi: int
+    bp: int
+    min_prob: float
+    seq_a: str
+    seq_b: str
+
+    def describe(self) -> str:
+        a, b = _REGION_LABEL.get(self.region_a, self.region_a), _REGION_LABEL.get(
+            self.region_b, self.region_b
+        )
+        return (
+            f"{a}[{self.a_lo}..{self.a_hi}] {self.seq_a} x {b}[{self.b_lo}..{self.b_hi}] {self.seq_b} "
+            f"({self.bp} bp, p >= {self.min_prob:.3f})"
+        )
+
+
 @dataclass(frozen=True)
 class StructureScore:
     cross_region_pairs: int
+    #: The counted pairs, grouped into stacks. Empty when nothing was counted.
+    helices: Tuple[Helix, ...] = ()
+
+    def describe(self, limit: int = 3) -> str:
+        """The counted pairs in words, e.g. ``rcPBS2[0..3] GGGG x RTT[0..3] CCCC (4 bp, p >= 0.996)``."""
+        shown = [h.describe() for h in self.helices[:limit]]
+        more = len(self.helices) - len(shown)
+        if more > 0:
+            shown.append(f"+{more} more")
+        return "; ".join(shown)
 
 
 def _region_of(i: int, regions: Dict[str, Tuple[int, int]]):
@@ -79,7 +124,7 @@ def functional_region_pairing(
     spacer sequestered by the RTT cargo — are still counted."""
     expected = ({"spacer", "pbs1"},)  # intrinsic PBS–protospacer complementarity
     pairs = pairs if pairs is not None else scorer.pair_probs(seq)
-    count = 0
+    counted: Dict[Tuple[int, int], float] = {}
     for (i, j), p in pairs.items():
         if p < threshold:
             continue
@@ -89,8 +134,39 @@ def functional_region_pairing(
         if ri == "scaffold" or rj == "scaffold":
             continue
         if ri != rj and {ri, rj} not in expected:
-            count += 1
-    return StructureScore(cross_region_pairs=count)
+            counted[(i, j)] = p
+    return StructureScore(cross_region_pairs=len(counted), helices=_helices(seq, counted, regions))
+
+
+def _helices(
+    seq: str, counted: Dict[Tuple[int, int], float], regions: Dict[str, Tuple[int, int]]
+) -> Tuple[Helix, ...]:
+    """Group counted pairs into stacks: (i, j), (i+1, j-1), ... Ordered by position."""
+    out = []
+    for i, j in sorted(counted):
+        if (i - 1, j + 1) in counted:
+            continue  # inside a stack that started earlier
+        n = 0
+        while (i + n + 1, j - n - 1) in counted:
+            n += 1
+        stack = [(i + k, j - k) for k in range(n + 1)]
+        ra, rb = _region_of(i, regions), _region_of(j, regions)
+        a0, b0 = regions[ra][0], regions[rb][0]
+        out.append(
+            Helix(
+                region_a=ra,
+                a_lo=i - a0,
+                a_hi=i + n - a0,
+                region_b=rb,
+                b_lo=j - n - b0,
+                b_hi=j - b0,
+                bp=n + 1,
+                min_prob=min(counted[p] for p in stack),
+                seq_a=seq[i : i + n + 1],
+                seq_b=seq[j - n : j + 1],
+            )
+        )
+    return tuple(out)
 
 
 @dataclass(frozen=True)

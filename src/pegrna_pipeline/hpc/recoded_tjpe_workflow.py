@@ -412,6 +412,15 @@ def _derive_pbs1(genome: str, *, site_s: int, pbs_length: int, pegrna_strand: st
     return window
 
 
+def _folder_name(scorer: Any) -> str:
+    """A short name for the folder behind a structure verdict: ViennaRNA, RiNALMo, RNAformer, ..."""
+    name = type(scorer).__name__
+    for suffix in ("StructureScorer", "Scorer"):
+        if name.endswith(suffix) and len(name) > len(suffix):
+            return name[: -len(suffix)]
+    return name
+
+
 def _advisory_splice_text(
     sp_ok: bool, metrics: Dict[str, Any], where: str, *, primary_passed: bool
 ) -> str:
@@ -1018,7 +1027,8 @@ def _run_recoded_tjpe_single(
             _emit(
                 tried,
                 "structure",
-                f"{pairing.cross_region_pairs} cross-region pairs (p>={structure_threshold})",
+                f"{pairing.cross_region_pairs} cross-region pairs (p>={structure_threshold})"
+                + (f": {pairing.describe()}" if pairing.cross_region_pairs else ""),
                 pairing.cross_region_pairs == 0,
                 {
                     "metric": "cross-region pairs",
@@ -1032,7 +1042,10 @@ def _run_recoded_tjpe_single(
                 },
             )
             if pairing.cross_region_pairs > 0:
-                diagnostics.append(f"cand{tried}: RiNALMo cross-region pairing")
+                diagnostics.append(
+                    f"cand{tried}: cross-region pairing ({_folder_name(full_structure_scorer)}): "
+                    f"{pairing.describe() or str(pairing.cross_region_pairs) + ' pair(s)'}"
+                )
                 continue
             gate_info["structure"] = (
                 f"{pairing.cross_region_pairs} cross-region pairs "

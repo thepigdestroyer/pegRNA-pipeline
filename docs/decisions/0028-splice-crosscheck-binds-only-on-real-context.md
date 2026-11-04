@@ -118,13 +118,46 @@ real cassettes it would pass. Nothing here validates 0.2 (the SNV high-recall cu
 * The first design for a transcript that is not in the Ensembl cache pays one fetch (tens of seconds for a large
   gene); later runs read the cache. A window carrying a variant relative to GRCh38, or in the wrong orientation, is
   not located and falls back to advisory.
-* Tests: `tests/test_splice_context.py` (31): the walk's binding and advisory paths and the progress event, the
+* Tests: `tests/test_splice_context.py` (31) and `tests/test_structure_diagnostics.py` (15, the addendum): the walk's binding and advisory paths and the progress event, the
   scorer's padding and flank handling, the fetch (strand, margin, N-fill, ambiguity, refusal), the driver's
   fail-soft wiring end to end. Mutating the walk back to "always binds" fails six of them.
 
+## Addendum: the next gate on the same cassette (folding)
+
+With the splice gate fixed, the cassette run went on to fail every candidate at the folding gate. It looked like the
+same story (a gate calibrated on 139-228 nt pegRNAs, now meeting 671 nt), so it was measured before anything was
+changed (`scripts/analysis/probe_structure_gate.py`, real models, then re-checked locally with the same ViennaRNA).
+**It is not the same story, and the gate is unchanged.**
+
+* **One helix, the same in every candidate.** The first four bases of the rcPBS2 (`GGGG`) pair at p >= 0.996 with
+  the first four of the RTT (`CCCC`): a 4-bp GC stem closing an 8-nt loop (3 bp with PBS1 = 19). The RTT starts
+  with the reverse complement of the cargo's last four bases, and the cassette ends in a T7 promoter remnant
+  (`...TCACTATAGGGG`). The rcPBS2's 5' end is fixed by the nick, so `GGGG` is not a choice.
+* **Not length-driven.** Ten random inserts of each length in the same backbone: 5/10 rejected at 24 nt, 2/10 at 60,
+  2/10 at 120, 1/10 at 240, 2/10 at 360, **0/10 at 501**. No trend with length (n = 10 each, so only that).
+  Six of ten random synonymous recodings of the cassette have no such pair. The signal is local to the junction.
+* **The levers cannot reach it.** The INSERT lever (ADR 0022) needs a clean in-frame CDS, and this cargo translates
+  with three stop codons (two after the resistance gene, one in the T7 tail), so it returns the original only; the
+  stem is in that non-coding tail anyway. PBS1 length changes nothing (it is not at the junction). A different
+  rcPBS2 length would (11, 13, 14, 15, 17, 18 give 0 pairs), but at this nick only 12 is inside the design's Tm band
+  (37.4 C; 13 is 42.1 against a limit of 42.0), so a lever would have to widen a deliberate band. Not built.
+* **What clears it.** Dropping the cassette's last two bases (`...TATAGG`) gives 0 pairs; one base leaves a 3-bp
+  stem. With those two bases dropped the whole pipeline passes on the real models in 114 s, no stand-in gates: splice
+  0.162 on real context (a binding verdict), structure 0, docking **advisory only** because 669 nt is outside the
+  calibrated 96-232 nt range (interface ipTM 0.21, not judged; issue #28).
+
+What changed: the failure now says what paired and which folder said so (`cand1: cross-region pairing (ViennaRNA):
+rcPBS2[0..3] GGGG x RTT[0..3] CCCC (4 bp, p >= 0.996)`), where it said "RiNALMo cross-region pairing" five times.
+The count and the verdict are exactly as before.
+
+Left open, on purpose: whether a stem this short should reject or only warn. Nothing in this repository measures
+what a 4-bp stem between the rcPBS2 and the RTT does to editing (ADR 0026 makes the same point about scaffold
+pairing), and the gate was accepted in ADR 0024 as a heuristic that removes the worst tail. That is a question for a
+wet-lab control, not for this change.
+
 ## References
 
-- `scripts/analysis/probe_splice_gate.py`; the failing runs `20261104-145156-8bb93b` and `20261104-145239-a8609d`
+- `scripts/analysis/probe_splice_gate.py`, `scripts/analysis/probe_structure_gate.py`; the failing runs `20261104-145156-8bb93b` and `20261104-145239-a8609d`
   on the DSI box.
 - `src/pegrna_pipeline/hpc/scorer_factory.py` (`_PaddedSpliceAIScorer`), `recoded_tjpe_workflow.py` (the walk),
   `recoded_driver.py` (`_attach_splice_context`), `genome_ingest.py` (`fetch_flanking_sequence`).
