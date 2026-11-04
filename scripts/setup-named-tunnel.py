@@ -39,7 +39,7 @@ import urllib.error
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Callable, Optional, Tuple
 
 API = "https://api.cloudflare.com/client/v4"
 KEYCHAIN_SERVICE = "cloudflare-tunnel-token"
@@ -156,7 +156,14 @@ def read_token(
 # ---- provisioning -----------------------------------------------------------------------
 
 
-def _discover_account(api: Cloudflare) -> str:
+def _discover_account(api: Cloudflare, zone_account: Optional[str] = None) -> str:
+    """The account to create the tunnel in.
+
+    The account that owns the zone is the right one, and it is what a token scoped to a tunnel
+    and a zone can always read (it often cannot LIST accounts, which is how this used to fail).
+    Listing is the fallback for a zone whose account is not known."""
+    if zone_account:
+        return zone_account
     try:
         accounts = api.call("GET", "/accounts?per_page=50") or []
     except SetupError as exc:
@@ -170,13 +177,29 @@ def _discover_account(api: Cloudflare) -> str:
     raise SetupError(f"Cannot choose an account automatically ({names}); pass --account-id.")
 
 
-def _discover_zone(api: Cloudflare, hostname: str) -> str:
+def _owning_account(zone: dict) -> Optional[str]:
+    return (zone.get("account") or {}).get("id")
+
+
+def _discover_zone(
+    api: Cloudflare, hostname: str, zone_id: Optional[str] = None
+) -> Tuple[str, Optional[str]]:
+    """``(zone id, id of the account that owns it or None)``.
+
+    With ``zone_id`` the zone is read to learn its account; a token that may not read it simply
+    leaves the account to be discovered another way."""
+    if zone_id:
+        try:
+            zone = api.call("GET", f"/zones/{zone_id}") or {}
+        except SetupError:
+            zone = {}
+        return zone_id, _owning_account(zone)
     labels = hostname.split(".")
     for i in range(1, len(labels) - 1):
         name = ".".join(labels[i:])
         zones = api.call("GET", f"/zones?name={name}") or []
         if zones:
-            return zones[0]["id"]
+            return zones[0]["id"], _owning_account(zones[0])
     raise SetupError(
         f"No Cloudflare zone found for {hostname}. The domain must be on this Cloudflare "
         "account, and the token must be allowed to read it."
@@ -186,8 +209,8 @@ def _discover_zone(api: Cloudflare, hostname: str) -> str:
 def provision(api: Cloudflare, cfg: Config) -> Provisioned:
     """Make Cloudflare's side match the config. Idempotent: reads first, writes only a gap."""
     actions = []
-    account = cfg.account_id or _discover_account(api)
-    zone = cfg.zone_id or _discover_zone(api, cfg.hostname)
+    zone, zone_account = _discover_zone(api, cfg.hostname, cfg.zone_id)
+    account = cfg.account_id or _discover_account(api, zone_account)
 
     found = api.call(
         "GET", f"/accounts/{account}/cfd_tunnel?name={cfg.tunnel_name}&is_deleted=false"
@@ -326,11 +349,17 @@ def install_on_dsi(cfg: Config, connector_token: str, run: Callable = subprocess
     )
 
 
+#: A first-time setup takes a while: the connector has to register and Cloudflare's edge has to
+#: learn the new hostname. The first real run took a little over two minutes.
+HEALTH_WAIT_ATTEMPTS = 60
+HEALTH_WAIT_DELAY = 5.0
+
+
 def wait_healthy(
     url: str,
     *,
-    attempts: int = 24,
-    delay: float = 5.0,
+    attempts: int = HEALTH_WAIT_ATTEMPTS,
+    delay: float = HEALTH_WAIT_DELAY,
     opener: Callable = urllib.request.urlopen,
     sleep: Callable = time.sleep,
 ) -> bool:
@@ -398,9 +427,14 @@ def main(argv=None) -> int:
             f"  dsi: token installed, pegrna-tunnel restarted; waiting for https://{cfg.hostname} ..."
         )
         if not wait_healthy(f"https://{cfg.hostname}/api/health"):
+            minutes = HEALTH_WAIT_ATTEMPTS * HEALTH_WAIT_DELAY / 60
             raise SetupError(
-                f"https://{cfg.hostname}/api/health did not answer within two minutes. DNS can take "
-                "a little longer: re-run this script (it changes nothing that is already right)."
+                f"https://{cfg.hostname}/api/health did not answer within {minutes:g} minutes. "
+                "Cloudflare and the DSI box ARE configured (the tunnel is created, the DNS record "
+                "exists, the connector is installed and restarted). Check the connector with "
+                "'ssh dsi tail ~/pegrna/cloudflared.log', and once the URL answers, deploy with:\n"
+                f"  PEGRNA_API_BASE=https://{cfg.hostname} bash web/vercel/deploy.sh --prod\n"
+                "Do not re-run this script just to wait: it restarts the tunnel each time."
             )
         print(f"  live: https://{cfg.hostname}/api/health is answering")
     except SetupError as exc:

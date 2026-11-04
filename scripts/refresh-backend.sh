@@ -8,6 +8,9 @@
 #
 # Run it whenever the site loads but cannot reach the backend.
 #
+# NOT needed while the named tunnel is in use (https://pegrna.ukdri.org, see GO-LIVE.md): that
+# hostname never changes. This is the fallback for when the tunnel has dropped back to a quick one.
+#
 #   scripts/refresh-backend.sh            # preview deployment
 #   scripts/refresh-backend.sh --prod     # production
 #

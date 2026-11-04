@@ -92,6 +92,10 @@ and changes on every restart, there is no uptime guarantee, and provisioning is 
 frontend bakes the backend URL in at build time, a new hostname breaks the site until it is
 rebuilt (`scripts/refresh-backend.sh` does that in one command, but it is a workaround).
 
+**Status: done.** The site's backend is `https://pegrna.ukdri.org` (tunnel `pegrna-dsi`, set up on
+2026-11-04), and `scripts/audit-production.sh` checks for it. The rest of this section is how it was
+done and how to redo it, for another hostname or after a Cloudflare account change.
+
 **Route A: one command (recommended).** Create a Cloudflare API token with
 `Account > Cloudflare Tunnel > Edit` and `Zone > DNS > Edit` for the zone that holds the hostname
 (dash.cloudflare.com > My Profile > API Tokens > Create Token > Create Custom Token), then store it
@@ -108,12 +112,26 @@ scripts/setup-named-tunnel.py --dry-run     # shows the plan; reads no secret, c
 scripts/setup-named-tunnel.py --deploy      # creates it, installs it on DSI, redeploys the site
 ```
 
-Every step is idempotent, so a second run changes nothing. The script creates or reuses the tunnel
+Every Cloudflare step is idempotent (a second run creates and rewrites nothing that is already
+right), but each run restarts the tunnel on DSI. The script creates or reuses the tunnel
 `pegrna-dsi`, sets its ingress to `http://127.0.0.1:8093` (any other hostname gets a 404), creates
 the proxied CNAME, installs the connector token on DSI over ssh stdin (mode 600; never on a command
 line or in a log), sets `PEGRNA_PUBLIC_URL`, restarts the service and waits for
 `/api/health`. It refuses to overwrite a DNS record of another type and never deletes anything.
 Hostname defaults to `pegrna.ukdri.org`; pass `--hostname` to change it.
+
+What the first real run showed:
+
+- The account is taken from the zone's owner, so a token scoped to just a tunnel and a zone (which
+  cannot list accounts) works. Pass `--account-id` only if the zone's account cannot be read.
+- The hostname takes a few minutes to answer the first time (the connector registers and
+  Cloudflare's edge learns it); the script waits five. If it still times out, everything is
+  configured: check `ssh dsi tail ~/pegrna/cloudflared.log`, then run the deploy command it prints.
+  Do not re-run the script just to wait, since each run restarts the tunnel and the site is
+  unreachable until it is back.
+- Until the Vercel build is redeployed against the new hostname, the site shows its backend-down
+  banner. `--deploy` chains that redeploy; without it, run
+  `PEGRNA_API_BASE=https://pegrna.ukdri.org bash web/vercel/deploy.sh --prod`.
 
 **Route B: no API token.** In the Cloudflare dashboard (Zero Trust > Networks > Tunnels) create a
 tunnel, add a public hostname `pegrna.<your-domain>` pointing at `http://localhost:8093`, and copy

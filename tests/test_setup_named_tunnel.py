@@ -29,10 +29,13 @@ HOST = "pegrna.example.org"
 class FakeAPI:
     """Just enough of Cloudflare's v4 API, with state, recording every call."""
 
-    def __init__(self, *, tunnels=None, records=None, accounts=None, zones=None):
+    def __init__(
+        self, *, tunnels=None, records=None, accounts=None, zones=None, zone_account="acc1"
+    ):
         self.calls = []
         self.accounts = accounts if accounts is not None else [{"id": "acc1", "name": "Org"}]
         self.zones = zones if zones is not None else {"example.org": "zone1"}
+        self.zone_account = zone_account  # None: a zone that does not say who owns it
         self.tunnels = list(tunnels or [])
         self.records = list(records or [])
 
@@ -42,7 +45,10 @@ class FakeAPI:
             return self.accounts
         if path.startswith("/zones?name="):
             z = self.zones.get(path.split("=", 1)[1])
-            return [{"id": z}] if z else []
+            return [self._zone(z)] if z else []
+        if method == "GET" and path.startswith("/zones/") and path.count("/") == 2:
+            zid = path.rsplit("/", 1)[1]
+            return self._zone(zid) if zid in self.zones.values() else None
         if "/cfd_tunnel?name=" in path:
             return [t for t in self.tunnels if t["name"] == path.split("name=")[1].split("&")[0]]
         if method == "POST" and path.endswith("/cfd_tunnel"):
@@ -61,6 +67,12 @@ class FakeAPI:
         if method == "PATCH" and "/dns_records/" in path:
             return {}
         raise AssertionError(f"unexpected call {method} {path}")
+
+    def _zone(self, zid):
+        zone = {"id": zid}
+        if self.zone_account:
+            zone["account"] = {"id": self.zone_account, "name": "Org"}
+        return zone
 
     def writes(self):
         return [c for c in self.calls if c[0] in ("POST", "PATCH", "DELETE")]
@@ -157,23 +169,65 @@ def test_an_unknown_domain_is_explained():
         snt.provision(FakeAPI(zones={}), cfg())
 
 
-def test_a_token_that_cannot_list_accounts_is_told_to_pass_the_id():
-    class NoListing(FakeAPI):
+class NoAccountListing(FakeAPI):
+    """A token scoped to one tunnel and one zone: it can read the zone but not list accounts."""
+
+    def call(self, method, path, body=None):
+        if path.startswith("/accounts?"):
+            raise snt.SetupError("Cloudflare rejected GET /accounts: forbidden")
+        return super().call(method, path, body)
+
+
+def test_a_token_that_cannot_list_accounts_uses_the_zones_account():
+    """The first real run: this is exactly what the token could and could not do."""
+    done = snt.provision(NoAccountListing(), cfg())
+    assert done.account_id == "acc1" and done.tunnel_id == "tun1"
+
+
+def test_the_zones_account_is_used_without_listing_accounts():
+    api = FakeAPI(
+        accounts=[{"id": "a", "name": "One"}, {"id": "b", "name": "Two"}], zone_account="b"
+    )
+    assert snt.provision(api, cfg()).account_id == "b"
+    assert not [c for c in api.calls if c[1].startswith("/accounts?")], "no need to list them"
+
+
+def test_an_explicit_account_id_still_wins():
+    assert snt.provision(FakeAPI(), cfg(account_id="other")).account_id == "other"
+
+
+def test_a_given_zone_id_is_read_to_find_its_account():
+    api = FakeAPI(zones={"example.org": "zoneX"}, zone_account="accZ")
+    done = snt.provision(api, cfg(zone_id="zoneX"))
+    assert done.zone_id == "zoneX" and done.account_id == "accZ"
+    assert ("GET", "/zones/zoneX", None) in api.calls
+
+
+def test_a_zone_id_that_cannot_be_read_falls_back_to_the_account_list():
+    class NoZoneRead(FakeAPI):
         def call(self, method, path, body=None):
-            if path.startswith("/accounts?"):
-                raise snt.SetupError("Cloudflare rejected GET /accounts: forbidden")
+            if path == "/zones/zoneX":
+                raise snt.SetupError("Cloudflare rejected GET /zones/zoneX: forbidden")
             return super().call(method, path, body)
 
+    api = NoZoneRead(zones={"example.org": "zoneX"})
+    assert snt.provision(api, cfg(zone_id="zoneX")).account_id == "acc1"  # the one listed account
+
+
+def test_when_nothing_names_an_account_the_id_is_requested():
     with pytest.raises(snt.SetupError, match="--account-id"):
-        snt.provision(NoListing(), cfg())
-    assert snt.provision(NoListing(), cfg(account_id="acc1")).tunnel_id == "tun1"
+        snt.provision(NoAccountListing(zone_account=None), cfg())
+    done = snt.provision(NoAccountListing(zone_account=None), cfg(account_id="acc1"))
+    assert done.tunnel_id == "tun1"
 
 
-def test_several_accounts_require_an_explicit_choice():
-    api = FakeAPI(accounts=[{"id": "a", "name": "One"}, {"id": "b", "name": "Two"}])
+def test_several_accounts_and_an_unknown_zone_owner_require_an_explicit_choice():
+    api = FakeAPI(
+        accounts=[{"id": "a", "name": "One"}, {"id": "b", "name": "Two"}], zone_account=None
+    )
     with pytest.raises(snt.SetupError, match="--account-id"):
         snt.provision(api, cfg())
-    assert snt.provision(FakeAPI(), cfg(account_id="acc1")).account_id == "acc1"
+    assert snt.provision(FakeAPI(zone_account=None), cfg(account_id="acc1")).account_id == "acc1"
 
 
 # ---- the API client ---------------------------------------------------------------------
@@ -341,6 +395,18 @@ def test_health_gives_up_after_the_attempts():
     assert snt.wait_healthy("https://x", attempts=3, opener=opener, sleep=lambda s: None) is False
 
 
+def test_the_default_wait_covers_a_first_time_setup():
+    """The first real run needed a little over two minutes; the old default gave up at two."""
+    assert snt.HEALTH_WAIT_ATTEMPTS * snt.HEALTH_WAIT_DELAY >= 300
+
+    def opener(url, timeout=None):
+        raise urllib.error.URLError("not yet")
+
+    sleeps = []
+    assert snt.wait_healthy("https://x", opener=opener, sleep=sleeps.append) is False
+    assert sum(sleeps) >= 290, "the default must keep trying for about five minutes"
+
+
 def test_a_non_ok_status_is_not_healthy():
     opener = lambda url, timeout=None: _Health(b'{"status": "degraded"}')  # noqa: E731
     assert snt.wait_healthy("https://x", attempts=2, opener=opener, sleep=lambda s: None) is False
@@ -392,3 +458,19 @@ def test_no_install_stops_after_cloudflare(monkeypatch):
     monkeypatch.setattr(snt, "Cloudflare", lambda token: FakeAPI())
     monkeypatch.setattr(snt, "install_on_dsi", lambda *a, **k: pytest.fail("must not install"))
     assert snt.main(["--hostname", HOST, "--no-install"]) == 0
+
+
+def test_a_health_timeout_says_what_is_already_done_and_what_to_do_next(monkeypatch, capsys):
+    """Nothing is wrong when the URL is slow to answer, and re-running restarts the tunnel again,
+    so the message must say so instead of telling the user to re-run."""
+    monkeypatch.setattr(snt, "read_token", lambda *a, **k: API_TOKEN)
+    monkeypatch.setattr(snt, "Cloudflare", lambda token: FakeAPI())
+    monkeypatch.setattr(snt, "install_on_dsi", lambda *a, **k: None)
+    monkeypatch.setattr(snt, "wait_healthy", lambda *a, **k: False)
+    assert snt.main(["--hostname", HOST, "--deploy"]) == 1
+    err = capsys.readouterr().err
+    assert "ARE configured" in err and "cloudflared.log" in err
+    assert f"PEGRNA_API_BASE=https://{HOST} bash web/vercel/deploy.sh --prod" in err
+    assert "Do not re-run" in err
+    for secret in (API_TOKEN, CONNECTOR):
+        assert secret not in err
