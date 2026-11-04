@@ -89,30 +89,34 @@ for both strands, defined here and tested independently of `enumerate_nick_sites
   layout `Spacer · Scaffold · RTT · PBS · tail`, which is not tj-PE's (there is no rcPBS2; the second strand is
   captured by the donor).
 - **Cargo rule.** `len(cargo) >= 2 * F`. Below that the flaps overlap each other, and the designer refuses and
-  says to use `design-recoded`. It also guarantees each flap stays within its own arm plus the cargo, which is
-  what makes the two sides independent.
+  says to use `design-recoded`. It also guarantees each flap stays within its own arm plus the cargo.
 
 ### 4.2 The walk: `hpc/recoded_pa_workflow.py`
 
-Two half-designs and a pairing, because guide A's pegRNA depends only on `(n1, S, cargo)` and guide B's only on
-`(n2, S, cargo)`. The expensive gates therefore run per guide, not per pair, and each pegRNA is docked at most
-once.
+A ranked walk over guide pairs. The sides are nearly independent, since guide A's pegRNA depends on `(n1, S,
+cargo)` and guide B's on `(n2, S, cargo)`, but not quite: a guide's PAM can lie inside the *other* guide's arm
+(in the CTCF best pair, B's PAM is inside arm5), so breaking it is a pair-level edit to the donor. What keeps the
+expensive models cheap is therefore not independence but **memoization: every per-pegRNA gate is cached by the
+pegRNA's sequence**, so a pegRNA that appears in many pairs is folded and docked at most once, and a pair whose
+edit does not touch a flap re-uses its neighbour's verdicts.
 
-1. **Enumerate** guides for each side; drop those failing `guide_sanity` (TTTT, GC) and the off-target screen
-   (cas-offinder, batched for both sides in one call, tolerance 0 and exact duplicates never tolerated: ADR 0025).
-2. **Per guide, cheap first.** Build the arm. Choose the flap length `F` by scanning 30 to 50 outward from 35
-   (35, 36, 34, 37, ...): the first `F` whose RTT has no TTTT (a Pol III terminator) and whose first base is not
-   C (it pairs with the scaffold); failing that, the first `F` with no TTTT; failing that, the guide is rejected.
-   For each PBS length make the pegRNA, and compute the genomic run under the flap.
-3. **Per guide, models.** ViennaRNA folding (cross-region pairs at p >= 0.99, ADR 0024) with the scaffold-pairing
-   advisory (ADR 0026), then Boltz-2 docking against the length-matched reference. A PA pegRNA is at most 166 nt
-   (20 + 76 + 50 + 17 + 3), always inside the calibrated 96 to 232 nt, so docking is always a verdict.
-4. **Pair** the survivors in rank order and check the pair rules: span, S inside, PAM footprints, and that the two
+1. **Enumerate** guides on both strands; drop those failing `guide_sanity` (TTTT, GC) and the off-target screen
+   (cas-offinder, batched for all guides in one call, tolerance 0 and exact duplicates never tolerated: ADR 0025).
+2. **Pair and rank** (below). For each pair, in order:
+3. **Cheap, deterministic, per pair.** Build the two arms (coding runs recoded, non-coding byte-exact), break the
+   PAMs where a synonymous change exists, assemble the donor and the product, assert INV-0, and check that the two
    donor ends share no run longer than `max_run` (`longest_common_run(donor[:F], donor[-F:])`; if they did, the
    two flaps could pair with each other instead of with the donor).
-5. **On the product, once per pair:** `assert_inv0`, SpliceAI, MaxEnt cryptic-splice, and the AlphaFold importance
-   check on the recoded residues, all reused unchanged.
-6. **First pair that passes everything wins.** The result also carries the next few pairs.
+4. **Per guide, choose the extension.** Scan the flap length `F` from 30 to 50 outward from 35 (35, 36, 34, 37,
+   ...): the first `F` whose RTT and PBS have no TTTT (a Pol III terminator) and whose RTT does not start with C
+   (it pairs with the scaffold); failing that, the first `F` with no TTTT; failing that, the pair is rejected. Then
+   for each PBS length make the pegRNA.
+5. **Models on the product, once per pair:** MaxEnt cryptic-splice, SpliceAI, and the AlphaFold importance check
+   at S (computed once and reused), all unchanged.
+6. **Models per pegRNA, memoized:** ViennaRNA folding (cross-region pairs at p >= 0.99, ADR 0024) with the
+   scaffold-pairing advisory (ADR 0026), then Boltz-2 docking against the length-matched reference. A PA pegRNA is
+   at most 166 nt (20 + 76 + 50 + 17 + 3), always inside the calibrated 96 to 232 nt, so docking is a verdict.
+7. **First pair that passes everything wins**, after `simulate_pa` has confirmed the ordered sequences.
 
 **Ranking** (a heuristic, as there is no wet-lab data for PA here): fewest applicable advisories; then the
 smaller combined genomic run under the two flaps; then fewer restored base pairs (`arm5 + arm3`); then the higher
@@ -137,7 +141,7 @@ It is a self-consistency check, not an experimental proof of the strand logic (A
 
 - **Result** (`RecodedPAResult`): both spacers, PBS and RTT, both pegRNAs, `F` per side, the donor with a part
   map (`arm5`, `cargo`, `arm3`, the two flap-matching ends), the product, the cuts, gate results, warnings,
-  candidates tried, and the next pairs.
+  candidates tried, and the number of pairs considered.
 - **Order sheet:** pegRNA A, pegRNA B and the donor, 5'→3', and the paper's notes on preparing the donor
   (dsDNA PCR, or a 3'-overhang version; AZD-7648; PE6c), worded as one locus in HEK293T.
 - **Standing caveat on every result:** a restoring donor is this project's extension of the published method.
@@ -177,7 +181,7 @@ It is a self-consistency check, not an experimental proof of the strand logic (A
   inside; arms, donor, flap, RTT and PBS derivations; the product equals the intended allele.
 - **Simulator** (`tests/test_pa_simulator.py`): the property test and the mutation tests of §2, acceptance 2.
 - **Workflow** (`tests/test_recoded_pa_workflow.py`, fake scorers): each gate rejects with a diagnostic; each
-  pegRNA is docked once (memoization); changing guide B's candidates does not re-run guide A's models; the
+  pegRNA is docked at most once however many pairs contain it (memoization by sequence); the
   minimum-cargo refusal; **identical output across `PYTHONHASHSEED` values in subprocesses** (this also pins #30).
 - **CLI and report:** files, content, the standing caveat.
 - **Real models:** `scripts/analysis` acceptance run on DSI (acceptance 1), then the browser test at stage 3.
