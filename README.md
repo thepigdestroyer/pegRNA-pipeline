@@ -75,10 +75,12 @@ pool fails loud).
 Authoritative pegRNA structure (5'→3'):
 
 ```
-Spacer · Scaffold · PBS2 · RTT(Insert + Deletion-Replacement-Arm) · PBS1 · PolyU(2-3 U)
+Spacer · Scaffold · rcPBS2 · RTT(Insert + Deletion-Replacement-Arm) · PBS1 · PolyU(2-3 U)
 ```
 
-(PBS2 occupies the homology-arm slot; PolyU is the La/PE7 3' tail.)
+(rcPBS2, the reverse complement of PBS2, sits 5' of the RTT; PBS2 itself is synthesised onto the new
+flap and captures the strand the ngRNA nicked. PolyU is the La/PE7 3' tail.
+[docs/STRUCTURE.md](docs/STRUCTURE.md) draws the whole structure, with numbers from a real run.)
 
 **Gate stack:** INV-0 (≤2 silent PAM edits + non-coding `locked_span` byte-exact)
 · splice (SpliceAI/Pangolin) · AlphaFold structural importance · RiNALMo 2D

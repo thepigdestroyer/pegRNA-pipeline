@@ -113,19 +113,24 @@ This section took the most iteration to get right and is the most common source 
 silent, catastrophic bugs. It is **LOCKED** (Decision B1 and the strand
 convention). See ADR `0004-pegrna-architecture-and-strand-convention.md`.
 
+> **Superseded in part (ADR 0014, 2026-07-02).** Where this section puts PBS2 on the pegRNA,
+> read **rcPBS2 = RC(PBS2), 5' of the RTT**. [STRUCTURE.md](STRUCTURE.md) is the current,
+> checked statement of the structure, including what is lost between the nicks and how the
+> Replacement Arm restores it.
+
 ### 3.1 Authoritative pegRNA structure
 
 A TJ-pegRNA, written **5'→3'**, is:
 
 ```
-Spacer · Scaffold · PBS2 · RTT · PBS1 · PolyU
+Spacer · Scaffold · rcPBS2 · RTT · PBS1 · PolyU
 ```
 
 | Segment   | Role                                                                                   |
 |-----------|----------------------------------------------------------------------------------------|
 | Spacer    | Targets and nicks at site `S`. **Fixed** by `S`; never enumerated.                     |
 | Scaffold  | Standard sgRNA scaffold (`STANDARD_SGRNA_SCAFFOLD`). Binds nCas9.                       |
-| PBS2      | Occupies the homology-arm slot. The captured-strand window 5' of the **ngRNA** nick.   |
+| rcPBS2    | Reverse complement of PBS2, 5' of the RTT (right after the scaffold). PBS2 itself is synthesised onto the new flap and captures the strand the **ngRNA** exposes. |
 | RTT       | Reverse-transcription template: the templated flap (cargo + recoded/locked arm).       |
 | PBS1      | Primer-binding site for the pegRNA's own nick: primes off the 3'-OH the spacer creates.|
 | PolyU     | 2-3 U 3' tail (La/PE7 motif) that protects the extension.                              |
@@ -133,11 +138,11 @@ Spacer · Scaffold · PBS2 · RTT · PBS1 · PolyU
 Assembled by `assemble_tj_pegrna_v2(spacer, pbs2, rtt, pbs1, polyu, scaffold)` in
 `tjpe_workflow.py`. PolyU defaults to `"UUU"`.
 
-**Why PBS2 is in the homology-arm slot and not where intuition puts it:** TJ-PE
-template-jumps. The pegRNA first primes its own nick (PBS1), reverse-transcribes
-the RTT, then the new 3' flap must anneal to the second (ngRNA) nick. PBS2 is the
-sequence that captures that second strand. Putting it before the RTT in the 5'→3'
-layout is what makes the jump work.
+**Why rcPBS2 is 5' of the RTT and not where intuition puts it:** TJ-PE
+template-jumps. The pegRNA first primes its own nick (PBS1) and reverse-transcribes
+the RTT, and the RT then copies rcPBS2 last, so PBS2 = RC(rcPBS2) ends the new 3' flap
+and captures the second (ngRNA-nicked) strand. Putting rcPBS2 before the RTT in the
+5'→3' layout is what makes the jump work: nothing 3' of PBS1 is ever copied.
 
 ### 3.2 Strand convention (the bookkeeping that bites)
 
@@ -147,7 +152,7 @@ layout is what makes the jump work.
   conflating them is the #1 latent bug class here.
 - The **RTT tail** on the pegRNA is the **reverse complement of the sense flap**
   for a reverse-targeting pegRNA (`orient_rtt_tail`).
-- **PBS2** is the **literal/identity** copy of the captured strand for a
+- **(Superseded by ADR 0014: the pegRNA carries rcPBS2 = RC(PBS2).)** PBS2 was the **literal/identity** copy of the captured strand for a
   reverse-targeting pegRNA, not its reverse complement (`orient_pbs2`). This is the
   "complement of a complement collapses to identity" reasoning. Two independent
   reviewers proposed RC here; it was deliberately kept as identity-for-Rv. See
@@ -204,7 +209,7 @@ Then for each (nick × variant), in this exact order:
 6. **Assemble the edit** (`_assemble_edit`): cargo always at `S`; arm on the chosen
    side; produce the sense flap and the predicted edited allele.
 7. **Orient** the RTT tail and PBS2 per strand.
- 8. **PBS2 selection + gate** (`_select_pbs2` + `passes_pbs2_gate`): PBS2 is the
+ 8. **PBS2 selection + gate** (`_select_rcpbs2` + `passes_rcpbs2_gate`): PBS2 is the
     captured window 5' of the ngRNA nick, so its sequence is genome-fixed and only its
     **length** is free. Its length is **scanned per-nick (10-18 nt)** to hit the Tm
     band [37,42] °C (GC 40-70%, non-repetitive), picking the length whose Tm is closest

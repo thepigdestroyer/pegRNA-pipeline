@@ -1,7 +1,9 @@
 # 0004. pegRNA architecture and strand convention
 
 Date: 2026-06-18
-Status: Accepted
+Status: Accepted. The PBS2 clause ("PBS2 occupies the homology-arm slot", identity copy for a
+reverse-strand pegRNA) was superseded by ADR 0014: the pegRNA carries rcPBS2 = RC(PBS2), 5' of the RTT.
+See `docs/STRUCTURE.md`.
 
 ## Context
 
