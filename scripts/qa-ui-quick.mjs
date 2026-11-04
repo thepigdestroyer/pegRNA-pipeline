@@ -34,10 +34,16 @@ const fail = (m) => {
 };
 const ok = (m) => console.log(`  PASS  ${m}`);
 
-/** Open the app with an OS colour scheme, and optionally a previously saved theme choice. */
-async function openApp({ os, saved }) {
+/**
+ * Open the app with an OS colour scheme, optionally a previously saved theme choice, and
+ * optionally other localStorage entries a returning visitor's browser might hold.
+ */
+async function openApp({ os, saved, storage = {} }) {
   const ctx = await browser.newContext({ colorScheme: os, viewport: { width: 1280, height: 900 } });
   if (saved) await ctx.addInitScript((t) => localStorage.setItem("pegrna.theme", t), saved);
+  await ctx.addInitScript((kv) => {
+    for (const [k, v] of Object.entries(kv)) localStorage.setItem(k, v);
+  }, storage);
   const page = await ctx.newPage();
   page.on("pageerror", (e) => errors.push(`pageerror: ${e.message}`));
   page.on("console", (m) => m.type() === "error" && errors.push(`console: ${m.text()}`));
@@ -129,6 +135,67 @@ for (const os of THEMES) {
   offBack.length === 0
     ? ok(`OS ${os}: toggling back restores ${os}`)
     : fail(`OS ${os}: toggling back leaves these parts behind: ${offBack.join(", ")}`);
+  await ctx.close();
+}
+
+// ------------------------------------------------------------------------------------------
+// OPEN ACCESS. Nothing asks for a token. A returning visitor whose browser still holds the
+// token the old UI stored must have it cleared, and it must never be sent.
+console.log(`\nOPEN ACCESS  (${SITE})`);
+{
+  const STALE = "pegrna.accessToken";
+  const { ctx, page } = await openApp({ os: "light", storage: { [STALE]: "stale-token-from-the-old-ui" } });
+
+  // The modes list arrives from the server after the first paint, so wait for it.
+  const offered = await page
+    .waitForSelector('#mode option[value="api"]', { state: "attached", timeout: 15000 })
+    .then(() => true, () => false);
+  offered ? ok("real models are offered") : fail("real models are not offered");
+  await page.selectOption("#mode", "api");
+  await page.waitForTimeout(600);
+
+  (await page.locator("#access-token, input[type=password]").count()) === 0
+    ? ok("no token field in real-models mode")
+    : fail("a token field is shown in real-models mode");
+  const words = (await page.locator("body").innerText()).match(/access token|needs a token|required for real models/i);
+  words ? fail(`the page still talks about a token: "${words[0]}"`) : ok("the page never mentions an access token");
+  (await page.locator("text=Runs the real models").count()) > 0
+    ? ok("real-models mode explains what it does, with no condition")
+    : fail("real-models mode has no plain explanation");
+  (await page.evaluate((k) => localStorage.getItem(k), STALE)) === null
+    ? ok("a token left in the browser by the old UI is cleared")
+    : fail("a stale token is still stored in the browser");
+
+  // Run a design in real-models mode with the request answered by a stub, so nothing real runs.
+  let sent = null;
+  const answered = new Promise((resolve) => {
+    page.route("**/api/design/stream", async (route) => {
+      sent = route.request();
+      resolve();
+      await route.fulfill({
+        status: 200,
+        contentType: "application/x-ndjson",
+        headers: { "access-control-allow-origin": "*", "access-control-allow-headers": "*" },
+        body:
+          JSON.stringify({ type: "result", ok: false, run_id: "ui-check", mode: "api", returncode: 1,
+            error: "answered by the UI check", stderr: "", report: "", components: [], has_csv: false,
+            docking_stub: false, gates: {}, het_edit: null }) + "\n",
+      });
+    });
+  });
+  await page.getByRole("button", { name: "Load example for real models" }).click();
+  await page.waitForFunction(() => document.querySelector("#genome")?.value?.length > 100, { timeout: 30000 });
+  await page.selectOption("#mode", "api");
+  await page.getByRole("button", { name: "Design pegRNA" }).click();
+  await Promise.race([answered, page.waitForTimeout(15000)]);
+  if (!sent) {
+    fail("the real-models design request was never sent");
+  } else {
+    sent.postDataJSON().mode === "api" ? ok("the request is a real-models design") : fail("the request was not api mode");
+    Object.keys(sent.headers()).some((h) => h.toLowerCase() === "x-access-token")
+      ? fail("the design request carries an access token")
+      : ok("the design request carries no token");
+  }
   await ctx.close();
 }
 

@@ -22,7 +22,7 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -111,16 +111,9 @@ RUN_TIMEOUT = int(os.environ.get("PEGRNA_TIMEOUT", "1800"))
 # stay comfortably under the shortest idle timeout between here and the browser
 # (a Cloudflare Tunnel is ~100 s).
 STREAM_HEARTBEAT_SECONDS = int(os.environ.get("PEGRNA_HEARTBEAT_SECONDS", "15"))
-# Optional shared-secret gate. Empty => open (anyone can design); set it to
-# require an `X-Access-Token` header (or `?token=`) on the design endpoints.
-ACCESS_TOKEN = os.environ.get("PEGRNA_ACCESS_TOKEN", "")
-# Token required for `api` mode ONLY, leaving `fake` open to everyone.
-# A public deployment wants both: anyone may try the tool, but only known users
-# may spend NVIDIA credits and occupy the box for ~15 minutes a run. Gating the
-# whole site instead would make it useless as a public demo, and embedding a
-# site-wide token in the frontend bundle protects nothing.
-API_MODE_TOKEN = os.environ.get("PEGRNA_API_MODE_TOKEN", "")
-
+# There is no access token: the designer is open to everyone, in both modes. What protects the
+# shared box and the NVIDIA credits is the cap on simultaneous designs (429 when full), the
+# thread and priority limits, and the run timeout, all above.
 _SLOTS = threading.BoundedSemaphore(MAX_CONCURRENCY)
 
 
@@ -130,34 +123,6 @@ def _nvidia_key() -> str:
     if NVIDIA_KEY_FILE.exists():
         return NVIDIA_KEY_FILE.read_text().strip()
     return ""
-
-
-def _check_token(request: Request) -> None:
-    """401 unless the configured access token matches (no-op when unset)."""
-    if not ACCESS_TOKEN:
-        return
-    supplied = request.headers.get("X-Access-Token") or request.query_params.get("token") or ""
-    if supplied != ACCESS_TOKEN:
-        raise HTTPException(401, "missing or invalid access token")
-
-
-def _supplied_token(request: Request) -> str:
-    return request.headers.get("X-Access-Token") or request.query_params.get("token") or ""
-
-
-def _check_api_mode_token(request: Request, mode: str) -> None:
-    """401 unless an `api`-mode request carries the token (no-op when unset).
-
-    `fake` mode is always allowed: it is free, instant, and the thing a visitor
-    should be able to try without asking anyone.
-    """
-    if mode != "api" or not API_MODE_TOKEN:
-        return
-    if _supplied_token(request) != API_MODE_TOKEN:
-        raise HTTPException(
-            401,
-            "Running the real models needs an access token. Dry-run (fake) mode is open to all.",
-        )
 
 
 def _validate(req: "DesignRequest") -> None:
@@ -216,7 +181,7 @@ if _origins:
         allow_origins=_origins,
         allow_credentials=False,
         allow_methods=["GET", "POST", "OPTIONS"],
-        allow_headers=["Content-Type", "X-Access-Token"],
+        allow_headers=["Content-Type"],
     )
 
 
@@ -236,8 +201,6 @@ def health() -> dict[str, Any]:
         "api_python": api_py,
         "api_python_ok": Path(api_py).exists(),
         "nvidia_key": bool(_nvidia_key()),
-        "access_token_required": bool(ACCESS_TOKEN),
-        "api_mode_token_required": bool(API_MODE_TOKEN),
         "concurrency": {"limit": MAX_CONCURRENCY},
     }
 
@@ -394,9 +357,7 @@ def motifs() -> JSONResponse:
 
 
 @app.post("/api/design")
-def design(req: DesignRequest, request: Request) -> JSONResponse:
-    _check_token(request)
-    _check_api_mode_token(request, req.mode)
+def design(req: DesignRequest) -> JSONResponse:
     _validate(req)
     with _Slot():
         run_id = time.strftime("%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex[:6]
@@ -461,12 +422,10 @@ def design(req: DesignRequest, request: Request) -> JSONResponse:
 
 
 @app.post("/api/design/stream")
-def design_stream(req: DesignRequest, request: Request) -> StreamingResponse:
+def design_stream(req: DesignRequest) -> StreamingResponse:
     """Run the pipeline and stream per-gate progress as NDJSON, then a final
     `{"type":"result", ...}` line. Progress lines are `{cand,gate,info,passed}`
     emitted by the CLI's --progress hook as each gate is evaluated."""
-    _check_token(request)
-    _check_api_mode_token(request, req.mode)
     _validate(req)
     # Acquire a slot up front so an over-capacity request is rejected (429)
     # before any work starts; the generator releases it in a finally.

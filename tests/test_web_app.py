@@ -2,7 +2,7 @@
 
 The web app wraps the ``pegrna design-recoded`` CLI as a subprocess. These tests
 never launch the real pipeline: they monkeypatch the subprocess boundary and
-exercise the HTTP contract (health, validation, concurrency cap, access token,
+exercise the HTTP contract (health, validation, concurrency cap, open access,
 timeout handling, path-traversal guard, run retention).
 
 Skipped automatically where FastAPI/starlette's TestClient isn't installed (so a
@@ -32,7 +32,6 @@ def app_module(monkeypatch, tmp_path):
     """Import web/app.py fresh with a sandboxed RUNS dir and this repo as PEGRNA_REPO."""
     monkeypatch.setenv("PEGRNA_REPO", str(REPO_ROOT))
     monkeypatch.setenv("PEGRNA_RUNS_DIR", str(tmp_path / "runs"))
-    monkeypatch.delenv("PEGRNA_ACCESS_TOKEN", raising=False)
     monkeypatch.delenv("NVIDIA_API_KEY", raising=False)
     monkeypatch.setenv("NVIDIA_KEY_FILE", str(tmp_path / "no.key"))
     if str(WEB_DIR) not in sys.path:
@@ -144,22 +143,34 @@ def test_concurrency_returns_429_when_full(client, app_module, monkeypatch):
         app_module._SLOTS.release()
 
 
-# ---------------------------------------------------------------- access token
-def test_access_token_enforced_when_set(client, app_module, monkeypatch):
-    monkeypatch.setattr(app_module, "ACCESS_TOKEN", "secret")
+# ---------------------------------------------------------------- open access
+@pytest.mark.parametrize("endpoint", ["/api/design", "/api/design/stream"])
+@pytest.mark.parametrize(
+    "env_name,mode",
+    [
+        ("PEGRNA_ACCESS_TOKEN", "fake"),
+        ("PEGRNA_ACCESS_TOKEN", "api"),
+        ("PEGRNA_API_MODE_TOKEN", "api"),
+    ],
+)
+def test_design_is_open_to_everyone_whatever_the_environment_holds(
+    app_module, monkeypatch, endpoint, env_name, mode
+):
+    """The designer asks nobody for a token. These two variables were its old access controls;
+    a deployment that still sets one must not lock anyone out."""
+    monkeypatch.setenv(env_name, "secret")
+    importlib.reload(app_module)  # the module reads its settings at import
     monkeypatch.setattr(app_module.subprocess, "run", _fake_run_factory(rc=0))
-    # missing token -> 401
-    assert (
-        client.post("/api/design", json={"config": {"genome": "ACGT"}, "mode": "fake"}).status_code
-        == 401
+
+    def _not_launched(*_args, **_kwargs):
+        raise OSError("the pipeline is not launched in tests")
+
+    # The stream endpoint reports a failed launch inside the stream, so this stays a 200.
+    monkeypatch.setattr(app_module.subprocess, "Popen", _not_launched)
+    r = TestClient(app_module.app).post(
+        endpoint, json={"config": {"genome": "ACGT"}, "mode": mode}
     )
-    # correct token -> allowed
-    r = client.post(
-        "/api/design",
-        json={"config": {"genome": "ACGT"}, "mode": "fake"},
-        headers={"X-Access-Token": "secret"},
-    )
-    assert r.status_code == 200
+    assert r.status_code == 200, r.text
 
 
 # ---------------------------------------------------------------- path guard

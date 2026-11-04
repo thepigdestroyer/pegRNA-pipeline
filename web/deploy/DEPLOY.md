@@ -65,15 +65,14 @@ curl -s http://127.0.0.1:8092/api/health            # local
 | restart | `systemctl --user restart pegrna-web` |
 | update code | `git -C $PEGRNA_ROOT/prime-editing pull && systemctl --user restart pegrna-web` |
 | funnel status/stop | `web/deploy/funnel.sh status` / `... down` |
-| require a token | set `PEGRNA_ACCESS_TOKEN=...` in `~/.config/pegrna/pegrna.env`, restart |
 
 ## Config knobs (`~/.config/pegrna/pegrna.env`)
 
 `PEGRNA_REPO`, `PEGRNA_WEB_PYTHON`, `PEGRNA_API_PYTHON`, `PRIDICT2_DIR`,
 `PRIDICT2_PYTHON`, `PRIDICT2_CORES`, `PEGRNA_RUNS_DIR`, `PEGRNA_KEEP_RUNS`,
 `PEGRNA_PORT`, `NVIDIA_KEY_FILE`, `PEGRNA_MAX_CONCURRENCY`, `PEGRNA_TIMEOUT`,
-`PEGRNA_MAX_CONFIG_BYTES`, `PEGRNA_MAX_GENOME_LEN`, `PEGRNA_ACCESS_TOKEN`.
-See `pegrna.env` for defaults.
+`PEGRNA_MAX_CONFIG_BYTES`, `PEGRNA_MAX_GENOME_LEN`.
+See `pegrna.env` for defaults. There is no access token: the designer is open to everyone.
 
 ## Why this shape
 

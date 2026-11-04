@@ -30,7 +30,7 @@ three `/mnt` volumes are root-owned. Everything is under `$HOME`:
 | `~/pegrna/PRIDICT2/` | PRIDICT2 + trained weights |
 | `~/pegrna/genomes/hg38.2bit` | off-target genome (835 MB) |
 | `~/pegrna/runs/` | per-run outputs, pruned to `PEGRNA_KEEP_RUNS` |
-| `~/.config/pegrna/pegrna.env` | all configuration, **including the api-mode token**: mode 600 (the directory 700; the audit checks) |
+| `~/.config/pegrna/pegrna.env` | all configuration: mode 600 (the directory 700; the audit checks) |
 | `~/.config/pegrna/nvidia.key` | Boltz-2 key, mode 600 |
 
 **Port 8093**, because `8092` is `jmoore3`'s separate instance. Do not take 8092.
@@ -49,17 +49,18 @@ curl -s localhost:8093/api/health | python3 -m json.tool
 
 ## Access control
 
-`api` mode costs NVIDIA credits and occupies the box for ~15 minutes, so it is
-token-gated. `fake` mode is open to everyone, so the site still works as a
-public demo.
+There is none, by design: the designer is open to everyone, in both modes, with no token.
+`api` mode spends NVIDIA credits and occupies the box for ~15 minutes a run, so the cost is
+limited by caps rather than a gate:
 
-```
-PEGRNA_API_MODE_TOKEN=<token>     # required for api mode only
-PEGRNA_ACCESS_TOKEN=              # unset: would gate the entire site
-```
+- `PEGRNA_MAX_CONCURRENCY` (default 2): a further design gets a 429 until a slot frees.
+- `PEGRNA_TIMEOUT` (1800 s) ends a run that goes on too long.
+- `PEGRNA_MAX_CONFIG_BYTES` and `PEGRNA_MAX_GENOME_LEN` refuse oversized input.
+- The thread and priority limits under "Resource limits" below.
 
-The UI asks for the token only when `/api/health` reports
-`api_mode_token_required: true`, and remembers it in `localStorage`.
+If the site is ever abused, lower `PEGRNA_MAX_CONCURRENCY` and restart `pegrna-web`, or stop
+it. `scripts/audit-production.sh` checks that nothing is gating the endpoints and that no
+retired token is left in `pegrna.env`.
 
 ## The tunnel: named (permanent) or quick (fallback)
 

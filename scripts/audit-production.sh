@@ -27,8 +27,8 @@ chk "api python resolves"           "ssh dsi 'curl -s localhost:8093/api/health 
 chk "genome staged for off-target"  "ssh dsi 'test -s ~/pegrna/genomes/hg38.2bit'"
 chk "cas-offinder installed"        "ssh dsi 'test -x ~/pegrna/envs/pegrna-real/bin/cas-offinder'"
 chk "PRIDICT2 env present"          "ssh dsi 'test -x ~/pegrna/envs/pridict2/bin/python'"
-# The host is shared and its home directories are group-readable. pegrna.env holds the api-mode
-# token (it gates paid model runs), so it is a secret like the NVIDIA key and the tunnel token.
+# The host is shared and its home directories are group-readable, so everything in the config
+# directory (the NVIDIA key, the tunnel token) is a secret and must be private.
 chk "secrets private (config dir 700, every file in it 600)" "ssh dsi 'test \$(stat -c %a ~/.config/pegrna) = 700 && ! find ~/.config/pegrna -type f ! -perm 600 | grep -q .'"
 chk "jmoore3 instance untouched"    "ssh dsi 'curl -s --max-time 10 localhost:8092/api/health | grep -q jmoore3'"
 chk "disk under 90%"                "ssh dsi '[ \$(df --output=pcent / | tail -1 | tr -dc 0-9) -lt 90 ]'"
@@ -57,8 +57,21 @@ print(len(s.stub_gates))"' 2>/dev/null | tr -d '[:space:]')
 if [ "$STUBS" = "0" ]; then ok "every gate is a real model (stub_gates empty)"; else bad "stub_gates has $STUBS entries"; fi
 
 echo
-echo "ACCESS CONTROL"
-chk "api mode requires a token"     "[ \$(curl -s -o /dev/null -w '%{http_code}' --max-time 30 -X POST $URL/api/design -H 'Content-Type: application/json' -d '{\"mode\":\"api\",\"config\":{}}') = 401 ]"
+echo "OPEN ACCESS (no token, by design)"
+# A request that fails validation is answered 400 before any work starts. Sent in api mode, that
+# shows nothing in front of validation asks for a token (a gate would answer 401 first). The
+# genome is one base over the limit this box is configured with, so no pipeline is launched.
+api_open_probe() {
+  ssh dsi bash -s <<'REMOTE'
+L=$(grep '^PEGRNA_MAX_GENOME_LEN=' ~/.config/pegrna/pegrna.env | cut -d= -f2); L=${L:-50000}
+python3 - "$L" <<'PY' | curl -s -o /dev/null -w '%{http_code}' --max-time 30 -X POST localhost:8093/api/design -H 'Content-Type: application/json' -d @-
+import json, sys
+print(json.dumps({"mode": "api", "config": {"genome": "A" * (int(sys.argv[1]) + 1)}}))
+PY
+REMOTE
+}
+chk "api mode needs no token (a refused request is 400, not 401)" '[ "$(api_open_probe)" = 400 ]'
+chk "no retired token left in pegrna.env" "ssh dsi '! grep -q -E \"^PEGRNA_(ACCESS|API_MODE)_TOKEN=.\" ~/.config/pegrna/pegrna.env'"
 chk "fake mode stays open"          "[ \$(curl -s -o /dev/null -w '%{http_code}' --max-time 60 -X POST $URL/api/design -H 'Content-Type: application/json' -d '{\"mode\":\"fake\",\"config\":{\"genome\":\"ACGT\",\"site_s\":2,\"cargo\":\"ACG\",\"rtt_aa\":\"L\",\"cds_mask\":[true,true,false,false]}}') = 200 ]"
 
 echo

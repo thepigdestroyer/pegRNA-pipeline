@@ -23,24 +23,12 @@ export function apiURL(path: string): string {
   return `${API_BASE}${path}`;
 }
 
-const TOKEN_KEY = "pegrna.accessToken";
-
-/** The access token for `api` mode, kept in localStorage between visits. */
-export function getToken(): string {
-  try {
-    return localStorage.getItem(TOKEN_KEY) ?? "";
-  } catch {
-    return "";
-  }
-}
-
-export function setToken(value: string): void {
-  try {
-    if (value) localStorage.setItem(TOKEN_KEY, value);
-    else localStorage.removeItem(TOKEN_KEY);
-  } catch {
-    /* private browsing can block storage; the token still works for this run */
-  }
+// Nothing asks for an access token any more. Earlier versions kept one in localStorage; clear
+// any copy a returning visitor's browser still holds rather than leave a secret lying around.
+try {
+  localStorage.removeItem("pegrna.accessToken");
+} catch {
+  /* storage can be blocked (private browsing); there is nothing to clear then */
 }
 
 /** Human-readable text for the guard responses web/app.py can return. */
@@ -48,8 +36,6 @@ export function statusMessage(code: number): string {
   switch (code) {
     case 429:
       return "The server is already running its maximum number of designs. Try again in a moment.";
-    case 401:
-      return "This deployment needs an access token, and the one supplied was missing or wrong.";
     case 413:
       return "That configuration is too large for the server to accept.";
     case 400:
@@ -109,10 +95,7 @@ export async function streamDesign(
   try {
     r = await fetch(apiURL("/api/design/stream"), {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        ...(getToken() ? { "X-Access-Token": getToken() } : {}),
-      },
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ config, mode }),
       signal,
     });

@@ -10,31 +10,12 @@
  *
  *   node scripts/qa-browser.mjs
  *
- * Needs the api-mode token: macOS keychain item `pegrna-api-mode-token`, or the
- * PEGRNA_API_MODE_TOKEN environment variable.
+ * The designer is open to everyone, so this needs no credentials. (The quick checks that
+ * need no real run are in scripts/qa-ui-quick.mjs.)
  */
 import { chromium } from "playwright";
-import { execSync } from "child_process";
 
 const SITE = "https://pegrna-designer.vercel.app";
-// The api-mode token lives in the macOS keychain (service: pegrna-api-mode-token), never in
-// a file in the repo. PEGRNA_API_MODE_TOKEN overrides it, for CI or non-macOS hosts.
-function loadToken() {
-  if (process.env.PEGRNA_API_MODE_TOKEN) return process.env.PEGRNA_API_MODE_TOKEN;
-  try {
-    return execSync("security find-generic-password -s pegrna-api-mode-token -w", {
-      stdio: ["ignore", "pipe", "ignore"],
-    })
-      .toString()
-      .trim();
-  } catch {
-    throw new Error(
-      "No api-mode token: set PEGRNA_API_MODE_TOKEN, or store one with\n" +
-        "  security add-generic-password -a $USER -s pegrna-api-mode-token -w <token>",
-    );
-  }
-}
-const TOKEN = loadToken();
 
 const browser = await chromium.launch();
 const ctx = await browser.newContext({ viewport: { width: 1440, height: 1050 } });
@@ -74,11 +55,12 @@ await page.waitForSelector("text=/Design found|No design/", { timeout: 180000 })
 const segs = await page.locator("[aria-label='pegRNA parts, to scale'] button").count();
 segs === 7 ? ok(`construct map renders (${segs} parts)`) : fail(`map had ${segs} parts`);
 
-console.log("\nREAL MODELS (token-gated)");
+console.log("\nREAL MODELS (open to everyone)");
 await page.selectOption("#mode", "api");
 await page.waitForTimeout(600);
-(await page.locator("#access-token").isVisible()) ? ok("token required in api mode") : fail("no token field");
-await page.fill("#access-token", TOKEN);
+(await page.locator("#access-token").count()) === 0
+  ? ok("no token asked for in api mode")
+  : fail("a token field is shown in api mode");
 
 await page.getByRole("button", { name: "Load example for real models" }).click();
 await page.waitForTimeout(1500);

@@ -33,9 +33,6 @@ export interface Health {
   repo_ok: boolean;
   api_python_ok: boolean;
   nvidia_key: boolean;
-  access_token_required: boolean;
-  /** True when `api` mode (which costs money) needs a token; `fake` stays open. */
-  api_mode_token_required?: boolean;
   concurrency: { limit: number };
 }
 
