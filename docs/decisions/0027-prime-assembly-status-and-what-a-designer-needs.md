@@ -1,7 +1,8 @@
 # 0027. Prime Assembly: why the prototype cannot work on real data, and what a designer needs
 
 Date: 2026-11-03
-Status: Accepted as a finding. The implementation decision it leads to is open (issue #29).
+Status: Accepted as a finding. The decision it asked for was made on 2026-11-04: option **A+**, below.
+Design: `docs/superpowers/specs/2026-11-04-prime-assembly-design.md`; structure: `docs/STRUCTURE.md`.
 
 ## Context
 
@@ -105,3 +106,25 @@ replaces the prototype.
   (bioRxiv 2025.06.16.659978; *Nature* 654:806, 2026).
 * `scripts/analysis/probe_legacy_pa.py`, `tests/test_pa_real_pridict_shape.py`,
   `src/pegrna_pipeline/hpc/pair_scorer.py`, `pa_workflow.py`, `driver.py`.
+
+## Update, 2026-11-04: the decision
+
+The owner chose **A, with the donor restoring the DNA between the nicks** ("A+"). The designer is specified in
+`docs/superpowers/specs/2026-11-04-prime-assembly-design.md`, and the structure it builds on, for tj-PE as built
+and for Prime Assembly as designed, is in `docs/STRUCTURE.md`.
+
+Two corrections to the text above:
+
+- Option B was described as "a different design problem" that "needs the biology worked out first". That
+  overstated it. Restoring the span between the nicks is the mechanism tj-PE already uses: the Replacement Arm
+  recodes coding runs, keeps non-coding runs byte-exact, and leaves a net deletion of 0. A+ reuses it. Two real
+  questions remain, and they are narrower: a restored stretch that lies under a flap is a copy of the strand the
+  flap displaces, and a restoring donor brings back the PAMs that the paper's replacement removes. The spec
+  handles both.
+- Under "What a designer would need", item 3 said a PA pegRNA is about 150 nt and inside the calibrated docking
+  range. That stands, and is stronger than stated: with a 50-nt flap and a 17-nt PBS the longest possible PA
+  pegRNA is 166 nt, so docking gives a real verdict for any cargo size, which tj-PE cannot do past about 25 to
+  60 bp.
+
+The legacy prototype (`pa_workflow.py`, `pair_scorer.py`, the `pa` branch of `driver.py`) is removed when the new
+designer ships, and `tests/test_pa_real_pridict_shape.py` goes with it, as this ADR said it should.
