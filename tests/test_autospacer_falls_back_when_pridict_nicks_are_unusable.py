@@ -15,6 +15,7 @@ import json
 from pathlib import Path
 
 from pegrna_pipeline.hpc.data_types import PegRNADesign
+from pegrna_pipeline.hpc.nick_search import locate_guide
 from pegrna_pipeline.hpc.recoded_driver import design_recoded
 
 CFG = json.loads(Path("examples/ctcf_cterm/config_autospacer_flag.json").read_text())
@@ -51,6 +52,20 @@ class _PridictOffersOnlyADownstreamNick:
             ]
             out[row["sequence_name"]] = {"pegrnas": [peg], "nicking": nicking}
         return out
+
+
+PRIDICT_GUIDE = "TTCTCTGGGCTGTGTTTAAA"  # the real PRIDICT guide that triggered the failure
+
+
+def test_the_premise_holds_the_only_pridict_guide_is_really_3_prime_of_s():
+    """The designer places a guide by its sequence, so this has to be true of the real window for the
+    regression to be about what it says: the guide is in the window, once, and 3' of S."""
+    located = locate_guide(CFG["genome"], PRIDICT_GUIDE)
+    assert (
+        located is not None
+    ), "the guide is not in the window: the fallback below would be vacuous"
+    strand, cut = located
+    assert strand == "Fw" and cut > SITE_S
 
 
 def _design():

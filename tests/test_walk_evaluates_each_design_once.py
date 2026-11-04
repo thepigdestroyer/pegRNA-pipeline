@@ -94,10 +94,8 @@ def test_without_an_anchor_there_is_one_variant_per_pbs_length():
 
 def test_the_driver_accepts_a_config_without_it():
     """A blank field in the web form is dropped from the config; that must not be an error."""
-    inputs = W._auto_inputs()
+    inputs = W._planted_inputs()
     inputs.pop("rtt_aa", None)
-    runner = W._NickRunner(
-        spacer="TGCATGCATGCATGCATGCA", nicking=[W._nrow(W._MARKER_B, "50", "Fw", "0.7")]
-    )
+    runner = W._NickRunner(spacer="TGCATGCATGCATGCATGCA", nicking=[W._row(1)])
     out = recoded_driver.design_recoded(**inputs, mode="fake", pridict_runner=runner)
     assert out.result.pegRNA_sequence

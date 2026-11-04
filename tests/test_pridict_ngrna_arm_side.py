@@ -13,24 +13,24 @@ This is exactly what the shipped real-models demo hit once off-target screening
 became real: real cas-offinder removed PRIDICT's 5' guides, leaving only a 3' one.
 """
 
+from pa_helpers import guide_row, make_locus
+
 from pegrna_pipeline.hpc.pridict_ngrna import build_pridict_ngrnas
 
 SITE_S = 147
-# Distinct 20-mers that pass the spacer sanity filter (no TTTT, no run of >=5, GC 30-75%);
-# their sequence is otherwise irrelevant to the arm-side logic.
-UPSTREAM = "GCTGCCACAGATGCCGCAAC"
-DOWNSTREAM = "TTCTCTGGGCTGTGTTTAAA"
-GENOME = "ACGT" * 75  # 300 bp: room for a PBS2 window on either side of S
+# Two real guides, planted where the CTCF case had them: one 46 bp upstream of S (the nick 101 the example
+# uses) and one 56 bp downstream. A guide has to be in the window for the designer to place it (issue #31),
+# so these are located by their sequence, not by whatever number a PRIDICT row carries.
+LOCUS = make_locus([("top", SITE_S - 46), ("top", SITE_S + 56)], n=300, site_s=SITE_S, seed=5)
+UPSTREAM, DOWNSTREAM = LOCUS.guides[0][2], LOCUS.guides[1][2]
+GENOME = LOCUS.genome  # 300 bp: room for a PBS2 window on either side of S
 
 
 def _row(spacer: str, distance: int, score: float = 0.6) -> dict:
-    return {
-        "Nicking-Protospacer": spacer,
-        "Nicking-Position-to-edit": str(distance),
-        "Nicking-PAMdisrupt": "Nicking_PAM_disrupt",
-        "Target_Strand": "Fw",
-        "DeepCas9score": str(score),
-    }
+    """The PRIDICT row for one of the two planted guides (``distance`` is the TRUE one; the row's own
+    number follows real PRIDICT's convention and is ignored)."""
+    index = 0 if spacer == UPSTREAM else 1
+    return guide_row(LOCUS, index, score=score)
 
 
 def _clean(protospacers):

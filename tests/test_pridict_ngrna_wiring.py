@@ -28,6 +28,7 @@ genome fetcher throughout.
 from __future__ import annotations
 
 import pytest
+from pa_helpers import guide_row, make_locus
 
 from pegrna_pipeline.hpc import recoded_driver
 from pegrna_pipeline.hpc.complex_dock import DockFake
@@ -48,10 +49,41 @@ from pegrna_pipeline.hpc.tjpe_workflow import derive_rc_pbs2
 GENOME = "ACGATGCATGGCATGACTGA" * 16  # 320 bp; same fixture the workflow tests use
 SITE_S = 150
 
-# Two 20-mers that pass the ngRNA spacer sanity filter (no TTTT / homopolymer>=5,
-# GC in [0.30, 0.75]); distinctive markers so a design's ngRNA can be traced to PRIDICT.
-_MARKER_A = "ACGTACGTACGTACGTACGT"  # GC 0.50
-_MARKER_B = "GATCGATCGATCGATCGATC"  # GC 0.50
+# The PRIDICT-path tests need guides that are REALLY in the window: the designer places a guide by its
+# sequence, never by PRIDICT's own number (issue #31), and a spacer it cannot find has no position. So four
+# guides are planted in a random background that has no other PAM (the periodic GENOME above repeats every
+# 20-mer, so no guide in it is unique). Real guides cannot overlap, which is why A and B are 24 bp apart.
+CUT_A, CUT_B = SITE_S + 42, SITE_S + 66  # top strand (PRIDICT's "Fw"), inside the 40-70 window
+CUT_FAR = SITE_S + 100  # top strand, outside that window
+CUT_RV = SITE_S - 55  # bottom strand ("Rv"): the pegRNA's own strand when pegrna_strand="Rv"
+LOCUS = make_locus(
+    [("top", CUT_A), ("top", CUT_B), ("top", CUT_FAR), ("bottom", CUT_RV)],
+    n=320,
+    site_s=SITE_S,
+    coding_end=320,
+    seed=3,
+)
+# Distinctive markers (they pass the spacer sanity filter), so a design's ngRNA can be traced to PRIDICT.
+_MARKER_A, _MARKER_B, _MARKER_FAR, _MARKER_RV = (g[2] for g in LOCUS.guides)
+INSERT_LEN = 12  # the cargo of _wf_inputs / _auto_inputs
+
+
+def _row(index: int, *, score: float = 0.7) -> dict:
+    """The row real PRIDICT would emit for the ``index``-th planted guide (its distance number included)."""
+    return guide_row(LOCUS, index, insert_len=INSERT_LEN, score=score)
+
+
+def _build(rows, *, pegrna_strand="Rv", lo=40, hi=70, scorer=None, **kw):
+    return build_pridict_ngrnas(
+        rows,
+        genome=LOCUS.genome,
+        site_s=SITE_S,
+        pegrna_strand=pegrna_strand,
+        ngrna_distance_min=lo,
+        ngrna_distance_max=hi,
+        offtarget_scorer=scorer or _clean,
+        **kw,
+    )
 
 
 def _nrow(proto: str, dist: str, strand: str, score: str) -> dict:
@@ -92,94 +124,51 @@ def test_nicking_rows_to_ngrnas_missing_key_fails_loud():
 
 
 def test_build_selects_admissible_and_orders_by_deepcas9():
-    rows = [
-        _nrow(_MARKER_B, "60", "Fw", "0.5"),  # admissible, lower score
-        _nrow(_MARKER_A, "50", "Fw", "0.9"),  # admissible, higher score
-    ]
-    out = build_pridict_ngrnas(
-        rows,
-        genome=GENOME,
-        site_s=SITE_S,
-        pegrna_strand="Rv",  # opposite strand is Fw
-        ngrna_distance_min=40,
-        ngrna_distance_max=70,
-        offtarget_scorer=_clean,
-    )
+    rows = [_row(1, score=0.5), _row(0, score=0.9)]  # B (lower score) listed first
+    out = _build(rows)
     assert [d.deepcas9_score for d in out] == [0.9, 0.5]  # highest DeepCas9 first
-    assert [d.nick_position for d in out] == [SITE_S + 50, SITE_S + 60]
+    assert [d.nick_position for d in out] == [CUT_A, CUT_B]
     assert [d.protospacer for d in out] == [_MARKER_A, _MARKER_B]
 
 
-def test_build_excludes_out_of_window_and_same_strand():
-    rows = [
-        _nrow(_MARKER_A, "100", "Fw", "0.9"),  # |100| outside [40,70]
-        _nrow(_MARKER_B, "55", "Rv", "0.9"),  # same strand as pegRNA (Rv) -> excluded
-    ]
-    out = build_pridict_ngrnas(
-        rows,
-        genome=GENOME,
-        site_s=SITE_S,
-        pegrna_strand="Rv",
-        ngrna_distance_min=40,
-        ngrna_distance_max=70,
-        offtarget_scorer=_clean,
-    )
-    assert out == []
+def test_build_excludes_a_guide_outside_the_distance_window():
+    rows = [_row(2, score=0.9)]  # 100 bp from S
+    assert _build(rows, hi=70) == []
+    # control: it is a perfectly usable guide, so the empty result above is the window and nothing else
+    (inj,) = _build(rows, hi=110)
+    assert inj.nick_position == CUT_FAR and inj.protospacer == _MARKER_FAR
+
+
+def test_build_excludes_a_guide_on_the_pegrnas_own_strand():
+    rows = [_row(3, score=0.9)]  # a bottom-strand guide, 55 bp from S
+    assert _build(rows, pegrna_strand="Rv") == []  # an Rv pegRNA needs a Fw (top-strand) ngRNA
+    # control: for a Fw pegRNA the same guide is the right one
+    (inj,) = _build(rows, pegrna_strand="Fw")
+    assert inj.nick_position == CUT_RV and inj.target_strand == "Rv"
 
 
 def test_offtarget_failure_advances_to_next_candidate_nick_lever():
     # The higher-DeepCas9 candidate fails off-target -> the pipeline advances to the
     # next (lower-score, off-target-clean) nicking candidate: the NICK lever.
-    rows = [
-        _nrow(_MARKER_A, "50", "Fw", "0.9"),  # higher score but DIRTY
-        _nrow(_MARKER_B, "60", "Fw", "0.5"),  # lower score but CLEAN
-    ]
+    rows = [_row(0, score=0.9), _row(1, score=0.5)]  # A: higher score but DIRTY; B: lower but CLEAN
 
     def scorer(protospacers):
         return {p: ((0.8, 5, True) if p == _MARKER_A else (0.8, 0, False)) for p in protospacers}
 
-    out = build_pridict_ngrnas(
-        rows,
-        genome=GENOME,
-        site_s=SITE_S,
-        pegrna_strand="Rv",
-        ngrna_distance_min=40,
-        ngrna_distance_max=70,
-        offtarget_scorer=scorer,
-    )
+    out = _build(rows, scorer=scorer)
     assert len(out) == 1
     assert out[0].protospacer == _MARKER_B
-    assert out[0].distance_to_edit == 60
-    assert out[0].nick_position == SITE_S + 60
+    assert out[0].distance_to_edit == CUT_B - SITE_S  # the true distance, not PRIDICT's number
+    assert out[0].nick_position == CUT_B
 
 
 def test_build_derives_rcpbs2_from_genome_five_prime_of_nick():
-    rows = [_nrow(_MARKER_A, "50", "Fw", "0.7")]
-    (inj,) = build_pridict_ngrnas(
-        rows,
-        genome=GENOME,
-        site_s=SITE_S,
-        pegrna_strand="Rv",
-        ngrna_distance_min=40,
-        ngrna_distance_max=70,
-        offtarget_scorer=_clean,
-        pbs2_length=17,
-    )
-    assert inj.rcpbs2 == derive_rc_pbs2(GENOME, ngrna_nick_position=SITE_S + 50, pbs2_length=17)
+    (inj,) = _build([_row(0)], pbs2_length=17)
+    assert inj.rcpbs2 == derive_rc_pbs2(LOCUS.genome, ngrna_nick_position=CUT_A, pbs2_length=17)
 
 
 def test_build_empty_when_no_admissible_candidate():
-    rows = [_nrow(_MARKER_A, "100", "Fw", "0.9")]  # out of window
-    out = build_pridict_ngrnas(
-        rows,
-        genome=GENOME,
-        site_s=SITE_S,
-        pegrna_strand="Rv",
-        ngrna_distance_min=40,
-        ngrna_distance_max=70,
-        offtarget_scorer=_clean,
-    )
-    assert out == []
+    assert _build([_row(2)]) == []  # the only guide is outside the window
 
 
 # ============================================================ window strategy
@@ -350,17 +339,24 @@ def _auto_inputs() -> dict:
     )
 
 
+def _planted_inputs() -> dict:
+    """``_auto_inputs`` on the planted locus: for tests whose PRIDICT guides must be found in the window."""
+    return {**_auto_inputs(), "genome": LOCUS.genome, "cds_mask": LOCUS.cds_mask}
+
+
 def test_design_recoded_auto_uses_pridict_ngrna():
     runner = _NickRunner(
         spacer="TGCATGCATGCATGCATGCA",
-        nicking=[_nrow(_MARKER_B, "50", "Fw", "0.7")],  # in-window (|50| in [40,70]), Fw
+        nicking=[
+            _row(1)
+        ],  # guide B: in-window, top strand ("Fw"), real PRIDICT-style distance number
     )
-    out = recoded_driver.design_recoded(**_auto_inputs(), mode="fake", pridict_runner=runner)
+    out = recoded_driver.design_recoded(**_planted_inputs(), mode="fake", pridict_runner=runner)
     assert out.result.spacer == "TGCATGCATGCATGCATGCA"  # PRIDICT-designed pegRNA#1 spacer
     assert out.result.ngrna_protospacer == _MARKER_B  # ngRNA from the PRIDICT nicking guide
-    assert out.result.nick_position == SITE_S + 50
+    assert out.result.nick_position == CUT_B  # where the guide really cuts
     assert out.result.rcpbs2 == derive_rc_pbs2(
-        GENOME, ngrna_nick_position=SITE_S + 50, pbs2_length=17
+        LOCUS.genome, ngrna_nick_position=CUT_B, pbs2_length=17
     )
 
 

@@ -7,6 +7,8 @@ PIPELINE keeps ownership of *where* it nicks:
 
 * :func:`nicking_rows_to_ngrnas` maps the raw nicking dicts to
   :class:`pegrna_pipeline.hpc.data_types.NgRNADesign`.
+* :func:`place_by_sequence` re-derives each guide's strand and cut from its own sequence in
+  the window: PRIDICT's distance number is not the position of the cut (issue #31).
 * :func:`build_pridict_ngrnas` selects among them by DISTANCE WINDOW + opposite strand
   + DeepCas9 score (reusing :func:`pegrna_pipeline.hpc.tjpe_workflow.select_tjpe_ngrna`),
   gates each choice on the injected off-target scorer, and on a gate failure advances to
@@ -29,16 +31,17 @@ lazily so CI (fake runner + fake fetcher) never touches the network.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
 from pegrna_pipeline.hpc.data_types import NgRNADesign
-from pegrna_pipeline.hpc.nick_search import nick_usable_for_arm, offtarget_rejection
+from pegrna_pipeline.hpc.nick_search import locate_guide, nick_usable_for_arm, offtarget_rejection
 from pegrna_pipeline.hpc.tjpe_workflow import derive_rc_pbs2, select_tjpe_ngrna
 
 __all__ = [
     "InjectedNgRNA",
     "nicking_rows_to_ngrnas",
+    "place_by_sequence",
     "build_pridict_ngrnas",
     "resolve_pridict_context",
 ]
@@ -59,8 +62,9 @@ _PAM_DISRUPT_COLS = ("Nicking-PAMdisrupt", "PAM_disrupted")
 class InjectedNgRNA:
     """A pipeline-selected, off-target-clean PRIDICT ngRNA ready for injection.
 
-    ``nick_position`` is the 0-indexed genome-window coordinate of the second nick
-    (``site_s + distance_to_edit``); ``protospacer`` is the PRIDICT nicking protospacer
+    ``nick_position`` is the 0-indexed genome-window coordinate of the second nick, the first base
+    RIGHT of the cut, computed from the guide's own sequence (``site_s + distance_to_edit``, where
+    the distance is the true one and not PRIDICT's); ``protospacer`` is the PRIDICT nicking protospacer
     (which becomes the ngRNA spacer); ``rcpbs2`` is the genome-derived
     ``derive_rc_pbs2`` window 5' of the nick.
     """
@@ -138,6 +142,39 @@ def _rank_admissible(
     return ordered
 
 
+def place_by_sequence(
+    ngrnas: Sequence[NgRNADesign], *, genome: str, site_s: int
+) -> List[NgRNADesign]:
+    """Re-derive each guide's strand and distance from its own sequence in ``genome``.
+
+    PRIDICT's ``Nicking-Position-to-edit`` is not the position of the cut, and it is not the same
+    kind of number on every strand or on both sides of the edit. Real PRIDICT2 output for the CTCF
+    window with a 24 bp insert (``scripts/analysis/probe_pridict_nick_convention.py``; 39 guides, all
+    consistent) shows that, with ``true`` the cut minus S::
+
+        forward-strand guide, upstream of S     distance = true - 1
+        forward-strand guide, downstream of S   distance = true + (insert length - 1)
+        reverse-strand guide, downstream of S   distance = -true
+        reverse-strand guide, upstream of S     distance = -true + insert length
+
+    Taking ``site_s + distance`` as the nick put it one base off upstream, an insert length off
+    downstream, and on the wrong side of S for a reverse-strand guide: the design was then built
+    around the wrong number and nothing downstream could notice (issue #31). So the number is not
+    used. A guide is found in the window (:func:`~pegrna_pipeline.hpc.nick_search.locate_guide`),
+    its cut is computed from the sequence, and ``distance_to_edit`` and ``target_strand`` are
+    rewritten from that. A guide that is not in the window exactly once (a PE3b guide that spans the
+    edit, a repeat) has no known position and is dropped.
+    """
+    placed: List[NgRNADesign] = []
+    for ng in ngrnas:
+        located = locate_guide(genome, ng.spacer)
+        if located is None:
+            continue
+        strand, cut = located
+        placed.append(replace(ng, distance_to_edit=cut - site_s, target_strand=strand))
+    return placed
+
+
 def build_pridict_ngrnas(
     nicking_rows: Sequence[dict],
     *,
@@ -157,6 +194,8 @@ def build_pridict_ngrnas(
     Selection order (mirrors :func:`pegrna_pipeline.hpc.nick_search.screen_nick_candidates`
     off-target semantics):
 
+    0. Placement: each guide's strand and cut are computed from its sequence in ``genome``
+       (:func:`place_by_sequence`); PRIDICT's distance number is not used.
     1. Admissible = distance window + opposite strand + spacer sanity (via
        :func:`_rank_admissible` / :func:`select_tjpe_ngrna`), ordered by DeepCas9 desc.
     2. Arm side: a nick on the wrong side of S for ``arm_side`` is dropped HERE, before
@@ -166,14 +205,14 @@ def build_pridict_ngrnas(
        :func:`pegrna_pipeline.hpc.nick_search.offtarget_rejection`: a candidate with more than
        ``max_offtargets`` in-tier hits, or on-target below ``min_ontarget``, is skipped -- the
        NICK lever advances to the next candidate. ``max_offtargets`` defaults to 0 (ADR 0010).
-    4. rcPBS2 = :func:`derive_rc_pbs2` over the window 5' of ``site_s + distance_to_edit``;
+    4. rcPBS2 = :func:`derive_rc_pbs2` over the window 5' of the nick (the true cut);
        a candidate whose PBS2 window falls off the genome window is skipped.
 
     Returns ``[]`` when no admissible, off-target-clean, rcPBS2-derivable ngRNA exists,
     so the caller can fall back to the genome-enumerated path. ``arm_side="auto"`` (the
     default) applies no side filter, preserving the behaviour of existing callers.
     """
-    ngrnas = nicking_rows_to_ngrnas(nicking_rows)
+    ngrnas = place_by_sequence(nicking_rows_to_ngrnas(nicking_rows), genome=genome, site_s=site_s)
     ordered = _rank_admissible(
         ngrnas,
         min_distance=ngrna_distance_min,

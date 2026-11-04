@@ -24,7 +24,6 @@ from pegrna_pipeline.hpc.nick_search import (
     screen_nick_candidates,
 )
 from pegrna_pipeline.hpc.offtarget_scorer import CasOffinderScorer, OffTargetScore
-from pegrna_pipeline.hpc.pridict_ngrna import build_pridict_ngrnas
 from pegrna_pipeline.hpc.recoded_tjpe_workflow import NoValidPegRNA, run_recoded_tjpe
 from pegrna_pipeline.hpc.scorer_factory import make_scorers
 
@@ -163,17 +162,7 @@ def test_an_unscreened_candidate_has_no_count():
 
 
 def _build(scorer, **kw):
-    rows = [W._nrow(W._MARKER_A, "50", "Fw", "0.9")]
-    return build_pridict_ngrnas(
-        rows,
-        genome=W.GENOME,
-        site_s=W.SITE_S,
-        pegrna_strand="Rv",
-        ngrna_distance_min=40,
-        ngrna_distance_max=70,
-        offtarget_scorer=scorer,
-        **kw,
-    )
+    return W._build([W._row(0, score=0.9)], scorer=scorer, **kw)
 
 
 def test_pridict_path_default_rejects_a_single_near_match():
@@ -277,22 +266,19 @@ def _with_offtarget(monkeypatch, scorer):
 
 
 def _runner():
-    return W._NickRunner(
-        spacer="TGCATGCATGCATGCATGCA",
-        nicking=[W._nrow(W._MARKER_B, "50", "Fw", "0.7")],
-    )
+    return W._NickRunner(spacer="TGCATGCATGCATGCATGCA", nicking=[W._row(1)])
 
 
 def test_driver_default_is_zero_tolerance(monkeypatch):
     _with_offtarget(monkeypatch, near(1))
     with pytest.raises(NoValidPegRNA):
-        recoded_driver.design_recoded(**W._auto_inputs(), mode="fake", pridict_runner=_runner())
+        recoded_driver.design_recoded(**W._planted_inputs(), mode="fake", pridict_runner=_runner())
 
 
 def test_driver_passes_the_tolerance_to_both_screens(monkeypatch):
     _with_offtarget(monkeypatch, near(1))
     out = recoded_driver.design_recoded(
-        **W._auto_inputs(), mode="fake", pridict_runner=_runner(), ngrna_max_offtargets=1
+        **W._planted_inputs(), mode="fake", pridict_runner=_runner(), ngrna_max_offtargets=1
     )
     # PRIDICT's own nicking guide was usable under the tolerance, so it is the one chosen.
     assert out.result.ngrna_protospacer == W._MARKER_B

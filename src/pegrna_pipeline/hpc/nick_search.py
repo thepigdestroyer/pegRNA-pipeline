@@ -9,7 +9,7 @@ protospacer. Off-target / on-target scoring is applied separately
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
-from typing import Callable, Dict, List, Optional, Tuple
+from typing import Callable, Dict, Iterator, List, Optional, Tuple
 
 from Bio.Seq import Seq
 
@@ -17,6 +17,7 @@ from pegrna_pipeline.hpc.guide_sanity import assess_spacer
 
 __all__ = [
     "enumerate_nick_sites",
+    "locate_guide",
     "filter_nick_sanity",
     "offtarget_rejection",
     "screen_nick_candidates",
@@ -56,7 +57,9 @@ def nick_usable_for_arm(nick_position: int, site_s: int, arm_side: str) -> bool:
 class NickCandidate:
     protospacer: str  # 20 nt
     pam: str  # 3 nt, NGG
-    nick_position: int  # 0-indexed on the sense genome
+    nick_position: (
+        int  # 0-indexed on the sense genome: the first base RIGHT of the cut, either strand
+    )
     distance_to_edit: int  # |nick - S|
     target_strand: str  # "Fw" or "Rv" (opposite the pegRNA)
     #: Off-target sites the screen counted for this guide (extra exact copies plus near
@@ -134,7 +137,9 @@ def enumerate_nick_sites(
     strand opposite ``pegrna_strand``.
 
     SpCas9 nicks ~3 nt 5' of the PAM; the protospacer is the 20 nt immediately
-    5' of the PAM. Positions are reported in sense-genome coordinates.
+    5' of the PAM. Positions are reported in sense-genome coordinates, for BOTH strands as the index of
+    the first base to the RIGHT of the cut (``genome[:b] | genome[b:]``): the number every caller uses
+    as the edge of the re-templated arm.
     """
     genome = genome.upper()
     want = _opposite(pegrna_strand)
@@ -142,20 +147,14 @@ def enumerate_nick_sites(
     out: List[NickCandidate] = []
 
     def scan(seq: str, strand: str, to_sense: Callable[[int], int]) -> None:
-        for i in range(len(seq) - 2):
-            if seq[i + 1 : i + 3] != "GG":  # NGG PAM (positions i+1, i+2)
-                continue
-            proto_end = i  # protospacer is the 20 nt 5' of the PAM
-            proto_start = proto_end - 20
-            if proto_start < 0:
-                continue
-            nick = to_sense(proto_end - 3)
+        for proto, pam, cut in _ngg_sites(seq):
+            nick = to_sense(cut)
             dist = abs(nick - site_s)
             if distance_min <= dist <= distance_max:
                 out.append(
                     NickCandidate(
-                        protospacer=seq[proto_start:proto_end],
-                        pam=seq[i : i + 3],
+                        protospacer=proto,
+                        pam=pam,
                         nick_position=nick,
                         distance_to_edit=dist,
                         target_strand=strand,
@@ -166,10 +165,57 @@ def enumerate_nick_sites(
         scan(genome, "Fw", lambda x: x)
     else:
         rc = str(Seq(genome).reverse_complement())
-        scan(rc, "Rv", lambda x: n - 1 - x)
+        scan(rc, "Rv", lambda x: _sense_cut_from_rc(n, x))
     # Deterministic ordering: nearest first, then protospacer.
     out.sort(key=lambda c: (c.distance_to_edit, c.protospacer))
     return out
+
+
+def _ngg_sites(seq: str) -> Iterator[Tuple[str, str, int]]:
+    """Every NGG-anchored SpCas9 site on ``seq`` read 5'->3': ``(protospacer, pam, cut)``.
+
+    The protospacer is the 20 nt immediately 5' of the PAM, and the nick falls 3 bp 5' of the PAM, so
+    ``cut`` is the index on ``seq`` of the first base AFTER the nick. This is the one place that rule is
+    written down; the enumerator and the locator both read it.
+    """
+    for i in range(20, len(seq) - 2):
+        if seq[i + 1 : i + 3] == "GG":  # NGG: the PAM is seq[i : i + 3]
+            yield seq[i - 20 : i], seq[i : i + 3], i - 3
+
+
+def _sense_cut_from_rc(n: int, cut_on_rc: int) -> int:
+    """Map a cut read on the reverse complement of an ``n``-base window to the sense strand.
+
+    ``cut_on_rc`` is the first base AFTER the cut on the reverse complement. Its sense index is
+    ``n - 1 - cut_on_rc``, but the number reported everywhere is the first base RIGHT of the cut on the
+    sense strand, which is one more: ``n - cut_on_rc``. (The old ``n - 1 - x`` reported the last base
+    LEFT of the cut, one less than the forward strand's convention: issue #31.)
+    """
+    return n - cut_on_rc
+
+
+def locate_guide(genome: str, spacer: str) -> Optional[Tuple[str, int]]:
+    """Find where a guide really cuts, from its sequence alone: ``("Fw" | "Rv", cut)``.
+
+    ``cut`` is the index of the first base to the RIGHT of the nick on the sense window,
+    ``genome[:cut] | genome[cut:]``, whichever strand the guide is on. ``"Fw"`` means the protospacer
+    reads on the sense strand and is followed by ``NGG``; ``"Rv"`` means it is the reverse complement of
+    a stretch of the window with ``CCN`` just before it.
+
+    Returns ``None`` unless there is EXACTLY ONE such site. A spacer that is not in the window (a PE3b
+    guide that spans the edit, or one designed on another window) has no position, and one that occurs
+    twice has an ambiguous one; guessing would move the whole design, so neither is placed.
+    """
+    s = (spacer or "").upper()
+    if len(s) != 20 or set(s) - set("ACGT"):
+        return None
+    g = genome.upper()
+    hits: List[Tuple[str, int]] = [("Fw", cut) for proto, _pam, cut in _ngg_sites(g) if proto == s]
+    rc = str(Seq(g).reverse_complement())
+    hits += [
+        ("Rv", _sense_cut_from_rc(len(g), cut)) for proto, _pam, cut in _ngg_sites(rc) if proto == s
+    ]
+    return hits[0] if len(hits) == 1 else None
 
 
 def screen_nick_candidates(
