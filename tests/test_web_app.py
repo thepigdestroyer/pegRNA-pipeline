@@ -167,9 +167,7 @@ def test_design_is_open_to_everyone_whatever_the_environment_holds(
 
     # The stream endpoint reports a failed launch inside the stream, so this stays a 200.
     monkeypatch.setattr(app_module.subprocess, "Popen", _not_launched)
-    r = TestClient(app_module.app).post(
-        endpoint, json={"config": {"genome": "ACGT"}, "mode": mode}
-    )
+    r = TestClient(app_module.app).post(endpoint, json={"config": {"genome": "ACGT"}, "mode": mode})
     assert r.status_code == 200, r.text
 
 
