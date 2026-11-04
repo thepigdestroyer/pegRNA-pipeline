@@ -153,11 +153,11 @@ def main():
         )
 
     lib = MotifLibrary.load_full()
-    cargos = {
-        "FLAG, 24 bp": lib.lookup("FLAG").dna,
-        "GGGGS-FLAG-P2A-ZeoR, 503 bp": "".join(
-            lib.lookup(n).dna for n in ("GGGGS", "FLAG", "P2A", "ZeocinR")
-        ),
+    flag = lib.lookup("FLAG").dna
+    cassette = "".join(lib.lookup(n).dna for n in ("GGGGS", "FLAG", "P2A", "ZeocinR"))
+    cargos = {  # labels carry the computed length: a hand-typed one was wrong (503; it is 480)
+        f"FLAG, {len(flag)} bp": flag,
+        f"GGGGS-FLAG-P2A-ZeoR, {len(cassette)} bp": cassette,
     }
     print("\ndonors for the pairs with the least restored DNA (arm5 + arm3)")
     ranked = []
