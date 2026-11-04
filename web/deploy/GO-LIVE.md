@@ -30,7 +30,7 @@ three `/mnt` volumes are root-owned. Everything is under `$HOME`:
 | `~/pegrna/PRIDICT2/` | PRIDICT2 + trained weights |
 | `~/pegrna/genomes/hg38.2bit` | off-target genome (835 MB) |
 | `~/pegrna/runs/` | per-run outputs, pruned to `PEGRNA_KEEP_RUNS` |
-| `~/.config/pegrna/pegrna.env` | all configuration |
+| `~/.config/pegrna/pegrna.env` | all configuration, **including the api-mode token**: mode 600 (the directory 700; the audit checks) |
 | `~/.config/pegrna/nvidia.key` | Boltz-2 key, mode 600 |
 
 **Port 8093**, because `8092` is `jmoore3`'s separate instance. Do not take 8092.

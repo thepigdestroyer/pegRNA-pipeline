@@ -45,8 +45,13 @@ bash "$PEGRNA_REPO/web/deploy/setup_envs.sh"
 mkdir -p "$HOME/.config/systemd/user" "$HOME/.config/pegrna"
 if [ ! -f "$HOME/.config/pegrna/pegrna.env" ]; then
   log "installing pegrna.env (edit it if your paths differ)"
-  cp "$PEGRNA_REPO/web/deploy/pegrna.env" "$HOME/.config/pegrna/pegrna.env"
+  # Mode 600 from the start: the access token is appended to this file later, and the host is
+  # shared with group-readable home directories.
+  install -m 600 "$PEGRNA_REPO/web/deploy/pegrna.env" "$HOME/.config/pegrna/pegrna.env"
 fi
+# Tighten an older install too: nothing in this directory is for anyone but this user.
+chmod 700 "$HOME/.config/pegrna"
+find "$HOME/.config/pegrna" -type f -exec chmod 600 {} +
 cp "$PEGRNA_REPO/web/deploy/pegrna-web.service" "$HOME/.config/systemd/user/"
 if [ ! -f "$HOME/.config/pegrna/nvidia.key" ]; then
   log "NOTE: no NVIDIA key at ~/.config/pegrna/nvidia.key — api mode will stub docking."

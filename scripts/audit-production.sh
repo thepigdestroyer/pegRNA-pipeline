@@ -27,7 +27,9 @@ chk "api python resolves"           "ssh dsi 'curl -s localhost:8093/api/health 
 chk "genome staged for off-target"  "ssh dsi 'test -s ~/pegrna/genomes/hg38.2bit'"
 chk "cas-offinder installed"        "ssh dsi 'test -x ~/pegrna/envs/pegrna-real/bin/cas-offinder'"
 chk "PRIDICT2 env present"          "ssh dsi 'test -x ~/pegrna/envs/pridict2/bin/python'"
-chk "nvidia key is mode 600"        "ssh dsi 'test \$(stat -c %a ~/.config/pegrna/nvidia.key) = 600'"
+# The host is shared and its home directories are group-readable. pegrna.env holds the api-mode
+# token (it gates paid model runs), so it is a secret like the NVIDIA key and the tunnel token.
+chk "secrets private (config dir 700, every file in it 600)" "ssh dsi 'test \$(stat -c %a ~/.config/pegrna) = 700 && ! find ~/.config/pegrna -type f ! -perm 600 | grep -q .'"
 chk "jmoore3 instance untouched"    "ssh dsi 'curl -s --max-time 10 localhost:8092/api/health | grep -q jmoore3'"
 chk "disk under 90%"                "ssh dsi '[ \$(df --output=pcent / | tail -1 | tr -dc 0-9) -lt 90 ]'"
 # The host is shared; a design must not be able to take it (see GO-LIVE.md, "Resource limits").
