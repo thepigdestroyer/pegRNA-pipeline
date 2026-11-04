@@ -1,7 +1,8 @@
 # 0011. MaxEntScan cryptic-splice gate; SpliceAI demoted to advisory cross-check
 
 Date: 2026-07-02
-Status: Accepted
+Status: Accepted. Amended by 0028: the SpliceAI cross-check binds only on REAL genomic context,
+and the `api` path's N-padded number is advisory (it had been applied as a hard gate).
 
 ## Context
 

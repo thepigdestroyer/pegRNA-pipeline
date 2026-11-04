@@ -25,8 +25,10 @@ default real fetcher uses ``requests``.
 
 from __future__ import annotations
 
+from contextlib import contextmanager
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, List, Optional, Sequence
+from typing import Callable, Iterator, List, Optional, Sequence
 
 from pegrna_pipeline.hpc.genome_context import (
     ExonBlock,
@@ -36,7 +38,13 @@ from pegrna_pipeline.hpc.genome_context import (
 )
 from pegrna_pipeline.hpc.variant_apply import apply_phased_variants
 
-__all__ = ["fetch_genomic_context", "build_genomic_context"]
+__all__ = [
+    "fetch_genomic_context",
+    "build_genomic_context",
+    "fetch_flanking_sequence",
+    "bounded_ensembl",
+    "Flanks",
+]
 
 _ENSEMBL = "https://rest.ensembl.org"
 
@@ -219,4 +227,95 @@ def fetch_genomic_context(
         mrna_seq=mrna_seq,
         het_snps=het_snps or (),
         phased_variants=phased_variants or (),
+    )
+
+
+@contextmanager
+def bounded_ensembl(attempts: int = 2, timeout: int = 45) -> Iterator[None]:
+    """Cap the Ensembl retry budget for one call, unless the operator already set one.
+
+    The default (4 attempts of up to 120 s) is right for a design that cannot proceed without the data. A
+    caller for whom the data only improves a check must not be held for minutes by an unreachable server, so
+    it bounds the wait here and treats a failure as "no context". The environment is restored on exit.
+    """
+    import os  # noqa: PLC0415
+
+    keys = {"PEGRNA_ENSEMBL_RETRIES": str(attempts), "PEGRNA_ENSEMBL_TIMEOUT": str(timeout)}
+    added = [k for k in keys if k not in os.environ]
+    for k in added:
+        os.environ[k] = keys[k]
+    try:
+        yield
+    finally:
+        for k in added:
+            os.environ.pop(k, None)
+
+
+@dataclass(frozen=True)
+class Flanks:
+    """Real genomic sequence either side of a design window, in the transcript's own orientation."""
+
+    left: str  # ``pad`` nt immediately 5' of the window; N where the genome ran out
+    right: str  # ``pad`` nt immediately 3' of the window; N where the genome ran out
+    complete: bool  # True when both sides are entirely real sequence
+    source: str  # provenance, for the report
+
+
+def fetch_flanking_sequence(
+    transcript_id: str,
+    window: str,
+    *,
+    pad: int = 5000,
+    http_get: Callable[..., dict] = _real_http_get,
+) -> Flanks:
+    """The real GRCh38 sequence ``pad`` nt either side of ``window``, in the transcript's orientation.
+
+    ``window`` is the design window as the pipeline holds it: the sense strand of the transcript, a stretch
+    of its pre-mRNA. It is located inside the transcript's genomic span by EXACT match, and the flanks are
+    read from either side of that one occurrence. (``fetch_genomic_context`` returns the forward strand only,
+    which is wrong for a minus-strand gene; this asks for the transcript's own strand.)
+
+    Raises :class:`MissingGenomicContextError` when the window cannot be placed exactly once: a strand flip,
+    an applied variant, or a repeat. Never guesses a position, because SpliceAI's verdict depends on every
+    base of what surrounds the edit.
+    """
+    lookup = http_get(f"{_ENSEMBL}/lookup/id/{transcript_id}", expand=1)
+    if (
+        not lookup
+        or "seq_region_name" not in lookup
+        or "start" not in lookup
+        or "end" not in lookup
+    ):
+        raise MissingGenomicContextError(
+            f"Ensembl returned no usable coordinates for transcript {transcript_id!r}"
+        )
+    chrom, start, end = lookup["seq_region_name"], int(lookup["start"]), int(lookup["end"])
+    strand = -1 if int(lookup.get("strand", 1)) < 0 else 1
+    margin = pad + 1000  # the window lies inside the transcript; its flanks may run past either end
+    region = http_get(
+        f"{_ENSEMBL}/sequence/region/human/{chrom}:{max(1, start - margin)}..{end + margin}:{strand}"
+    )
+    wide = str(region.get("seq") or "").upper()
+    needle = window.upper()
+    idx = wide.find(needle) if needle else -1
+    if idx < 0:
+        raise MissingGenomicContextError(
+            f"the design window is not in the fetched region of {transcript_id} "
+            f"(chr{chrom}:{start}-{end}, strand {strand:+d}); a strand flip or an applied variant "
+            "in the window would cause this"
+        )
+    if wide.find(needle, idx + 1) >= 0:
+        raise MissingGenomicContextError(
+            f"the design window occurs more than once in {transcript_id}'s region, so its flanks are ambiguous"
+        )
+    left_real = wide[max(0, idx - pad) : idx]
+    right_real = wide[idx + len(needle) : idx + len(needle) + pad]
+    return Flanks(
+        left="N" * (pad - len(left_real)) + left_real,
+        right=right_real + "N" * (pad - len(right_real)),
+        complete=len(left_real) == pad and len(right_real) == pad,
+        source=(
+            f"Ensembl GRCh38 chr{chrom}:{start}-{end} ({'+' if strand > 0 else '-'}), "
+            f"{transcript_id}, window at +{idx}"
+        ),
     )

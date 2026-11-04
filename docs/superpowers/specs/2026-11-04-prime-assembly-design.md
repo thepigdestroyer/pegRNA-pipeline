@@ -193,7 +193,7 @@ It is a self-consistency check, not an experimental proof of the strand logic (A
    and after, because #30 changes which valid arm some inputs produce.
 1. **`pa_geometry.py` and `simulate_pa`** with their tests. No models.
 2. **`recoded_pa_workflow.py`, `design_pa`, the CLI and reports**, the example config, the DSI acceptance run,
-   ADR 0028, the legacy removal.
+   ADR 0029, the legacy removal.
 3. **API, UI, browser acceptance, docs, deploy.**
 
 ## 8. Risks, and decisions that are the owner's

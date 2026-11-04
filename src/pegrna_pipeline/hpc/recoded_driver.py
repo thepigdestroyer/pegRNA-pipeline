@@ -16,6 +16,7 @@ from typing import Any, Callable, List, Optional, Sequence, Tuple, Union
 
 from pegrna_pipeline.hpc.allele_specificity import find_allele_specific
 from pegrna_pipeline.hpc.data_types import DEFAULT_SCORE_CELL_LINE, _score_attr
+from pegrna_pipeline.hpc.genome_ingest import bounded_ensembl, fetch_flanking_sequence
 from pegrna_pipeline.hpc.input_formatter import format_tjpe_insertion_editseq
 from pegrna_pipeline.hpc.pridict_ngrna import build_pridict_ngrnas, resolve_pridict_context
 from pegrna_pipeline.hpc.recoded_tjpe_workflow import (
@@ -191,6 +192,32 @@ def _design_peg1_via_pridict(
     return _select_top_pegrna(pegrnas).spacer, list(entry.get("nicking") or [])
 
 
+def _attach_splice_context(scorer: Any, *, transcript: Optional[str], genome: str) -> str:
+    """Give the SpliceAI cross-check the real genomic flanks of the design window, when it can use them.
+
+    Returns a one-line provenance note for the run manifest ("" when the scorer takes no context). Never
+    raises: the flanks make the cross-check meaningful, they are not a reason to fail a design, so every
+    failure (no transcript, Ensembl unreachable, the window not found in the transcript) leaves the scorer
+    on N-padding, where its verdict is advisory (ADR 0028), and says so.
+    """
+    if not hasattr(scorer, "set_context"):
+        return ""  # a stand-in or the raw HPC scorer: nothing to attach, nothing to report
+    if not transcript:
+        return "SpliceAI cross-check: no transcript given, so no genomic context (advisory only)"
+    try:
+        with bounded_ensembl():
+            flanks = fetch_flanking_sequence(transcript, genome)
+        scorer.set_context(
+            flanks.left, flanks.right, complete=flanks.complete, source=flanks.source
+        )
+    except Exception as exc:  # noqa: BLE001 - see the docstring: context is never a reason to fail
+        return (
+            f"SpliceAI cross-check: genomic context unavailable ({type(exc).__name__}: "
+            f"{str(exc)[:160]}); advisory only"
+        )
+    return f"SpliceAI cross-check: {flanks.source}" + ("" if flanks.complete else " (partial)")
+
+
 def design_recoded(
     *,
     spacer: Optional[str] = None,
@@ -280,6 +307,9 @@ def design_recoded(
         else {}
     )
     scorers = make_scorers(mode=mode, **scorer_kwargs)
+    splice_context = _attach_splice_context(
+        scorers.splice_scorer, transcript=transcript, genome=genome
+    )
 
     # Auto-spacer (wiring spec 2026-07-10): with no explicit spacer, PRIDICT2 designs
     # pegRNA#1 at the insert site and the pipeline adopts its spacer. An explicit
@@ -353,6 +383,8 @@ def design_recoded(
 
     manifest = dict(manifest or {})
     manifest.setdefault("scorer_mode", mode)
+    if splice_context:
+        manifest.setdefault("splice_context", splice_context)
     # Declare any gate served by a stand-in (e.g. api mode with no NVIDIA key ->
     # docking). The report renders this as a banner: a reader must never mistake a
     # stand-in verdict for a real one, because DNA gets ordered off these reports.

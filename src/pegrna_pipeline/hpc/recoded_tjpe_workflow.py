@@ -412,6 +412,30 @@ def _derive_pbs1(genome: str, *, site_s: int, pbs_length: int, pegrna_strand: st
     return window
 
 
+def _advisory_splice_text(
+    sp_ok: bool, metrics: Dict[str, Any], where: str, *, primary_passed: bool
+) -> str:
+    """What the report says about a SpliceAI number computed without real genomic context.
+
+    Without that context the number cannot tell a clean large insert from a bad one (ADR 0028), so it never
+    rejects. Under the cutoff it is reported with where it came from. At or above it, it is a warning that
+    says plainly that it is advisory, why, and what the primary gate found.
+    """
+    value = metrics.get("value")
+    shown = f"{value:.3f}" if isinstance(value, (int, float)) else "?"
+    where = where or "no genomic context"
+    if sp_ok:
+        return f"splice delta {shown} ok (advisory only: {where})"
+    text = (
+        f"SpliceAI delta {shown} is at or above the {metrics.get('cutoff')} cutoff, but this is "
+        f"advisory only ({where}): without real flanks SpliceAI cannot tell a clean large insert "
+        "from a bad one, so the number is reported and does not reject."
+    )
+    if primary_passed:
+        text += " The primary splice gate (MaxEntScan) passed."
+    return text
+
+
 def _assemble_edit(
     *, genome: str, site_s: int, nick_position: int, arm_sense: str, cargo: str
 ) -> Tuple[str, str, int, int]:
@@ -869,8 +893,11 @@ def _run_recoded_tjpe_single(
             # ADVISORY cross-check: SpliceAI needs >=10 kb of real genomic context. When
             # a caller supplies it, a concordant disruption call also fails the candidate;
             # on short context it raises ValueError and is skipped (NOT fail-loud) so the
-            # MaxEnt gate above remains the primary check (ADR 0011).
+            # MaxEnt gate above remains the primary check (ADR 0011). A scorer that had to
+            # invent its context (N-padding) says so with ``binding = False``: its number is
+            # then reported and, if high, warned about, but it does not reject (ADR 0028).
             sp_metrics: Dict[str, Any] = {}
+            splice_advisory: Optional[str] = None
             try:
                 sp_ok, sp_why = passes_splice_gate(
                     reference, edited, scorer=splice_scorer, metrics=sp_metrics
@@ -892,11 +919,32 @@ def _run_recoded_tjpe_single(
                 diagnostics.append(f"cand{tried}: splice cross-check error: {exc}")
                 continue
             else:
-                _emit(tried, "splice", sp_why, sp_ok, sp_metrics)
-                if not sp_ok:
-                    diagnostics.append(f"cand{tried}: splice (SpliceAI cross-check): {sp_why}")
-                    continue
-                gate_info["splice"] = sp_why
+                binding = bool(getattr(splice_scorer, "binding", True))
+                where = str(getattr(splice_scorer, "context_note", "") or "")
+                if binding:
+                    _emit(tried, "splice", sp_why, sp_ok, sp_metrics)
+                    if not sp_ok:
+                        diagnostics.append(f"cand{tried}: splice (SpliceAI cross-check): {sp_why}")
+                        continue
+                    gate_info["splice"] = f"{sp_why} ({where})" if where else sp_why
+                else:
+                    advisory = _advisory_splice_text(
+                        sp_ok, sp_metrics, where, primary_passed="cryptic" in gate_info
+                    )
+                    gate_info["splice"] = advisory
+                    if not sp_ok:
+                        splice_advisory = advisory
+                    _emit(
+                        tried,
+                        "splice",
+                        advisory,
+                        True,
+                        {
+                            "metric": "SpliceAI Δ",
+                            "value": sp_metrics.get("value"),
+                            "note": f"advisory, not binding: {where}",
+                        },
+                    )
 
             # Insertion-site structural tolerance (ADR 0013): the cargo (tag + linker
             # + T7-leftover junk) is inserted at S and must NOT land in a structured /
@@ -1024,6 +1072,8 @@ def _run_recoded_tjpe_single(
                     "the folding gate nor the docking gate reliably catches this, so check the "
                     "predicted structure before ordering"
                 )
+            if splice_advisory:
+                warnings.append("splice cross-check: " + splice_advisory)
             if dk_metrics.get("borderline"):
                 warnings.append("docking gate: " + dk_metrics["note"])
             if dk_metrics.get("advisory"):

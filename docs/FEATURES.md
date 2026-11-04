@@ -65,7 +65,7 @@ calibration set.
 | Microhomology | DnaChisel (synonymous recoder) | longest perfect repeat between arm and flank | max run **8 bp** (recoder minimises below) |
 | rcPBS2 | Biopython `Tm_NN` | second-strand primer stability | Tm **37–42 °C**, GC 40–70 %, length scan 10–18 nt |
 | Cryptic splice (primary) | **MaxEntScan** (Yeo & Burge) | edit creates/strengthens a donor/acceptor motif in the recode span + cassette + junctions | MaxEnt < **8** bits (context-free) |
-| Splice (cross-check) | **SpliceAI** (advisory) | native-context splice disruption, when ≥10 kb genomic context is supplied | Δ ≤ **0.2**; skipped on short context |
+| Splice (cross-check) | **SpliceAI** (advisory unless on real context) | splice disruption in the real sequence around the edit | Δ ≤ **0.2**, binding only with real ±5 kb flanks (the web path fetches them from Ensembl for the configured transcript); without them it is reported, a high value is a warning, and it never rejects (ADR 0028) |
 | Insertion-site tolerance | **AlphaFold-DB** + biotite | the cargo insertion site (residues flanking S) must not be buried / packed / special, so the tag+linker+junk insert cannot disrupt the fold (judges the insertion site, **not** the synonymous recode arm) | pLDDT ≥ 70 & RSA < 0.25, or contacts > 18, or special residue |
 | Full-pegRNA 2D structure | **RiNALMo** (GPU) → **RNAformer** (CPU) fallback | functional regions (spacer/PBS/RTT) mis-pair | base-pair prob boundary **0.5** |
 | Docking | **Boltz-2** (AF3-class ipTM) | scaffold–nCas9 interface degraded by the extension | ipTM floor 0.6, max drop 0.2 vs apo |

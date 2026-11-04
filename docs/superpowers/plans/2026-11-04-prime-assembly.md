@@ -239,9 +239,9 @@ Walk: refuse `len(cargo) < 2 * flap_length`; enumerate guides; drop those failin
 
 - [ ] Grep every reference first; remove only what nothing else uses; run the full suite; commit `chore(pa): remove the legacy prototype`.
 
-### Task 2.5: real models on DSI, ADR 0028
+### Task 2.5: real models on DSI, ADR 0029
 
-- [ ] Rsync, run `design-pa --mode api` for CTCF + GGGGS-FLAG-P2A-ZeoR, assert: a design; no stand-in gates; both pegRNAs at most 166 nt; docking is a verdict (not advisory); INV-0; `simulate_pa`. Record the numbers in ADR 0028; mark the spec Implemented; commit.
+- [ ] Rsync, run `design-pa --mode api` for CTCF + GGGGS-FLAG-P2A-ZeoR, assert: a design; no stand-in gates; both pegRNAs at most 166 nt; docking is a verdict (not advisory); INV-0; `simulate_pa`. Record the numbers in ADR 0029; mark the spec Implemented; commit.
 
 ---
 

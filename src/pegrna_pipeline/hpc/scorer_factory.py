@@ -166,28 +166,71 @@ def _real_bundle(
 class _PaddedSpliceAIScorer:
     """SpliceAI on short local design windows (api/CPU path).
 
-    The real ``SpliceAIScorer`` fail-louds unless it is handed >= 2*context nt
-    (>= 5 kb each side) — the HPC path supplies the true GRCh38 flanks. On a
-    GPU-less web host we usually only have the local design window (hundreds of
-    nt), so we N-pad both REF and ALT up to the required context before scoring.
-    N is SpliceAI's own end-padding symbol (zero one-hot, no splice signal), and
-    the prefix/suffix alignment in ``delta`` keeps the edit region intact, so the
-    delta over the real bases is preserved. CAVEAT: without the true genomic
-    neighbourhood this is an approximation of the full-context HPC gate.
+    The real ``SpliceAIScorer`` fail-louds unless it is handed >= 2*context nt (>= 5 kb each side). The HPC
+    path supplies the true GRCh38 flanks; a GPU-less web host usually only has the local design window
+    (hundreds of nt). Two cases follow, and they are NOT equivalent (ADR 0028):
+
+    * REAL context. :meth:`set_context` supplies the true flanks (Ensembl, located by exact match) and SpliceAI
+      judges the edit in the sequence it was trained on. The verdict BINDS (``binding`` is True), which is what
+      ADR 0011 says should happen when a caller supplies >= 10 kb of real context.
+    * NO context. Both alleles are padded with N, SpliceAI's own end-padding symbol (zero one-hot). The number
+      is still computed and reported, but it does NOT bind (``binding`` is False): an island of a few hundred
+      real bases in 10 kb of N is not an input SpliceAI was trained on. Measured on the CTCF locus, every one
+      of 20 unrelated 501-nt inserts (10 random synonymous recodings of the cassette, 10 random sequences)
+      scored >= 0.2 this way, and the same cassette scored 0.159 once the real flanks were supplied. It had
+      been applied as a hard gate, which rejected every large cassette whatever it contained.
+
+    ``binding`` and ``context_note`` describe the most recent :meth:`delta` call.
     """
 
     def __init__(self) -> None:
         from pegrna_pipeline.hpc.splice_screen import SpliceAIScorer
 
         self._inner = SpliceAIScorer()
+        self._left: str | None = None
+        self._right: str | None = None
+        self._complete = False
+        self._source = ""
+        self._binding = False
+        self._note = "no genomic context: the design window padded with N"
+
+    def set_context(self, left: str, right: str, *, complete: bool, source: str) -> None:
+        """Use these real flanks (each exactly the model's context, N-filled where the genome ended)."""
+        pad = self._inner._context
+        if len(left) != pad or len(right) != pad:
+            raise ValueError(
+                f"each flank must be exactly {pad} nt (N-filled where the genome ends); "
+                f"got {len(left)} and {len(right)}"
+            )
+        self._left, self._right = left.upper(), right.upper()
+        self._complete, self._source = bool(complete), source
+
+    @property
+    def binding(self) -> bool:
+        return self._binding
+
+    @property
+    def context_note(self) -> str:
+        return self._note
 
     def delta(self, ref_seq: str, alt_seq: str) -> float:
         pad = self._inner._context  # 5000 nt each side
-        need = 2 * pad
-        if len(ref_seq) >= need and len(alt_seq) >= need:
+        if len(ref_seq) >= 2 * pad and len(alt_seq) >= 2 * pad:
+            self._binding, self._note = True, "genomic context supplied by the caller"
             return self._inner.delta(ref_seq, alt_seq)
-        flank = "N" * pad
-        return self._inner.delta(flank + ref_seq + flank, flank + alt_seq + flank)
+        if self._left is None or self._right is None:
+            left = right = "N" * pad
+            self._binding = False
+            self._note = "no genomic context: the design window padded with N"
+        else:
+            left, right = self._left, self._right
+            self._binding = self._complete
+            self._note = (
+                f"real genomic context ({self._source})"
+                if self._complete
+                else f"partial genomic context, N beyond the genome's end ({self._source})"
+            )
+        return self._inner.delta(left + ref_seq + right, left + alt_seq + right)
 
 
 def _api_bundle(
@@ -205,9 +248,9 @@ def _api_bundle(
     Every gate is REAL except that the two GPU-hard models are handled without a
     local GPU:
 
-    * splice      -> _PaddedSpliceAIScorer      (SpliceAIScorer on CPU, N-padded so
-                                                 the advisory cross-check runs on
-                                                 short local design windows)
+    * splice      -> _PaddedSpliceAIScorer      (SpliceAIScorer on CPU; real flanks when the
+                                                 driver can fetch them, else N-padded and then
+                                                 advisory only: ADR 0028)
     * cryptic     -> MaxEntScanScorer          (pure-Python matrices, CPU)
     * structure   -> ViennaRNAStructureScorer  (partition-function bpp, CPU)
     * importance  -> AFDBImportanceScorer       (AlphaFold-DB web API + biotite, CPU)
@@ -252,9 +295,9 @@ def _api_bundle(
             return {p: (0.8, 0, False) for p in protospacers}
 
     return GateScorers(
-        # N-pad short web-host design windows up to SpliceAI's >=10 kb context so the
-        # advisory cross-check actually runs here; the raw SpliceAIScorer fail-louds
-        # below that and the workflow would silently record it as an "advisory skip".
+        # SpliceAI needs >=10 kb. The driver gives this scorer the real flanks of the design
+        # window when it can fetch them (then the verdict binds); without them the window is
+        # N-padded so the number still shows, but it is advisory only (ADR 0028).
         splice_scorer=_PaddedSpliceAIScorer(),
         full_structure_scorer=ViennaRNAStructureScorer(),
         importance_scorer=AFDBImportanceScorer(uniprot_acc or "UNKNOWN"),
