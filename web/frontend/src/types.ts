@@ -64,8 +64,34 @@ export interface ProgressEvent {
   metrics?: GateMetric;
 }
 
+/** One nucleotide the pipeline changed from what was specified (ADR 0029). Positions are 1-based. */
+export interface ChangeRow {
+  scope: "cargo" | "genomic arm";
+  part: string;
+  position: number;
+  codon: number | null;
+  old_codon: string;
+  new_codon: string;
+  amino_acid: string;
+  old_base: string;
+  new_base: string;
+}
+
+export interface ChangesPayload {
+  cargo_unchanged: boolean;
+  cargo_variant: number;
+  cargo_length: number;
+  cargo_changes: ChangeRow[];
+  arm_changes: ChangeRow[];
+  /** What was protected, one line each: kept exactly as specified. */
+  kept_exactly: string[];
+  notes: string[];
+}
+
 export interface GatesPayload {
   gate_results?: [string, string][];
+  /** Everything that differs from the input, exactly; null for a run that did not produce a design. */
+  changes?: ChangesPayload | null;
   recode_edits?: number;
   deletion_size?: number;
   candidates_tried?: number;
@@ -105,6 +131,8 @@ export interface Motif {
   aa: string;
   dna: string;
   description: string;
+  /** Not protein (a promoter, a UTR, a stop codon): never recoded. */
+  locked?: boolean;
 }
 
 export type MotifGroups = Record<string, Motif[]>;

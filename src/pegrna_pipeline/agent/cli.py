@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import getpass
+import json
 import os
 import shlex
 import sys
@@ -102,10 +103,15 @@ def validate_cmd(construct: str, interactive: bool) -> None:
     click.echo(f"Components ({len(construct_obj.components)}):")
     for i, comp in enumerate(construct_obj.components, start=1):
         click.echo(
-            f"  {i:>3}. {comp.source:<7} {comp.name:<20} " f"aa={comp.aa or '-':<12} dna={comp.dna}"
+            f"  {i:>3}. {comp.source:<7} {comp.name:<20} "
+            f"{'LOCKED ' if comp.locked else 'coding '}aa={comp.aa or '-':<12} dna={comp.dna}"
         )
     click.echo(f"Total aa ({len(construct_obj.aa)}): {construct_obj.aa}")
     click.echo(f"Total dna ({len(construct_obj.dna)}): {construct_obj.dna}")
+    click.echo(
+        "LOCKED parts are never recoded. Paste into a design config as cargo_parts:\n"
+        + json.dumps(construct_obj.cargo_parts())
+    )
 
 
 @cli.group("motif")

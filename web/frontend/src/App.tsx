@@ -17,6 +17,7 @@ import type {
 } from "./types";
 import { Header } from "./components/Header";
 import { CargoBuilder } from "./components/CargoBuilder";
+import { type BuilderPart, cargoOf, newPartId, parseExcluded, rangesToText, toCargoParts } from "./cargo";
 import { PipelinePanel } from "./components/PipelinePanel";
 import { ResultPanel } from "./components/ResultPanel";
 import { Badge, Callout, Disclosure, Field, Section, cx } from "./components/Primitives";
@@ -73,8 +74,10 @@ export default function App() {
 
   const [form, setForm] = useState<FormState>(EMPTY_FORM);
   const [cargoMode, setCargoMode] = useState<"builder" | "raw">("builder");
-  const [cargoParts, setCargoParts] = useState<string[]>([]);
+  const [cargoParts, setCargoParts] = useState<BuilderPart[]>([]);
   const [rawCargo, setRawCargo] = useState("");
+  /** Pasted DNA only: nucleotide ranges (1-based, inclusive) the pipeline must never change. */
+  const [rawExcluded, setRawExcluded] = useState("");
 
   /** Keys from a loaded example that the form does not surface, preserved on submit. */
   const [passthrough, setPassthrough] = useState<DesignConfig>({});
@@ -123,12 +126,10 @@ export default function App() {
     [],
   );
 
-  const cargo = useMemo(() => {
-    if (cargoMode === "raw") return rawCargo;
-    const byName = new Map<string, string>();
-    Object.values(motifs).forEach((list) => list.forEach((m) => byName.set(m.name, m.dna)));
-    return cargoParts.map((n) => byName.get(n) ?? "").join("");
-  }, [cargoMode, rawCargo, cargoParts, motifs]);
+  const cargo = useMemo(
+    () => (cargoMode === "raw" ? rawCargo : cargoOf(cargoParts)),
+    [cargoMode, rawCargo, cargoParts],
+  );
 
   function applyConfig(cfg: DesignConfig) {
     setForm({
@@ -150,9 +151,26 @@ export default function App() {
       het_snps: cfg.het_snps ? JSON.stringify(cfg.het_snps) : "",
       het_edit: Boolean(cfg.het_edit),
     });
-    // A loaded config carries raw cargo DNA, not motif names.
-    setCargoMode("raw");
+    // A loaded config carries cargo DNA. If it names its parts (with their locks), keep them as parts so the
+    // locks stay editable; otherwise it is pasted DNA, with any excluded ranges it carries.
+    const named = Array.isArray(cfg.cargo_parts) ? (cfg.cargo_parts as Record<string, unknown>[]) : [];
+    if (named.length > 0) {
+      setCargoMode("builder");
+      setCargoParts(
+        named.map((q, i) => ({
+          id: newPartId(),
+          name: String(q.name ?? `part ${i + 1}`),
+          dna: String(q.dna ?? ""),
+          locked: q.locked !== false,
+          coding: true,
+          source: "custom" as const,
+        })),
+      );
+    } else {
+      setCargoMode("raw");
+    }
     setRawCargo(cfg.cargo ?? "");
+    setRawExcluded(rangesToText(cfg.cargo_locked));
     setPassthrough(cfg);
     // A freshly loaded example is valid by construction; clear any error state
     // left over from whatever was in the form before.
@@ -175,6 +193,10 @@ export default function App() {
     else if (siteS < 0 || siteS > genomeLength)
       e.site_s = `Must be between 0 and ${genomeLength}, the length of the window.`;
     if (!cargo) e.cargo = "Add the cargo you want to insert.";
+    else if (cargoMode === "raw") {
+      const parsed = parseExcluded(rawExcluded, cargo.length);
+      if (parsed.error) e.cargo = `Never-change ranges: ${parsed.error}`;
+    }
     if (form.spacer && form.spacer.trim().length !== 20)
       e.spacer = `A spacer is 20 nt (this is ${form.spacer.trim().length}).`;
     const tolerance = Number(form.ngrna_max_offtargets);
@@ -189,7 +211,7 @@ export default function App() {
       }
     }
     return e;
-  }, [form, cargo, siteS, genomeLength]);
+  }, [form, cargo, cargoMode, rawExcluded, siteS, genomeLength]);
 
   const hasErrors = Object.keys(errors).length > 0;
 
@@ -212,6 +234,15 @@ export default function App() {
     assign("rtt_aa", form.rtt_aa);
     cfg.genome = form.genome.trim().toUpperCase();
     cfg.cargo = cargo;
+    // Which bases may be recoded (ADR 0029). Parts carry their own locks; pasted DNA can exclude ranges.
+    // Anything inherited from a loaded example is replaced, never left to disagree with the form.
+    delete cfg.cargo_parts;
+    delete cfg.cargo_locked;
+    if (cargoMode === "builder" && cargoParts.length > 0) cfg.cargo_parts = toCargoParts(cargoParts);
+    if (cargoMode === "raw") {
+      const { ranges } = parseExcluded(rawExcluded, cargo.length);
+      if (ranges.length > 0) cfg.cargo_locked = ranges;
+    }
     cfg.site_s = siteS;
     cfg.pegrna_strand = form.pegrna_strand;
     cfg.arm_side = form.arm_side;
@@ -448,6 +479,8 @@ export default function App() {
                 onPartsChange={setCargoParts}
                 rawCargo={rawCargo}
                 onRawCargoChange={setRawCargo}
+                rawExcluded={rawExcluded}
+                onRawExcludedChange={setRawExcluded}
                 mode={cargoMode}
                 onModeChange={setCargoMode}
               />

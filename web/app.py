@@ -136,6 +136,20 @@ def _validate(req: "DesignRequest") -> None:
     genome = req.config.get("genome")
     if isinstance(genome, str) and len(genome) > MAX_GENOME_LEN:
         raise HTTPException(400, f"genome exceeds {MAX_GENOME_LEN} nt (api mode is CPU-bounded)")
+    # The lock inputs are checked by the engine's own parser, so the page and the pipeline cannot disagree
+    # about what is valid.
+    cargo = req.config.get("cargo")
+    if isinstance(cargo, str) and (req.config.get("cargo_parts") or req.config.get("cargo_locked")):
+        from pegrna_pipeline.hpc.cargo_spec import build_cargo_spec
+
+        try:
+            build_cargo_spec(
+                cargo,
+                parts=req.config.get("cargo_parts"),
+                locked=req.config.get("cargo_locked"),
+            )
+        except (ValueError, TypeError, AttributeError) as exc:
+            raise HTTPException(400, f"cargo lock settings: {exc}") from exc
 
 
 class _Slot:
@@ -334,21 +348,33 @@ def motifs() -> JSONResponse:
     """The motif library (epitope/affinity tags, linkers, 2A, markers, FPs, …)
     plus the T7 amplification elements, grouped by category, for the cargo builder."""
     from pegrna_pipeline.agent.motif_library import MotifLibrary
+    from pegrna_pipeline.hpc.cargo_spec import library_part_is_coding
     from pegrna_pipeline.hpc.insert_elements import PROMOTERS
 
+    # ``locked`` is the one rule the recoder uses: a part that is not protein is never changed (ADR 0029).
     groups: dict[str, list[dict[str, Any]]] = {}
     for m in MotifLibrary.load_full():
         groups.setdefault(m.category, []).append(
-            {"name": m.name, "aa": m.aa, "dna": m.dna, "description": m.description}
+            {
+                "name": m.name,
+                "aa": m.aa,
+                "dna": m.dna,
+                "description": m.description,
+                "locked": not library_part_is_coding(aa=m.aa, category=m.category),
+            }
         )
-    # Frame-safe T7 promoters (from insert_elements) as a pickable category.
+    # The T7 promoters (from insert_elements) as a pickable category. Never recoded.
     for name, el in PROMOTERS.items():
         groups.setdefault("amplification", []).append(
             {
                 "name": name,
                 "aa": "",
                 "dna": el.sequence,
-                "description": f"{el.direction} T7 promoter for linear RNA amplification",
+                "description": (
+                    f"{el.direction} T7 promoter for linear RNA amplification, "
+                    f"{len(el.sequence)} nt (two G's after TATA): never recoded"
+                ),
+                "locked": True,
             }
         )
     for cat in groups:
@@ -532,7 +558,12 @@ def design_stream(req: DesignRequest) -> StreamingResponse:
 @app.get("/api/runs/{run_id}/{name}")
 def run_file(run_id: str, name: str) -> FileResponse:
     # Guard against path traversal: only allow the two known artifacts.
-    allowed = {"recoded_tjpe_report.txt", "recoded_tjpe_components.csv", "config.json"}
+    allowed = {
+        "recoded_tjpe_report.txt",
+        "recoded_tjpe_components.csv",
+        "recoded_tjpe_changes.csv",
+        "config.json",
+    }
     if name not in allowed:
         raise HTTPException(404, "not found")
     path = RUNS / run_id / name

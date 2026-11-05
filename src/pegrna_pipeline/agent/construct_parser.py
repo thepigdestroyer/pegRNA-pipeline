@@ -24,6 +24,8 @@ from dataclasses import dataclass
 from enum import Enum, auto
 from typing import Iterable, Sequence
 
+from pegrna_pipeline.hpc.cargo_spec import library_part_is_coding
+
 
 class TokenKind(Enum):
     NAME = auto()
@@ -286,6 +288,8 @@ class ResolvedComponent:
     dna: str  # uppercase ACGT
     aa: str  # single-letter amino acid sequence ("" for raw_dna / Kozak)
     source: str  # "motif" | "raw_aa" | "raw_dna"
+    #: Never recoded (ADR 0029): not protein (a promoter, a 5'UTR, a stop codon), or raw DNA typed in as is.
+    locked: bool = False
 
 
 @dataclass(frozen=True)
@@ -299,6 +303,10 @@ class Construct:
     @property
     def aa(self) -> str:
         return "".join(c.aa for c in self.components)
+
+    def cargo_parts(self) -> list[dict]:
+        """The ``cargo_parts`` a design config takes: each part's DNA and whether it is locked."""
+        return [{"name": c.name, "dna": c.dna, "locked": c.locked} for c in self.components]
 
 
 def _codon_optimise_simple(aa_sequence: str) -> str:
@@ -332,6 +340,7 @@ def resolve_construct(
                     dna=motif.dna.upper(),
                     aa=motif.aa,
                     source="motif",
+                    locked=not library_part_is_coding(aa=motif.aa, category=motif.category),
                 )
             )
         elif raw.kind is RawComponentKind.RAW_AA:
@@ -355,6 +364,7 @@ def resolve_construct(
                     dna=dna,
                     aa="",
                     source="raw_dna",
+                    locked=True,  # DNA typed in as is is kept as is
                 )
             )
         else:  # pragma: no cover - defensive

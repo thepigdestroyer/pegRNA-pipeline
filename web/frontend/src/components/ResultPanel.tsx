@@ -1,5 +1,5 @@
 import { runFileURL } from "../api";
-import type { ComponentRow, DesignResult } from "../types";
+import type { ChangeRow, ChangesPayload, ComponentRow, DesignResult } from "../types";
 import { Badge, Callout, CopyButton, Disclosure, cx } from "./Primitives";
 import { SequenceMap, partStyle } from "./SequenceMap";
 
@@ -72,6 +72,125 @@ function ComponentTable({ components }: { components: ComponentRow[] }) {
         </tbody>
       </table>
     </div>
+  );
+}
+
+const CHANGE_LABEL: Record<ChangeRow["scope"], string> = {
+  cargo: "Cargo",
+  "genomic arm": "Genomic arm",
+};
+
+/**
+ * Exactly what differs from what was specified (ADR 0029): every changed nucleotide, which part it is in, and
+ * what was kept exactly. The amino acid never changes; it is shown so that can be checked by eye.
+ */
+function ChangesPanel({ changes, runId }: { changes: ChangesPayload; runId: string }) {
+  const rows = [...changes.cargo_changes, ...changes.arm_changes];
+  const shown = rows.slice(0, 250);
+  const summary = changes.cargo_unchanged
+    ? `cargo as given · ${changes.arm_changes.length} arm nt`
+    : `${changes.cargo_changes.length} cargo nt · ${changes.arm_changes.length} arm nt`;
+  return (
+    <Disclosure title="Changes from your input" description={summary} defaultOpen>
+      <div className="space-y-3 text-sm">
+        <p>
+          <span className="font-semibold">Cargo: </span>
+          {changes.cargo_unchanged ? (
+            <>
+              used exactly as you gave it ({changes.cargo_length} nt, <strong>0 changed</strong>).
+            </>
+          ) : (
+            <>
+              <strong>recoded, not as you gave it</strong>: {changes.cargo_changes.length} nucleotide
+              {changes.cargo_changes.length === 1 ? "" : "s"} changed (variant {changes.cargo_variant}).
+              Every amino acid is identical.
+            </>
+          )}
+        </p>
+        <p>
+          <span className="font-semibold">Genomic arm: </span>
+          {changes.arm_changes.length === 0
+            ? "copied exactly (no nucleotide changed)."
+            : `${changes.arm_changes.length} nucleotide${changes.arm_changes.length === 1 ? "" : "s"} of the design window changed by the silent recode. Every amino acid is identical.`}
+        </p>
+
+        {rows.length > 0 && (
+          <div className="overflow-x-auto">
+            <table className="w-full border-collapse text-xs">
+              <thead>
+                <tr className="border-b border-ink-200 dark:border-ink-700">
+                  {["Where", "Part", "nt", "Codon", "Change", "aa"].map((h) => (
+                    <th
+                      key={h}
+                      scope="col"
+                      className="px-2 py-2 text-left font-semibold text-ink-600 dark:text-ink-300"
+                    >
+                      {h}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {shown.map((c, i) => (
+                  <tr
+                    key={`${c.scope}-${c.position}-${i}`}
+                    className="border-b border-ink-100 last:border-0 dark:border-ink-800"
+                  >
+                    <td className="px-2 py-1.5">{CHANGE_LABEL[c.scope]}</td>
+                    <td className="px-2 py-1.5">{c.part}</td>
+                    <td className="px-2 py-1.5 tabular-nums">{c.position}</td>
+                    <td className="px-2 py-1.5 tabular-nums">{c.codon ?? "—"}</td>
+                    <td className="seq px-2 py-1.5">
+                      {c.old_codon && c.new_codon
+                        ? `${c.old_codon} → ${c.new_codon}`
+                        : `${c.old_base} → ${c.new_base}`}
+                    </td>
+                    <td className="px-2 py-1.5">{c.amino_acid || "—"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            {rows.length > shown.length && (
+              <p className="mt-2 text-xs text-ink-500 dark:text-ink-400">
+                Showing {shown.length} of {rows.length}. The whole list is in the CSV.
+              </p>
+            )}
+          </div>
+        )}
+
+        {changes.kept_exactly.length > 0 && (
+          <div>
+            <p className="font-semibold">Kept exactly as specified</p>
+            <ul className="mt-1 list-disc space-y-0.5 pl-5 text-ink-700 dark:text-ink-300">
+              {changes.kept_exactly.map((line, i) => (
+                <li key={i}>{line}</li>
+              ))}
+            </ul>
+          </div>
+        )}
+        {changes.notes.length > 0 && (
+          <Callout tone="warn">
+            <ul className="list-disc space-y-0.5 pl-5">
+              {changes.notes.map((n, i) => (
+                <li key={i}>{n}</li>
+              ))}
+            </ul>
+          </Callout>
+        )}
+
+        <div className="flex flex-wrap items-center gap-3">
+          <p className="text-xs text-ink-500 dark:text-ink-400">
+            Everything not listed here is exactly as you specified.
+          </p>
+          <a
+            className="btn btn-secondary ml-auto px-2.5 py-1 text-xs"
+            href={runFileURL(runId, "recoded_tjpe_changes.csv")}
+          >
+            Changes (.csv)
+          </a>
+        </div>
+      </div>
+    </Disclosure>
   );
 }
 
@@ -180,6 +299,10 @@ export function ResultPanel({ result }: { result: DesignResult }) {
               ))}
             </ul>
           </Callout>
+        )}
+
+        {result.ok && result.gates?.changes && (
+          <ChangesPanel changes={result.gates.changes} runId={result.run_id} />
         )}
 
         {result.ok && result.components.length > 0 && (
