@@ -725,6 +725,11 @@ def render_recoded_report(result, manifest: dict) -> str:
     lines.append(f"  recode edits       : {result.recode_edits}")
     lines.append(f"  candidates_tried   : {result.candidates_tried}")
     lines.append("")
+    changes = getattr(result, "changes", None)
+    if changes is not None:
+        lines.append("Changes from your input:")
+        lines.extend("  " + ln for ln in changes.lines())
+        lines.append("")
     lines.append("Advisory warnings:")
     if result.warnings:
         for w in result.warnings:
@@ -747,6 +752,37 @@ def render_recoded_report(result, manifest: dict) -> str:
     for key in sorted(manifest):
         lines.append(f"  {key}: {manifest[key]}")
     return "\n".join(lines)
+
+
+_CHANGES_COLUMNS = (
+    "scope",
+    "part",
+    "position",
+    "codon",
+    "old_codon",
+    "new_codon",
+    "amino_acid",
+    "old_base",
+    "new_base",
+)
+
+
+def render_changes_csv(result) -> str:
+    """One row per nucleotide the pipeline changed from what was specified (cargo and genomic arm).
+
+    ``position`` is 1-based: within the cargo for scope ``cargo``, within the design window for ``genomic
+    arm``. Header only when nothing changed.
+    """
+    import csv  # noqa: PLC0415
+    import io  # noqa: PLC0415
+
+    buf = io.StringIO()
+    writer = csv.DictWriter(buf, fieldnames=_CHANGES_COLUMNS, lineterminator="\n")
+    writer.writeheader()
+    changes = getattr(result, "changes", None)
+    for row in changes.rows() if changes is not None else ():
+        writer.writerow(row)
+    return buf.getvalue()
 
 
 def render_recoded_csv(result, manifest: Dict[str, Any] | None = None) -> str:

@@ -174,7 +174,14 @@ The config is a JSON of the design inputs (`rtt_aa`, `cargo`, `genome`,
 `site_s`, `cds_mask`, `arm_side`, ...); keys starting with `_` or provenance keys
 (`gene`, `transcript`, `uniprot_acc`) are routed into the report manifest. The
 `spacer` is **optional** — omit it and PRIDICT2 auto-designs the pegRNA#1 spacer
-from `site_s`; include `spacer` only to pin a fixed guide. See
+from `site_s`; include `spacer` only to pin a fixed guide.
+
+**What may be recoded.** Only bases that code for protein are ever changed in the cargo; a promoter (T7, either
+orientation) is never touched. Say more with two optional keys: `cargo_parts`, a list of
+`{"name", "dna", "locked"}` whose DNA joins to `cargo` (an unmarked part is locked; `pegrna validate "FLAG-GGGGS-..."`
+prints a paste-ready list), and `cargo_locked`, `[first, last]` nucleotide ranges (1-based, inclusive) that must
+never change. Without them only the ORF up to the first stop codon counts. The report lists every nucleotide that
+differs from what you gave (`recoded_tjpe_changes.csv`; ADR 0029). See
 `examples/ctcf_cterm/config.json` for a complete, runnable CTCF C-terminal knock-in
 (explicit spacer) and `examples/ctcf_cterm/config_autospacer.json` for the same
 design with the spacer auto-designed.

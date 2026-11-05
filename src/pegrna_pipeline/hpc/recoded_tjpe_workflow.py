@@ -13,6 +13,15 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 from pegrna_pipeline.hpc.allele_specificity import find_allele_specific
+from pegrna_pipeline.hpc.cargo_spec import (
+    BaseChange,
+    ChangeReport,
+    arm_changes,
+    build_cargo_spec,
+    build_change_report,
+    cargo_variants,
+    free_codons,
+)
 from pegrna_pipeline.hpc.codon_expander import _gc_content, enumerate_variants
 from pegrna_pipeline.hpc.complex_dock import DockingServiceError, passes_docking_gate
 from pegrna_pipeline.hpc.cryptic_splice import passes_cryptic_splice_gate
@@ -256,6 +265,11 @@ class RecodedTJPEResult:
     #: of (gate_id, info) — surfaced in the report + web flowchart so each step shows
     #: the score/verdict it produced. Empty until set by the workflow.
     gate_results: List[Tuple[str, str]] = field(default_factory=list)
+    #: Every base of the design window the replacement arm changes (window position, codon, old -> new).
+    arm_changes: Tuple[BaseChange, ...] = ()
+    #: Everything the pipeline changed from what was specified, exactly (cargo and arm), and what was
+    #: kept exactly. Set by :func:`run_recoded_tjpe`; ``None`` only for results built by hand.
+    changes: Optional[ChangeReport] = None
 
 
 def _decompose_rtt(
@@ -1175,6 +1189,7 @@ def _run_recoded_tjpe_single(
                 recode_span=arm.recode_span,
                 locked_span=arm.locked_span,
                 gate_results=gate_results,
+                arm_changes=arm_changes(genome, lo, hi, arm.sense_arm, cds_mask),
             )
 
     raise NoValidPegRNA(
@@ -1197,41 +1212,20 @@ def _is_insert_side_failure(diagnostics: Sequence[str]) -> bool:
 
 
 def _cargo_variants(cargo: str, max_variants: int) -> List[str]:
-    """The original cargo first, then up to ``max_variants``-1 CAI-ranked SYNONYMOUS
-    variants of the whole cargo (the INSERT lever, Stage B/F). Variants are produced ONLY
-    when the cargo is a clean in-frame CDS (length a multiple of 3, translatable, no internal
-    stop); otherwise a synonymous swap is undefined and the lever no-ops (original only).
-    A trailing stop codon is preserved verbatim. ``site_s`` and the spacer are unaffected by
-    the swap (the spacer targets the genomic PAM, not the cargo)."""
-    out = [cargo]
-    if max_variants <= 1 or len(cargo) % 3 != 0:
-        return out
-    try:
-        from Bio.Seq import Seq  # noqa: PLC0415
-
-        aa = str(Seq(cargo).translate())
-    except Exception:  # noqa: BLE001
-        return out
-    core = aa[:-1] if aa.endswith("*") else aa
-    if not core or "*" in core:  # internal stop -> not a single clean CDS
-        return out
-    tail = cargo[len(core) * 3 :]  # trailing stop codon (if present), kept byte-exact
-    from pegrna_pipeline.hpc.codon_expander import rank_insert_variants_by_cai  # noqa: PLC0415
-
-    seen = {cargo}
-    for cv in rank_insert_variants_by_cai(core, max_variants=max_variants * 4):
-        dna = cv.dna + tail
-        if dna in seen:
-            continue
-        seen.add(dna)
-        out.append(dna)
-        if len(out) >= max_variants:
-            break
-    return out
+    """The cargo as given, then synonymous variants that change only protein-coding codons the lock model
+    allows (:mod:`cargo_spec`): never a stop codon, never a known promoter (T7), never a base the user
+    excluded. Kept for callers that pass a plain string; :func:`run_recoded_tjpe` builds the spec itself.
+    """
+    return cargo_variants(build_cargo_spec(cargo), max_variants)
 
 
 def run_recoded_tjpe(
-    *, cargo: str, max_insert_variants: int = 6, **kwargs: Any
+    *,
+    cargo: str,
+    max_insert_variants: int = 6,
+    cargo_locked: Optional[Sequence[Sequence[int]]] = None,
+    cargo_parts: Optional[Sequence[Dict[str, Any]]] = None,
+    **kwargs: Any,
 ) -> "RecodedTJPEResult":
     """Canonical recoded tj-PE design workflow (the CLI/web entrypoint).
 
@@ -1242,18 +1236,49 @@ def run_recoded_tjpe(
     edit site ``site_s`` and the spacer never change and the swap is protein-silent. A
     cargo-INDEPENDENT failure (importance / off-target / INV-0 / nick / arm) does NOT trigger
     a retry, because a synonymous swap cannot help it. ``max_insert_variants`` bounds the
-    lever (>= 1; 1 disables it; the lever also no-ops unless the cargo is a clean in-frame
-    CDS). Raises the last :class:`NoValidPegRNA` when every attempt is exhausted.
+    lever (>= 1; 1 disables it). Raises the last :class:`NoValidPegRNA` when every attempt is
+    exhausted.
+
+    **What the lever may change (ADR 0029).** Only codons of protein-coding stretches: ``cargo_parts``
+    (parts with a ``locked`` flag) and ``cargo_locked`` (1-based inclusive nucleotide ranges that must
+    never change) say which; without them the cargo is read in frame 0 and only its ORF up to the first
+    stop codon counts, and a known promoter (T7) is locked wherever it sits. The result's ``changes``
+    lists every nucleotide that differs from what was given, and what was kept exactly.
     """
+    spec = build_cargo_spec(cargo, parts=cargo_parts, locked=cargo_locked)
+    variants = cargo_variants(spec, max_insert_variants)
     last: Optional[NoValidPegRNA] = None
-    for cargo_variant in _cargo_variants(cargo, max_insert_variants):
+    for k, variant in enumerate(variants):
         try:
-            return _run_recoded_tjpe_single(cargo=cargo_variant, **kwargs)
+            result = _run_recoded_tjpe_single(cargo=variant, **kwargs)
         except NoValidPegRNA as exc:
             last = exc
             if not _is_insert_side_failure(exc.diagnostics):
                 break  # a synonymous cargo swap cannot rescue a cargo-independent failure
-    assert last is not None  # _cargo_variants always yields >= 1 attempt
+        else:
+            if isinstance(result, RecodedTJPEResult):  # the core is stubbed in some tests
+                result.changes = build_change_report(spec, variant, k, result.arm_changes)
+                if k:
+                    n = len(result.changes.cargo_changes)
+                    result.warnings.append(
+                        f"the cargo was RECODED (variant {k}): {n} nucleotide(s) differ from the sequence "
+                        "you gave, in protein-coding codons only, with every amino acid identical. The "
+                        "pegRNA writes the recoded sequence, so order the DNA in the report, not your "
+                        "original. Every change is listed under 'Changes from your input'"
+                    )
+            return result
+    assert last is not None  # cargo_variants always yields >= 1 attempt
+    if (
+        len(variants) == 1
+        and max_insert_variants > 1
+        and free_codons(spec)
+        and _is_insert_side_failure(last.diagnostics)
+    ):
+        note = (
+            "insert lever: no synonymous cargo variant could be generated (the quality filters "
+            "cannot be met within the search cap), so the cargo was tried only as given"
+        )
+        raise NoValidPegRNA(f"{last}; {note}", diagnostics=[*last.diagnostics, note])
     raise last
 
 

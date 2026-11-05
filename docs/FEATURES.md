@@ -91,13 +91,17 @@ unit suite is fast and deterministic.
 
 ## Output
 
-Three files per winning design:
+Four files per winning design:
 
 - `recoded_tjpe_report.txt` — human-readable text report.
 - `recoded_tjpe_components.csv` — `index,component,role,part_of,sequence,length`, one row
   per labelled component. The RTT is split into `insert` and `replacement_gDNA`, and
   `part_of` distinguishes the tjPE template-jumping portion (rcPBS2·RTT·PBS1) from the
   spacer/scaffold.
+- `recoded_tjpe_changes.csv` — `scope,part,position,codon,old_codon,new_codon,amino_acid,old_base,new_base`:
+  **every nucleotide that differs from what you specified** (cargo and genomic arm), with its part and codon. The
+  report's "Changes from your input" section also lists what was kept exactly (never recoded: a promoter, a stop
+  codon, a part or range you locked; ADR 0029).
 - `recoded_tjpe_verification.docx` — a **colour-annotated manual cross-check** report
   (ADR 0012) with a legend and four sections: (1) the genomic context annotated with every
   region the pegRNA binds/uses and every region that changes; (2) the full pegRNA broken

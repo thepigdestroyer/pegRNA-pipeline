@@ -147,7 +147,9 @@ changed (`scripts/analysis/probe_structure_gate.py`, real models, then re-checke
   verbatim, have no cross-region pair (the count is 0 or 4), so whether the 4-bp stem is called depends on the ORF's
   codons as well as the tail. Changing only the tail's last codon (`GGG` to `GGC` or `GGA`) or dropping two bases
   gives 0 pairs. The guard is stricter than it needs to be for a very common cargo shape (ORF, stop, non-coding
-  tail), and it is the only thing that kept the lever from rescuing this design.
+  tail). **Correction (ADR 0029): that experiment used random synonymous codons, which is not what the lever does.
+  The lever's own generator returns no variant at all for this ORF (it fails from 16 residues), so relaxing the
+  guard would not have rescued the design either.**
 * **The other levers.** PBS1 length changes nothing (it is not at the junction). A different rcPBS2 length would
   (11, 13, 14, 15, 17, 18 give 0 pairs), but at this nick only 12 is inside the design's Tm band (37.4 C; 13 is 42.1
   against a limit of 42.0), so that lever would have to widen a deliberate band. Not built.
@@ -162,10 +164,9 @@ The count and the verdict are exactly as before.
 
 Left open, on purpose:
 
-* Relaxing the INSERT lever's guard to recode the ORF up to the first stop and keep the rest verbatim. It would
-  likely have rescued this design, but it changes which DNA the pegRNA writes, and today a design built from a
-  recoded variant looks exactly like one built from the supplied cargo: nothing in the result or the report says so
-  (checked: no warning, no field). It should not be extended to more cargos until it says so.
+* Relaxing the INSERT lever's guard to recode the ORF up to the first stop and keep the rest verbatim: done in
+  ADR 0029, with locks for anything that is not protein and a report of every change. It would not have rescued this
+  design, because the variant generator returns nothing for it (ADR 0029).
 * Whether a stem this short should reject or only warn. Nothing in this repository measures what a 4-bp stem
   between the rcPBS2 and the RTT does to editing (ADR 0026 makes the same point about scaffold pairing), and the gate
   was accepted in ADR 0024 as a heuristic that removes the worst tail. That is a question for a wet-lab control, not

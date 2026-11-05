@@ -24,7 +24,11 @@ from pegrna_pipeline.hpc.recoded_tjpe_workflow import (
     RecodedTJPEResult,
     run_recoded_tjpe,
 )
-from pegrna_pipeline.hpc.report_writer import render_recoded_csv, render_recoded_report
+from pegrna_pipeline.hpc.report_writer import (
+    render_changes_csv,
+    render_recoded_csv,
+    render_recoded_report,
+)
 from pegrna_pipeline.hpc.scorer_factory import make_scorers
 from pegrna_pipeline.hpc.verification import build_verification_report, render_verification_docx
 
@@ -257,6 +261,8 @@ def design_recoded(
     protein_length: Optional[int] = None,
     structure_threshold: Optional[float] = None,
     ngrna_max_offtargets: int = 0,
+    cargo_locked: Optional[Sequence[Sequence[int]]] = None,
+    cargo_parts: Optional[Sequence[Any]] = None,
     progress_cb=None,
 ) -> RecodedDesignOutput:
     """Run the recoded TJ-PE design end-to-end and (optionally) write a report.
@@ -379,6 +385,8 @@ def design_recoded(
         on_gate=progress_cb,
         injected_ngrnas=injected_ngrnas,
         ngrna_max_offtargets=ngrna_max_offtargets,
+        cargo_locked=cargo_locked,
+        cargo_parts=cargo_parts,
     )
 
     manifest = dict(manifest or {})
@@ -405,6 +413,8 @@ def design_recoded(
         cpath = out / "recoded_tjpe_components.csv"
         cpath.write_text(csv_text)
         csv_path = str(cpath)
+        # Every nucleotide changed from what was specified (cargo and arm), one row each.
+        (out / "recoded_tjpe_changes.csv").write_text(render_changes_csv(result))
         # Machine-readable per-gate info for the web flowchart (each step's score).
         import json as _json
 
@@ -416,6 +426,8 @@ def design_recoded(
                     "deletion_size": result.deletion_size,
                     "candidates_tried": result.candidates_tried,
                     "warnings": result.warnings,
+                    # Exactly what differs from the input, and what was kept exactly (ADR 0029).
+                    "changes": result.changes.to_dict() if result.changes is not None else None,
                     # Which gates ran a stand-in instead of a real model, so the UI
                     # can mark those nodes rather than showing a real-looking score.
                     "stand_in_gates": list(scorers.stub_gates),
