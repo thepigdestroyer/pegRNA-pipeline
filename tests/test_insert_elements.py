@@ -1,10 +1,11 @@
-"""T7-G / rcT7-G frame-safe insertable promoter elements + cargo-insert assembly.
+"""T7-G / rcT7-G insertable promoter elements (two G's after TATA) + cargo-insert assembly.
 
-T7 RNA polymerase initiates at a guanine (consensus TAATACGACTCACTATAGGGAGA,
-transcription begins at the first G of GGG; Rong et al. 1998 PNAS 95:515). The
-element is the coding strand, so the initiator is G on the sequence as written.
-The 20-nt core is padded with the minimum G's to a multiple of 3 so it never
-frameshifts a downstream CDS while keeping the start G-rich (C would be wrong).
+T7 RNA polymerase initiates at a guanine (consensus TAATACGACTCACTATAGGGAGA, transcription begins at the first G
+after TATA; Rong et al. 1998 PNAS 95:515). The element is the coding strand, so the initiator is G on the sequence
+as written. The element is the promoter plus the +1 G and one more: ``TAATACGACTCACTATAGG``, 19 nt. An earlier
+version carried ``GGGG`` (21 nt, a multiple of 3); at the 3' end of the CTCF cassette that GGGG is the reverse
+complement of CCCC and paired with the rcPBS2's GGGG, which failed the folding gate on every candidate (ADR 0028
+addendum). The element is therefore NOT a multiple of 3 and no longer keeps a reading frame on its own.
 """
 
 import pytest
@@ -13,30 +14,36 @@ from Bio.Seq import Seq
 from pegrna_pipeline.hpc.insert_elements import (
     RC_T7G_PROMOTER,
     T7_CORE,
+    T7_MIN_PROMOTER,
     T7G_PROMOTER,
     InsertElement,
     assemble_insert,
+    frame_shift_after,
     get_promoter,
     pad_t7_to_frame,
     transcribed_segments,
 )
 
 
-def test_t7_core_canonical_sequence():
-    assert T7_CORE == "TAATACGACTCACTATAGGG"  # canonical phi10 +1 GGG guanine start
+def test_t7_element_is_the_promoter_with_exactly_two_guanines_after_tata():
+    assert T7_CORE == "TAATACGACTCACTATAGG"
+    assert T7_CORE.startswith(T7_MIN_PROMOTER) and T7_MIN_PROMOTER == "TAATACGACTCACTATAG"
+    assert T7_CORE.split("TATA")[-1] == "GG"  # two G's, the +1 and one more, and no more
 
 
-def test_t7g_is_core_plus_frame_guanines():
-    # 20 nt core -> +1 G -> 21 nt, divisible by 3 (no frameshift), start stays G-rich.
-    assert T7G_PROMOTER == "TAATACGACTCACTATAGGGG"
-    assert T7G_PROMOTER.startswith(T7_CORE)
-    added = T7G_PROMOTER[len(T7_CORE) :]
-    assert set(added) == {"G"} and 1 <= len(added) <= 3  # guanines, not cytosines
-    assert len(T7G_PROMOTER) % 3 == 0  # frame-safe
+def test_t7g_is_the_two_g_element_and_ends_in_gg_not_gggg():
+    assert T7G_PROMOTER == "TAATACGACTCACTATAGG" and len(T7G_PROMOTER) == 19
+    assert T7G_PROMOTER.endswith("TAGG") and not T7G_PROMOTER.endswith("GGG")
 
 
-def test_pad_t7_is_guanine_and_in_frame():
-    # Padding is the minimum G's to reach a multiple of 3 (0 if already in-frame).
+def test_the_element_is_not_frame_neutral_and_says_so():
+    assert len(T7G_PROMOTER) % 3 == 1
+    assert frame_shift_after(T7G_PROMOTER) == 1 and frame_shift_after(RC_T7G_PROMOTER) == 1
+    assert frame_shift_after("ACG") == 0 and frame_shift_after("ACGT") == 1
+
+
+def test_pad_t7_is_still_available_and_is_guanine_and_in_frame():
+    # Kept for callers that want a frame-neutral promoter: the minimum G's to reach a multiple of 3.
     for core in ["A", "AC", "ACG", "ACGT", "ACGTA", T7_CORE]:
         padded = pad_t7_to_frame(core)
         added = padded[len(core) :]
@@ -44,19 +51,20 @@ def test_pad_t7_is_guanine_and_in_frame():
         assert set(added) <= {"G"}  # only ever G's (never C)
         assert len(padded) % 3 == 0
     assert pad_t7_to_frame("ACG") == "ACG"  # already in-frame -> unchanged
+    assert pad_t7_to_frame(T7_CORE) == T7_CORE + "GG"  # the old, longer element is one call away
 
 
 def test_rct7g_is_reverse_complement_of_t7g_not_reverse():
-    # The reverse element MUST be the reverse complement of the padded promoter,
-    # so the functional promoter reads 5'->3' on the non-targeted strand.
+    # The reverse element MUST be the reverse complement, so the functional promoter reads 5'->3' on the
+    # non-targeted strand.
     assert RC_T7G_PROMOTER == str(Seq(T7G_PROMOTER).reverse_complement())
-    assert RC_T7G_PROMOTER == "CCCCTATAGTGAGTCGTATTA"
+    assert RC_T7G_PROMOTER == "CCTATAGTGAGTCGTATTA"
     # NOT merely the reversed string (that would break directionality):
     assert RC_T7G_PROMOTER != T7G_PROMOTER[::-1]
-    # Round-trips, and starts with the C's that pair the GGGG start on the far strand:
+    # Round-trips, and starts with the two C's that pair the GG start on the far strand:
     assert str(Seq(RC_T7G_PROMOTER).reverse_complement()) == T7G_PROMOTER
-    assert RC_T7G_PROMOTER.startswith("CCCC")
-    assert len(RC_T7G_PROMOTER) % 3 == 0  # also frame-safe
+    assert RC_T7G_PROMOTER.startswith("CC") and not RC_T7G_PROMOTER.startswith("CCC")
+    assert len(RC_T7G_PROMOTER) == 19
 
 
 def test_old_and_cytosine_names_are_gone():
