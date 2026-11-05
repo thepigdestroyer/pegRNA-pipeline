@@ -135,12 +135,22 @@ changed (`scripts/analysis/probe_structure_gate.py`, real models, then re-checke
   (`...TCACTATAGGGG`). The rcPBS2's 5' end is fixed by the nick, so `GGGG` is not a choice.
 * **Not length-driven.** Ten random inserts of each length in the same backbone: 5/10 rejected at 24 nt, 2/10 at 60,
   2/10 at 120, 1/10 at 240, 2/10 at 360, **0/10 at 501**. No trend with length (n = 10 each, so only that).
-  Six of ten random synonymous recodings of the cassette have no such pair. The signal is local to the junction.
-* **The levers cannot reach it.** The INSERT lever (ADR 0022) needs a clean in-frame CDS, and this cargo translates
-  with three stop codons (two after the resistance gene, one in the T7 tail), so it returns the original only; the
-  stem is in that non-coding tail anyway. PBS1 length changes nothing (it is not at the junction). A different
-  rcPBS2 length would (11, 13, 14, 15, 17, 18 give 0 pairs), but at this nick only 12 is inside the design's Tm band
-  (37.4 C; 13 is 42.1 against a limit of 42.0), so a lever would have to widen a deliberate band. Not built.
+  The signal is local to the junction.
+* **The INSERT lever did not run, and it could have helped.** ADR 0022's lever needs a clean in-frame CDS. This
+  cargo is one: a 159-codon ORF (GGGGS, FLAG, GSG, P2A, the resistance gene) with no stop inside, ending in ONE real
+  stop (`TGA`), followed by a 24-nt tail: that `TGA`, a T7 promoter (`TAATACGACTCACTATAGGG`) and one more G. Read in
+  the same frame the promoter adds two more stop codons (`TAA`, `TAG`), which are never translated, but the lever's
+  guard counts every stop in the whole cargo's translation, so it returned the original only. (An earlier version of
+  this note said the cargo "translates with three stop codons" and that the stem was "in that non-coding tail anyway",
+  as if the lever could not have helped. There is one stop, and the lever could have helped.) Measured on real folds
+  (`scripts/analysis/probe_orf_only_recoding.py`): 8 of 30 random synonymous recodings of the **ORF alone**, tail kept
+  verbatim, have no cross-region pair (the count is 0 or 4), so whether the 4-bp stem is called depends on the ORF's
+  codons as well as the tail. Changing only the tail's last codon (`GGG` to `GGC` or `GGA`) or dropping two bases
+  gives 0 pairs. The guard is stricter than it needs to be for a very common cargo shape (ORF, stop, non-coding
+  tail), and it is the only thing that kept the lever from rescuing this design.
+* **The other levers.** PBS1 length changes nothing (it is not at the junction). A different rcPBS2 length would
+  (11, 13, 14, 15, 17, 18 give 0 pairs), but at this nick only 12 is inside the design's Tm band (37.4 C; 13 is 42.1
+  against a limit of 42.0), so that lever would have to widen a deliberate band. Not built.
 * **What clears it.** Dropping the cassette's last two bases (`...TATAGG`) gives 0 pairs; one base leaves a 3-bp
   stem. With those two bases dropped the whole pipeline passes on the real models in 114 s, no stand-in gates: splice
   0.162 on real context (a binding verdict), structure 0, docking **advisory only** because 669 nt is outside the
@@ -150,14 +160,21 @@ What changed: the failure now says what paired and which folder said so (`cand1:
 rcPBS2[0..3] GGGG x RTT[0..3] CCCC (4 bp, p >= 0.996)`), where it said "RiNALMo cross-region pairing" five times.
 The count and the verdict are exactly as before.
 
-Left open, on purpose: whether a stem this short should reject or only warn. Nothing in this repository measures
-what a 4-bp stem between the rcPBS2 and the RTT does to editing (ADR 0026 makes the same point about scaffold
-pairing), and the gate was accepted in ADR 0024 as a heuristic that removes the worst tail. That is a question for a
-wet-lab control, not for this change.
+Left open, on purpose:
+
+* Relaxing the INSERT lever's guard to recode the ORF up to the first stop and keep the rest verbatim. It would
+  likely have rescued this design, but it changes which DNA the pegRNA writes, and today a design built from a
+  recoded variant looks exactly like one built from the supplied cargo: nothing in the result or the report says so
+  (checked: no warning, no field). It should not be extended to more cargos until it says so.
+* Whether a stem this short should reject or only warn. Nothing in this repository measures what a 4-bp stem
+  between the rcPBS2 and the RTT does to editing (ADR 0026 makes the same point about scaffold pairing), and the gate
+  was accepted in ADR 0024 as a heuristic that removes the worst tail. That is a question for a wet-lab control, not
+  for this change.
 
 ## References
 
-- `scripts/analysis/probe_splice_gate.py`, `scripts/analysis/probe_structure_gate.py`; the failing runs `20261104-145156-8bb93b` and `20261104-145239-a8609d`
+- `scripts/analysis/probe_splice_gate.py`, `scripts/analysis/probe_structure_gate.py`,
+  `scripts/analysis/probe_orf_only_recoding.py`; the failing runs `20261104-145156-8bb93b` and `20261104-145239-a8609d`
   on the DSI box.
 - `src/pegrna_pipeline/hpc/scorer_factory.py` (`_PaddedSpliceAIScorer`), `recoded_tjpe_workflow.py` (the walk),
   `recoded_driver.py` (`_attach_splice_context`), `genome_ingest.py` (`fetch_flanking_sequence`).
