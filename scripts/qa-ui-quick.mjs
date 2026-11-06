@@ -199,6 +199,28 @@ console.log(`\nOPEN ACCESS  (${SITE})`);
   await ctx.close();
 }
 
+// ------------------------------------------------------------------------------------------
+// AUTHOR LINK. The footer the visitor sees credits the author with a real link to the
+// portfolio. The same link used to exist only in the static fallback that React replaces on
+// load, so the rendered page, which is what Google indexes, had no link back to the author.
+console.log(`\nAUTHOR LINK  (${SITE})`);
+{
+  const { ctx, page } = await openApp({ os: "light" });
+  const link = page.locator("footer a[rel~='author']");
+  const n = await link.count();
+  n === 1 ? ok("the footer has one author link") : fail(`the footer has ${n} author links`);
+  if (n === 1) {
+    const href = await link.getAttribute("href");
+    href === "https://mrinal.is-a.dev/" ? ok("it goes to the portfolio") : fail(`it goes to ${href}`);
+    const text = (await link.innerText()).trim();
+    text === "Mrinal Joshi" ? ok("it is named Mrinal Joshi") : fail(`it is named "${text}"`);
+    (await link.isVisible()) ? ok("it is visible") : fail("it is hidden");
+    const underline = await link.evaluate((el) => getComputedStyle(el).textDecorationLine);
+    underline.includes("underline") ? ok("it is underlined, so it reads as a link") : fail("it is not marked as a link");
+  }
+  await ctx.close();
+}
+
 console.log("\nJS errors:", errors.length ? errors : "none");
 if (errors.length) process.exitCode = 1;
 await browser.close();

@@ -738,7 +738,15 @@ export default function App() {
 
       <footer className="mx-auto max-w-7xl px-4 py-8 text-xs text-ink-500 sm:px-6 dark:text-ink-400">
         Recoded TJ-PE pegRNA designer · designs are engineering previews — validate at the bench
-        before ordering.
+        before ordering. Built by{" "}
+        <a
+          href="https://mrinal.is-a.dev/"
+          rel="author"
+          className="underline underline-offset-2 hover:text-ink-900 dark:hover:text-ink-50"
+        >
+          Mrinal Joshi
+        </a>
+        .
       </footer>
     </div>
   );
