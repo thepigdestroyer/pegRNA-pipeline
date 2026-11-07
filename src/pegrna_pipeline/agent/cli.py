@@ -458,6 +458,89 @@ def _write_het_toplevel(out_root: Path, pair: object) -> None:
     )
 
 
+def _progress_printer(enabled: bool):
+    """The per-gate progress callback that prints ``@@P`` NDJSON lines to stdout, which the web streamer reads."""
+    if not enabled:
+        return None
+
+    def progress_cb(cand: int, gate_id: str, info: str, passed: bool, metrics=None) -> None:
+        sys.stdout.write(
+            "@@P "
+            + json.dumps(
+                {
+                    "cand": cand,
+                    "gate": gate_id,
+                    "info": info,
+                    "passed": passed,
+                    "metrics": metrics or {},
+                }
+            )
+            + "\n"
+        )
+        sys.stdout.flush()
+
+    return progress_cb
+
+
+def _route_extra_keys(cfg: dict, valid_params: set, manifest: dict) -> None:
+    """Move provenance out of a design config and into the report manifest.
+
+    A key that starts with "_" (e.g. "_comment") or that the driver does not accept is not a design parameter, so
+    configs can be self-documenting without the driver rejecting them.
+    """
+    for key in [k for k in cfg if k.startswith("_") or k not in valid_params]:
+        manifest[key.lstrip("_")] = cfg.pop(key)
+    if cfg.get("uniprot_acc"):
+        manifest.setdefault("uniprot", cfg["uniprot_acc"])
+
+
+def _write_failure_record(
+    output_dir: str,
+    filename: str,
+    *,
+    mode: str,
+    cfg: dict,
+    manifest: dict,
+    exc: Exception,
+    stubs_of: Callable | None = None,
+    extra: dict | None = None,
+) -> None:
+    """Record which gates were real even though the design failed.
+
+    "No candidate survived" means something REJECTED the design, so which gates were real models and which were
+    placeholders is exactly what the reader needs: a rejection by a stand-in is not evidence of anything. Never
+    raises: a diagnostic must not mask the failure it describes.
+    """
+    try:
+        from pegrna_pipeline.hpc.scorer_factory import make_scorers  # noqa: PLC0415
+
+        # Same inputs the driver uses to decide which gates can be real:
+        # a genome FASTA enables cas-offinder, a key enables Boltz-2.
+        probe = (
+            {
+                "uniprot_acc": cfg.get("uniprot_acc") or manifest.get("uniprot") or "",
+                "genome": os.environ.get("PEGRNA_GENOME") or None,
+            }
+            if mode in ("real", "api")
+            else {}
+        )
+        bundle = make_scorers(mode=mode, **probe)
+        stubs = list(stubs_of(bundle) if stubs_of else bundle.stub_gates)
+        out_dir = Path(output_dir)
+        out_dir.mkdir(parents=True, exist_ok=True)
+        record = {
+            "gate_results": [],
+            "failed": True,
+            "error": f"{type(exc).__name__}: {exc}",
+            "stand_in_gates": stubs,
+            "scorer_mode": mode,
+            **(extra or {}),
+        }
+        (out_dir / filename).write_text(json.dumps(record))
+    except Exception:  # noqa: BLE001 - diagnostics must never mask the real failure
+        pass
+
+
 @cli.command("design-recoded")
 @click.option("--config", "config_path", required=True, type=click.Path(exists=True))
 @click.option("--mode", type=click.Choice(["fake", "real", "api"]), default="fake")
@@ -499,31 +582,8 @@ def design_recoded_cmd(config_path: str, mode: str, output_dir: str, progress: b
     # requested AND at least one het SNP is supplied.
     het_edit_requested = bool(cfg.get("het_edit"))
     het_window_override = cfg.get("het_edit_window")
-    for key in [k for k in cfg if k.startswith("_") or k not in valid_params]:
-        manifest[key.lstrip("_")] = cfg.pop(key)
-    if cfg.get("uniprot_acc"):
-        manifest.setdefault("uniprot", cfg["uniprot_acc"])
-
-    progress_cb = None
-    if progress:
-
-        def progress_cb(
-            cand: int, gate_id: str, info: str, passed: bool, metrics=None
-        ) -> None:  # noqa: F811
-            sys.stdout.write(
-                "@@P "
-                + json.dumps(
-                    {
-                        "cand": cand,
-                        "gate": gate_id,
-                        "info": info,
-                        "passed": passed,
-                        "metrics": metrics or {},
-                    }
-                )
-                + "\n"
-            )
-            sys.stdout.flush()
+    _route_extra_keys(cfg, valid_params, manifest)
+    progress_cb = _progress_printer(progress)
 
     het_snps = list(cfg.get("het_snps") or [])
     route_het = het_edit_requested and bool(het_snps)
@@ -568,39 +628,79 @@ def design_recoded_cmd(config_path: str, mode: str, output_dir: str, progress: b
                 click.echo(f"\nReport written to {out.report_path}")
     except Exception as exc:  # fail loud with a clear message
         click.echo(f"design-recoded failed: {type(exc).__name__}: {exc}", err=True)
-        # Record which gates were real even though the design failed. "No
-        # candidate survived" means something REJECTED the design, so which
-        # gates were real models and which were placeholders is exactly what the
-        # reader needs -- a rejection by a stand-in is not evidence of anything.
-        try:
-            from pegrna_pipeline.hpc.scorer_factory import make_scorers  # noqa: PLC0415
+        _write_failure_record(
+            output_dir,
+            "recoded_tjpe_gates.json",
+            mode=mode,
+            cfg=cfg,
+            manifest=manifest,
+            exc=exc,
+        )
+        sys.exit(1)
 
-            # Same inputs the driver uses to decide which gates can be real:
-            # a genome FASTA enables cas-offinder, a key enables Boltz-2.
-            probe = (
-                {
-                    "uniprot_acc": cfg.get("uniprot_acc") or manifest.get("uniprot") or "",
-                    "genome": os.environ.get("PEGRNA_GENOME") or None,
-                }
-                if mode in ("real", "api")
-                else {}
-            )
-            stubs = list(make_scorers(mode=mode, **probe).stub_gates)
-            out_dir = Path(output_dir)
-            out_dir.mkdir(parents=True, exist_ok=True)
-            (out_dir / "recoded_tjpe_gates.json").write_text(
-                json.dumps(
-                    {
-                        "gate_results": [],
-                        "failed": True,
-                        "error": f"{type(exc).__name__}: {exc}",
-                        "stand_in_gates": stubs,
-                        "scorer_mode": mode,
-                    }
-                )
-            )
-        except Exception:  # noqa: BLE001 - diagnostics must never mask the real failure
-            pass
+
+#: Config keys that the command line decides; a config may not override them.
+_PA_CLI_OWNED = ("mode", "output_dir", "manifest", "progress_cb")
+
+
+@cli.command("design-pa")
+@click.option("--config", "config_path", required=True, type=click.Path(exists=True))
+@click.option("--mode", type=click.Choice(["fake", "real", "api"]), default="fake")
+@click.option("--output-dir", default="results", type=click.Path())
+@click.option(
+    "--progress",
+    is_flag=True,
+    default=False,
+    help="Emit @@P NDJSON per-gate progress lines to stdout (for the web streamer).",
+)
+def design_pa_cmd(config_path: str, mode: str, output_dir: str, progress: bool) -> None:
+    """Run the Prime Assembly design pipeline from a JSON config.
+
+    Two extended guides on opposite strands write two flaps and a separate linear donor carries the cargo; the
+    donor's arms restore the DNA between the nicks. The config supplies cargo, genome (the local window), site_s
+    and cds_mask, plus optional flap_length, pbs_lengths, min_span, max_span, max_offtargets, max_pairs,
+    cargo_locked, cargo_parts and transcript (for the SpliceAI context). ``--mode fake`` runs the full design
+    logic with stand-in scorers (dry run); ``api`` and ``real`` use the real models. The command line decides
+    mode, output directory and progress; a config key of the same name is ignored. Writes
+    recoded_pa_report.txt, recoded_pa_components.csv, recoded_pa_donor.fasta, recoded_pa_changes.csv and
+    recoded_pa_gates.json.
+    """
+    import inspect
+
+    from pegrna_pipeline.hpc.recoded_pa_driver import PA_FILES, design_pa, pa_stand_in_gates
+
+    cfg = json.loads(Path(config_path).read_text())
+    manifest = dict(cfg.pop("manifest", {}) or {})
+    for key in _PA_CLI_OWNED:
+        cfg.pop(key, None)
+    _route_extra_keys(cfg, set(inspect.signature(design_pa).parameters), manifest)
+
+    try:
+        out = design_pa(
+            mode=mode,
+            output_dir=output_dir,
+            manifest=manifest,
+            progress_cb=_progress_printer(progress),
+            **cfg,
+        )
+        click.echo(out.report_text)
+        if out.report_path:
+            click.echo(f"\nReport written to {out.report_path}")
+    except Exception as exc:  # fail loud with a clear message
+        click.echo(f"design-pa failed: {type(exc).__name__}: {exc}", err=True)
+        _write_failure_record(
+            output_dir,
+            PA_FILES["gates"],
+            mode=mode,
+            cfg=cfg,
+            manifest=manifest,
+            exc=exc,
+            stubs_of=pa_stand_in_gates,
+            extra={
+                "strategy": "pa",
+                "diagnostics": [str(d) for d in (getattr(exc, "diagnostics", None) or [])][:200],
+            },
+        )
         sys.exit(1)
 
 
