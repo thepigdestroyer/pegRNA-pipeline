@@ -88,29 +88,38 @@ def _valid(seq: Sequence[str], coding_end: int, n_top: int, n_bottom: int) -> bo
 
 
 def make_locus(
-    plants: Sequence[Tuple[str, int]],
+    plants: Sequence[Tuple],
     *,
     n: int = 300,
     site_s: int = 150,
     seed: int = 7,
     coding_end: Optional[int] = None,
 ) -> Locus:
-    """A locus of ``n`` bases with S at ``site_s`` and one guide planted per ``(strand, cut)``.
+    """A locus of ``n`` bases with S at ``site_s`` and one guide planted per ``(strand, cut)`` or
+    ``(strand, cut, pam)``.
 
     ``strand`` is "top" or "bottom". A top guide's protospacer is ``[cut-17, cut+3)`` and its PAM
-    (``TGG``) ``[cut+3, cut+6)``; a bottom guide shows ``CCA`` at ``[cut-6, cut-3)`` and its protospacer
-    reverse-complemented at ``[cut-3, cut+17)``. Coding is everything before ``coding_end``, which is S
-    unless given (a PRIDICT-path fixture that walks the design through an arm 3' of S sets it to ``n``).
+    ``[cut+3, cut+6)``; a bottom guide shows the reverse complement of its PAM at ``[cut-6, cut-3)`` and its
+    protospacer reverse-complemented at ``[cut-3, cut+17)``. ``pam`` is the guide's NGG as read on its own strand
+    and defaults to ``TGG``, which is tryptophan in frame and so can never be broken by a synonymous change; give
+    ``CGG`` (Arg: CGC and CGT leave no PAM) where a test needs a PAM that an UNRECODED arm can break, or ``AGG``
+    (Arg: the only synonymous single change is AGA, which leaves NGA, a weak PAM) where it needs one that can only be
+    weakened. In an arm that the recoder rewrites neither is certain: it may take CGG to AGA, which no single change
+    improves. Do not plant ``GGG``: it holds a second NGG, so it adds a guide. Coding is everything before
+    ``coding_end``, which is S unless given (a PRIDICT-path fixture that walks the design through an arm 3' of S
+    sets it to ``n``).
     """
     coding_end = site_s if coding_end is None else coding_end
     rng = random.Random(seed)
     seq = _background(rng, n, coding_end)
     placed: List[Tuple[str, int, str]] = []
-    for strand, cut in plants:
+    for plant in plants:
+        strand, cut = plant[0], plant[1]
+        pam = plant[2] if len(plant) > 2 else "TGG"
         for _ in range(400):
             proto = _protospacer(rng)
             lo, block = (
-                (cut - 17, proto + "TGG") if strand == "top" else (cut - 6, "CCA" + rc(proto))
+                (cut - 17, proto + pam) if strand == "top" else (cut - 6, rc(pam) + rc(proto))
             )
             trial = list(seq)
             trial[lo : lo + len(block)] = list(block)

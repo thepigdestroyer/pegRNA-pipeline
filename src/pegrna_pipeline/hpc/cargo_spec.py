@@ -436,10 +436,16 @@ def diff_cargo(spec: CargoSpec, new: str) -> Tuple[BaseChange, ...]:
 
 
 def arm_changes(
-    genome: str, lo: int, hi: int, arm_sense: str, cds_mask: Sequence[bool]
+    genome: str,
+    lo: int,
+    hi: int,
+    arm_sense: str,
+    cds_mask: Sequence[bool],
+    part: str = "replacement arm",
 ) -> Tuple[BaseChange, ...]:
     """Every base of the design window that the replacement arm changes: window position (1-based), the codon
-    it sits in and the amino acid, which the recode keeps. ``genome[lo:hi]`` is what the arm replaces.
+    it sits in and the amino acid, which the recode keeps. ``genome[lo:hi]`` is what the arm replaces. ``part``
+    names the arm in the report ("replacement arm" in tj-PE; Prime Assembly has a 5' and a 3' donor arm).
     """
     original = genome[lo:hi]
     if len(arm_sense) != len(original):
@@ -461,7 +467,7 @@ def arm_changes(
             out.append(
                 BaseChange(
                     "genomic arm",
-                    "replacement arm",
+                    part,
                     pos + 1,
                     (cs - cds_start) // 3 + 1,
                     old_c,
@@ -472,9 +478,7 @@ def arm_changes(
                 )
             )
         else:
-            out.append(
-                BaseChange("genomic arm", "replacement arm", pos + 1, None, "", "", "", a, b)
-            )
+            out.append(BaseChange("genomic arm", part, pos + 1, None, "", "", "", a, b))
     return tuple(out)
 
 
@@ -488,6 +492,9 @@ class ChangeReport:
     cargo_variant: int  # 0 = the cargo as specified
     cargo_length: int
     notes: Tuple[str, ...] = ()
+    #: Stretches of the genomic arm that were copied exactly (Prime Assembly's donor arms), listed under the arm
+    #: and not under the cargo.
+    arm_kept_exactly: Tuple[str, ...] = ()
 
     @property
     def cargo_unchanged(self) -> bool:
@@ -504,10 +511,12 @@ class ChangeReport:
             "cargo_changes": [c.row() for c in self.cargo_changes],
             "arm_changes": [c.row() for c in self.arm_changes],
             "kept_exactly": list(self.kept_exactly),
+            "arm_kept_exactly": list(self.arm_kept_exactly),
             "notes": list(self.notes),
         }
 
-    def lines(self, limit: int = 60) -> List[str]:
+    def lines(self, limit: int = 60, changes_file: str = "recoded_tjpe_changes.csv") -> List[str]:
+        """The report as text lines. ``changes_file`` names the CSV that lists every change, for the overflow note."""
         out: List[str] = []
         if self.cargo_unchanged:
             out.append(f"Cargo: used exactly as you gave it ({self.cargo_length} nt, 0 changed).")
@@ -520,7 +529,7 @@ class ChangeReport:
             )
             out.extend("  " + c.line() for c in self.cargo_changes[:limit])
             if n > limit:
-                out.append(f"  ... {n - limit} more (all in recoded_tjpe_changes.csv)")
+                out.append(f"  ... {n - limit} more (all in {changes_file})")
         for line in self.kept_exactly:
             out.append(f"  kept exactly: {line}")
         for note in self.notes:
@@ -532,11 +541,11 @@ class ChangeReport:
             )
             out.extend("  " + c.line() for c in self.arm_changes[:limit])
             if len(self.arm_changes) > limit:
-                out.append(
-                    f"  ... {len(self.arm_changes) - limit} more (all in recoded_tjpe_changes.csv)"
-                )
+                out.append(f"  ... {len(self.arm_changes) - limit} more (all in {changes_file})")
         else:
             out.append("Genomic arm: copied exactly (no nucleotide changed).")
+        for line in self.arm_kept_exactly:
+            out.append(f"  kept exactly: {line}")
         out.append("Everything not listed above is exactly as you specified.")
         return out
 

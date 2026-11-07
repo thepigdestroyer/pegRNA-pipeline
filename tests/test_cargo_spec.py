@@ -322,6 +322,61 @@ def test_a_recoded_cargo_names_the_parts_and_every_nucleotide():
     assert "T7 promoter, nt" not in text  # the promoter is listed as kept, never as changed
 
 
+def test_a_kept_arm_stretch_is_listed_under_the_arm_not_under_the_cargo():
+    """Prime Assembly's donor arms are copied exactly where they are non-coding. That belongs to the arm; printed
+    under the cargo it read as a statement about the insert."""
+    spec = build_cargo_spec(ORF + STOP + T7G_PROMOTER)
+    report = build_change_report(spec, spec.sequence, 0)
+    report = dataclasses.replace(
+        report, arm_kept_exactly=("donor arm 3' (nt 148-149): copied exactly",)
+    )
+    lines = report.lines()
+    cargo_at = next(i for i, ln in enumerate(lines) if ln.startswith("Cargo:"))
+    arm_at = next(i for i, ln in enumerate(lines) if ln.startswith("Genomic arm:"))
+    promoter_at = next(i for i, ln in enumerate(lines) if "kept exactly: T7 promoter" in ln)
+    kept_arm_at = next(i for i, ln in enumerate(lines) if "kept exactly: donor arm 3'" in ln)
+    assert cargo_at < promoter_at < arm_at < kept_arm_at
+    assert report.to_dict()["arm_kept_exactly"] == ["donor arm 3' (nt 148-149): copied exactly"]
+    assert report.to_dict()["kept_exactly"] == list(
+        report.kept_exactly
+    ), "the cargo list is untouched"
+
+
+def test_a_kept_arm_stretch_is_listed_when_the_arm_changed_too():
+    genome = "GCT" * 40
+    changes = arm_changes(genome, 0, 120, "GCC" * 40, [True] * 120)
+    spec = build_cargo_spec(ORF + STOP)
+    report = dataclasses.replace(
+        build_change_report(spec, spec.sequence, 0, changes), arm_kept_exactly=("kept arm",)
+    )
+    lines = report.lines(limit=5)
+    assert lines.index("  kept exactly: kept arm") > next(
+        i for i, ln in enumerate(lines) if ln.startswith("  ... ")
+    )
+
+
+def test_the_overflow_note_names_the_csv_that_holds_every_change():
+    """Past ``limit`` rows the text stops and points at the file with all of them; that file's name depends on
+    the design (tj-PE and Prime Assembly write different ones), so the note takes it as a parameter.
+    """
+    genome = "GCT" * 40
+    changes = arm_changes(genome, 0, 120, "GCC" * 40, [True] * 120)
+    assert len(changes) == 40
+    spec = build_cargo_spec(ORF + STOP)
+    report = build_change_report(spec, spec.sequence, 0, changes)
+    assert "... 30 more (all in recoded_tjpe_changes.csv)" in "\n".join(report.lines(limit=10))
+    pa = "\n".join(report.lines(limit=10, changes_file="recoded_pa_changes.csv"))
+    assert "... 30 more (all in recoded_pa_changes.csv)" in pa and "recoded_tjpe" not in pa
+    variant = cargo_variants(spec, 6)[1]
+    recoded = build_change_report(spec, variant, 1)
+    n = len(recoded.cargo_changes)
+    assert n >= 1
+    cargo_text = "\n".join(recoded.lines(limit=0, changes_file="recoded_pa_changes.csv"))
+    assert (
+        f"... {n} more (all in recoded_pa_changes.csv)" in cargo_text
+    ), "the cargo overflow names it too"
+
+
 def test_the_rows_and_the_dict_carry_the_same_changes():
     spec = build_cargo_spec(ORF + STOP)
     report = build_change_report(spec, cargo_variants(spec, 6)[1], 1)
