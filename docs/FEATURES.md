@@ -4,7 +4,7 @@ Technical capability + roadmap reference for the recoded template-jumping
 prime-editing (TJ-PE) pegRNA design pipeline. Audience: a computational /
 ML-biology reader. For the design rationale and decision history see
 [`DESIGN_HISTORY.md`](DESIGN_HISTORY.md); for a non-technical walk-through see
-[`USER_GUIDE.md`](USER_GUIDE.md).
+[`USER_GUIDE.docx`](USER_GUIDE.docx).
 
 ## What it produces
 
@@ -18,6 +18,9 @@ The construct is emitted 5′→3′ as **Spacer · Scaffold · rcPBS2 · RTT ·
 (rcPBS2 = reverse complement of PBS2; PBS2 itself is synthesised onto the flap, ADR 0014),
 where the RTT is decomposed into the **insert** (cargo) and the **replacement gDNA**
 (the recoded deletion-replacement arm).
+
+For a cassette or a gene the insert is better carried by a separate donor than by the pegRNA, which grows with it. That is
+**Prime Assembly** (`design-pa`): two short pegRNAs and a donor DNA instead. See [Prime Assembly](#prime-assembly-design-pa).
 
 ## Core design capabilities
 
@@ -77,6 +80,36 @@ RiNALMo/RNAformer 2D → Boltz-2 docking. Each heavy gate is
 guarded so a scorer failure skips a candidate (with a diagnostic) rather than
 aborting the walk.
 
+## Prime Assembly (`design-pa`)
+
+The other way to write an insert (Liu et al., *Nature* 2026; [ADR 0030](decisions/0030-prime-assembly-design-pa.md); the
+structure is drawn in [`STRUCTURE.md`](STRUCTURE.md) §2). Two extended guides on opposite strands write two ~35 nt flaps at
+two nicks, and the ends of a separate donor DNA match the flaps. The insert lives in the donor, so both pegRNAs are about
+147 nt whatever its size (166 at most). That keeps Boltz-2 docking inside its calibrated range, so docking is a real verdict
+for a 499 nt cassette, where a tj-PE pegRNA for the same cassette would be 650 to 700 nt. The donor also **restores the DNA
+between the nicks** (recoded where it codes for protein, byte-exact where it does not), so the net deletion is zero.
+
+- **It chooses its own guides.** Every PAM-in pair of the window, screened by the guide rules and one batched off-target
+  scan, ranked by known risks, tried best first; the first pair to pass every gate wins, and if none does the failure lists
+  every rejection. The insert must be at least two flaps long (70 nt at the default flap of 35); a shorter one is refused
+  with a pointer to `design-recoded`.
+- **The gates** are the shared stack: the insertion-site check once; per pegRNA, ViennaRNA folding (with the three
+  base pairs a donor that copies the genome at the nick makes inevitable not counted, and reported) and Boltz-2 docking; per
+  pair, MaxEnt and SpliceAI on the product, INV-0, and `simulate_pa`, which rebuilds the product from the sequences to be
+  ordered.
+- **It says what it could not fix.** A guide's PAM that the donor brings back (*regenerated*), or can only weaken (NAG or NGA,
+  which SpCas9 still cuts), and a flap that is a long copy of the genome it displaces, are advisories that rank the pair lower
+  and are shown. Every result carries a standing caveat: a donor that restores the DNA between the nicks is this project's
+  extension of the published method, and has not been tested at the bench.
+- **Output**, five files: `recoded_pa_report.txt`, `recoded_pa_components.csv`, `recoded_pa_changes.csv` (every nucleotide that
+  differs from your input), `recoded_pa_donor.fasta` (pegRNA A, pegRNA B and the donor) and `recoded_pa_gates.json`.
+- **On the page**, step 3 is "How should the insert be written?": inside the pegRNA (the default), or as a separate donor
+  DNA. The page advises by insert length and never switches by itself.
+
+```bash
+pegrna design-pa --config examples/ctcf_cterm/config_pa.json --mode fake --output-dir results/dry_pa
+```
+
 ## Modes: fake vs real
 
 - **`--mode fake`** — the full design logic runs with deterministic stand-in scorers.
@@ -91,7 +124,7 @@ unit suite is fast and deterministic.
 
 ## Output
 
-Four files per winning design:
+Four files per winning tj-PE design (Prime Assembly writes five, above):
 
 - `recoded_tjpe_report.txt` — human-readable text report.
 - `recoded_tjpe_components.csv` — `index,component,role,part_of,sequence,length`, one row
@@ -114,7 +147,7 @@ See [`DESIGN_HISTORY.md`](DESIGN_HISTORY.md) §5 for the gate detail.
 
 ## Validation status
 
-- Full unit suite (~670 tests) is green and heavy-model-free.
+- Full unit suite (1731 tests; 40 more are skipped where a heavy-model extra is missing) is green and heavy-model-free.
 - On the HPC, the login-node/CPU-capable gates are validated live (SpliceAI,
   AlphaFold-importance, structure via RNAformer); the off-target gate runs on CPU.
   The Boltz-2 and RiNALMo GPU paths are validated via the GPU smoke job.
@@ -145,7 +178,7 @@ Candidate additions, roughly ordered by biological impact:
 ```bash
 pip install -e '.[dev]'
 ruff check src tests && black --check --line-length 100 src tests
-pytest -q            # ~670 tests, heavy-model-free
+pytest -q            # ~1700 tests, heavy-model-free
 ```
 
 Coverage spans the design logic (enumeration, ranked-pool-walk, INV-0, strand/TPRT,

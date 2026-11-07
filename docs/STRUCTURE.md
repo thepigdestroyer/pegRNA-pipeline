@@ -1,9 +1,11 @@
 # The structure of a tj-PE design and of a Prime Assembly design
 
-Reference, 2026-11-04. Checked against the code (`recoded_tjpe_workflow.py`, `strand_orientation.py`,
-`tprt_sim.py`), ADR 0003, 0004 and 0014, and a real run of the CTCF demo. **tj-PE below is what is built.
-Prime Assembly below is the design in
-[the spec](superpowers/specs/2026-11-04-prime-assembly-design.md): it is not built yet**, and says so.
+Reference, 2026-11-04; Prime Assembly brought up to what was built on 2026-11-07. Checked against the code
+(`recoded_tjpe_workflow.py`, `strand_orientation.py`, `tprt_sim.py`, `pa_geometry.py`, `recoded_pa_workflow.py`), ADR 0003,
+0004 and 0014, and real runs of the CTCF demo and of the CTCF cassette. **Both are built**: tj-PE (`design-recoded`) and
+Prime Assembly (`design-pa`, specified in [the spec](superpowers/specs/2026-11-04-prime-assembly-design.md), with the
+evidence and the open points in [ADR 0030](decisions/0030-prime-assembly-design-pa.md)). No restoring donor has been tested
+at the bench.
 
 ## 0. Conventions that apply to every design
 
@@ -62,7 +64,7 @@ PBS1 is ever copied.
 **Self-check.** `simulate_tprt` rebuilds the integrated allele from the designed RTT and fails loudly if any
 strand operation is wrong. It is a self-consistency check, not an experimental proof of the strand logic.
 
-## 2. Prime Assembly: the design (not built yet)
+## 2. Prime Assembly: as built (`design-pa`)
 
 Prime Assembly (Liu et al., *Nature* 2026; preprint PMC12262537): **twin epegRNAs write two 35-nt flaps, and the
 ends of a separate linear donor match those flaps**, so the donor is stitched in without a double-strand break.
@@ -96,8 +98,16 @@ inside the span. Derived from the SpCas9 rule above, not quoted from the paper.
 displaces, so the flap can re-anneal where it came from instead of on the donor: coding stretches are recoded
 (at most 8 bp identical), non-coding stretches cannot be (byte-exact, Decision 15) and are warned about, and the
 designer prefers nicks that keep that stretch short. And the paper's replacement removes both PAMs, whereas a
-restoring donor brings them back, so a PAM in a coding stretch is recoded where a synonymous change exists and
-one in a non-coding stretch is warned about.
+restoring donor brings them back, so a PAM in a coding stretch is broken by one synonymous change where one exists. A change
+to NAG or NGA does not break it (SpCas9 still cuts both), so a PAM that can only be taken that far is called *weakened*, and
+one in a non-coding stretch, or with no synonymous change, is *regenerated* and warned about. Neither rejects the pair; both
+rank it lower.
+
+**One more helix, found by the real runs.** The donor copies the genome at each nick, so the RTT's last three bases are the
+reverse complement of the three bases right of the nick, which are the spacer's own last three. The spacer-PBS helix
+therefore runs on into the RTT, by up to three base pairs (spacer base `17 + m` against the RTT's last-but-`m` base). The
+folding gate does not count those three position pairs, and the result says how many folded (`nick_pairing_bp`); without
+that, no pegRNA of the CTCF window passed. tj-PE starts its insert at the nick and has none.
 
 **What the CTCF probe found** (`scripts/analysis/probe_pa_geometry.py`, S = 147, the stop codon TGA starts at S):
 
@@ -107,9 +117,16 @@ one in a non-coding stretch is warned about.
 | valid PAM-in pairs, S between the nicks, span 30 to 100 bp | **24** |
 | 5' arm (coding) | recodable at every length tried (6 to 92 nt); 0 to about 17 silent edits, never a run over 8 |
 | 3' arm (stop codon and UTR) | non-coding, so byte-exact; the genomic run under flap B is about the arm's length, capped at F |
-| best pair | A at 101 + B at 149: span 48 = arm5 46 + arm3 2; **both PAMs in coding sequence**; runs under the flaps 8 and 5 |
+| best pair by geometry alone | A at 101 + B at 149: span 48 = arm5 46 + arm3 2; **both PAMs in coding sequence**; runs under the flaps 8 and 5 |
 | a 24 bp FLAG cargo | donor 59 to 87 nt: the flaps overlap, which is twinPE, not assembly. PA needs a cargo of at least 2 × F |
 | the GGGGS-FLAG-P2A-ZeoR cargo (480 bp) | donors of 515 to 543 nt |
+
+**What the real gates then did** (real models, the 499 nt cassette with the two-G T7 element, ADR 0030). The geometry's best
+pair does not survive them: guide B at 149 has an off-target site. At the strict default (no off-target site tolerated)
+1 of the 24 pairs is left, **101/164**: span 63, a 562 nt donor, pegRNAs of 147 nt, both PAMs regenerated (A in coding
+sequence with no synonymous change, B in non-coding DNA), 8 recoding edits, a 19 bp genomic run under flap B, docking 0.72
+and 0.61 against a neutral 0.58. Allowing one off-target site per guide leaves 4 pairs and **61/149** wins: A's PAM weakened,
+B's broken, 14 edits, docking 0.59 and 0.72.
 
 ## 3. tj-PE and Prime Assembly side by side
 
@@ -128,3 +145,6 @@ one in a non-coding stretch is warned about.
   `DESIGN_HISTORY.md` §3, the README's structure line). ADR 0014 corrected it: the pegRNA carries **rcPBS2 =
   RC(PBS2)**, 5' of the RTT.
 - "tj-PE loses no DNA". It does lose the span between the nicks; the Replacement Arm restores it.
+- "Prime Assembly is a prototype, not a supported mode" and "`run --mode pa` warns before queuing anything" (the README, ADR
+  0027's decision section). Prime Assembly is `design-pa` and the page's second way to write the insert; the prototype is
+  removed, and `run --mode pa` refuses with a pointer to `design-pa` (ADR 0030).

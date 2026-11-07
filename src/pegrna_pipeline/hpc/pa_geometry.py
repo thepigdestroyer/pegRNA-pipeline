@@ -239,9 +239,11 @@ class PamOutcome:
 
 
 #: The last two bases of the PAMs that wild-type SpCas9 still cuts, at a fraction of its NGG rate. NAG: about a fifth
-#: of NGG (Hsu et al. 2013). NGA: 8-16% in one screen, and over 20% indels at 3 of 19 NGA sites in another
-#: (Nishimasu et al. 2018). Every other change to a G of NGG leaves no PAM; that second study found no such indels at
-#: 0 of 18 NGT and 0 of 15 NGC sites. So when a synonymous change can give a C or a T, it is preferred over an A.
+#: of NGG (Hsu et al. 2013). NGA: 0.08-0.14 of the cleaved PAM reads in a human-cell PAM-library screen, against
+#: 0.21-0.23 for NAG (Tang et al. 2019, three targets; a share of the cleavage events, not a rate relative to NGG), and
+#: over 20% indels at 3 of 19 NGA sites against 17 of 17 NGG sites (Nishimasu et al. 2018). Every other change to a G
+#: of NGG leaves no PAM: that second study found no such indels at 0 of 18 NGT and 0 of 15 NGC sites. So when a
+#: synonymous change can give a C or a T, it is preferred over an A (ADR 0030).
 _WEAK_PAM_TAILS = frozenset({"AG", "GA"})
 
 

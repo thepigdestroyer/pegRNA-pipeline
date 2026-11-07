@@ -7,8 +7,9 @@ deletion is zero.
 
 The walk is a ranked search over PAM-in guide pairs:
 
-1. enumerate guides, drop those that fail the sequence rules or the off-target screen (one batched call);
-2. pair them, and for each pair build the arms, break the PAMs where a synonymous change exists, assemble the donor
+1. find every PAM-in pair of the window (geometry only), then drop the guides of those pairs that fail the sequence
+   rules or the off-target screen (one batched call), and the pairs that lose a guide;
+2. for each pair that is left, build the arms, break the PAMs where a synonymous change exists, assemble the donor
    and the product, assert INV-0 on each arm, choose each side's extension and check it with ``simulate_side``;
 3. rank the pairs by deterministic risks (:func:`rank_key`), best first;
 4. for each pair, in order: the cheap per-pegRNA fold, the product-level splice gates, then the expensive docking,

@@ -175,6 +175,31 @@ it, so the first visitor to try the demo does not pay:
 bash scripts/warm-cache.sh
 ```
 
+## Prime Assembly on the server
+
+The same service runs both ways of writing the insert. The request's `strategy` field (`tjpe`, the default, or `pa`) picks
+`design-recoded` or `design-pa`, and `/api/health` lists what the server has (`"strategies":["tjpe","pa"]`). A page that
+offers Prime Assembly to a server that does not list it disables the choice and says why, so **deploy the backend first and
+the page second**.
+
+| Setting | Default | What it limits |
+|---|---|---|
+| `PEGRNA_PA_MAX_PAIRS` | 60 | the most guide pairs one Prime Assembly request may ask to try (each can need two docking calls); the PBS lengths are capped at 5 |
+
+A Prime Assembly design took 140 to 280 s on the box (docking dominates; the genome scan is cached after the first run of a
+set of guides, and a design that shares both slots with another runs longer). It streams like any design, with a keepalive
+every 15 s, and the page ends a stream that has been silent for 90 s with a message.
+
+After a deploy, run both checks:
+
+```bash
+scripts/audit-production.sh                      # 31 checks, four of them for Prime Assembly; no model runs
+node scripts/qa-browser.mjs [all|tjpe|pa]        # real designs in a browser on the live site; needs Playwright
+```
+
+`qa-browser.mjs` is the end-to-end one: a real tj-PE design takes 6 to 15 minutes and a real Prime Assembly design 2 to 5.
+The two together take both of the server's slots.
+
 ## Routine operations
 
 **Ship a code change**
@@ -243,6 +268,9 @@ so in a banner and the UI shows a callout. Never order DNA off a stand-in.
   not typed (`scripts/analysis/docking_reference.py`).
 - **A design takes ~15 minutes.** cas-offinder alone is ~100 s (batched once per
   design, not per candidate); the rest is Boltz-2.
+- **A Prime Assembly design can end in "No design" at the strict off-target default.** On the CTCF cassette one guide pair of
+  24 survives the off-target screen. The page's "Off-target hits allowed" setting is the lever (each tolerated hit is listed on
+  the result), and the failure view says which step stopped each pair.
 - **PRIDICT2 can pick a different spacer here than on a laptop.** The box pins
   torch 2.0.1, the version PRIDICT2 upstream supports; a newer torch gives
   slightly different outputs. The box is the reference.

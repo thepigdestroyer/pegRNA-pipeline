@@ -1,9 +1,9 @@
 # pegRNA design — web frontend
 
-A FastAPI web app that wraps the `pegrna design-recoded` CLI (this repo). The
-browser posts a design config; the server writes it to a per-run directory, runs
-the pipeline as a subprocess, streams per-gate progress back, and renders the
-text report + parsed CSV components.
+A FastAPI web app that wraps the `pegrna design-recoded` (tj-PE) and `pegrna design-pa`
+(Prime Assembly) CLIs (this repo). The browser posts a design config; the server
+writes it to a per-run directory, runs the pipeline as a subprocess, streams
+per-gate progress back, and renders the text report + parsed CSV components.
 
 ## What it designs
 
@@ -30,6 +30,23 @@ spacer:
   design driver; the het-specific *pair* pass (`design_recoded_with_het_edit`) is
   wired in a later stage — the form's "design het-specific pair" toggle records
   the request (`het_edit`) ahead of that wiring.
+
+## Two ways to write the insert (`strategy`)
+
+`/api/design` and `/api/design/stream` take a `strategy`. **`"tjpe"`** (the default) carries the insert inside the pegRNA
+and runs `design-recoded`, which is what the section above describes. **`"pa"`** carries it in a separate donor DNA and runs
+`design-pa` (Prime Assembly; [ADR 0030](../docs/decisions/0030-prime-assembly-design-pa.md)). Prime Assembly chooses its own
+guides, so it takes none of the strand, arm-side, own-guide, allele-specific or anchor settings; it takes the flap length,
+the number of off-target hits allowed per guide, the PBS lengths, the longest repeat, the distance between the nicks and the
+number of guide pairs to try. A request is checked before a job starts, with the engine's own validator, and refused (400)
+with its reason when it cannot work: a cargo shorter than two flaps (70 nt at the default flap), a setting out of range,
+more than `PEGRNA_PA_MAX_PAIRS` pairs or more than 5 PBS lengths.
+
+- `GET /api/health` lists the strategies this server has (`"strategies":["tjpe","pa"]`); a page built for Prime Assembly
+  disables the choice against a server that does not list it.
+- `GET /api/example/pa` serves a runnable Prime Assembly config (the 499 nt CTCF cassette).
+- `GET /api/runs/{run_id}/{name}` serves a run's files. Prime Assembly writes `recoded_pa_report.txt`,
+  `recoded_pa_components.csv`, `recoded_pa_changes.csv` and `recoded_pa_donor.fasta` (pegRNA A, pegRNA B and the donor).
 
 ## Modes
 
@@ -87,6 +104,7 @@ Configuration via environment:
 | `PRIDICT2_DIR`  | —                                         | PRIDICT2 checkout (auto-spacer, `api` mode) |
 | `PRIDICT2_PYTHON` | —                                       | interpreter for the `pridict2` env |
 | `PRIDICT2_CORES` | —                                        | CPU cores for PRIDICT2 batch design |
+| `PEGRNA_PA_MAX_PAIRS` | `60`                                | most guide pairs one Prime Assembly request may try |
 
 ## Deployment
 

@@ -11,28 +11,31 @@ Automated pegRNA design pipeline for prime editing C-terminal protein tagging.
 
 ## Modes
 
-The `pegrna run --mode <mode>` command supports three pipeline modes, picked
+The `pegrna run --mode <mode>` command (the cluster path) supports two pipeline modes, picked
 according to insert size and the editing strategy needed:
 
 | Mode   | Insert size       | Strategy                                                                    |
 |--------|-------------------|-----------------------------------------------------------------------------|
 | `pe7`  | ≤ 40 bp           | Standard PE7 (PE3-strategy): one pegRNA + one opposite-strand ngRNA pair.   |
 | `tjpe` | ≤ ~500 bp         | Tethered-junction PE: codon-enumerated first 8 aa + ngRNA-driven RC-PBS2.   |
-| `pa`   | > 500 bp / >1 kb  | Prime Assembly **(prototype: cannot pair real PRIDICT output, see below)**. |
 
 Each mode dispatches in `pegrna_pipeline.hpc.driver.run_driver` and writes a
 text + CSV report via `pegrna_pipeline.hpc.report_writer.write_reports`.
 
-**`pa` is a prototype, not a supported mode.** Prime Assembly (Liu et al., *Nature* 2026) uses two
-pegRNAs on opposite strands whose ~35 nt 3' flaps anneal to the two ends of a linear donor. The
-prototype was never run against real PRIDICT output, and does not work with it: its pair filter
-reads `Editing_Position` (PRIDICT's distance from the nick, 0-17 bp) as a coordinate and needs a
-difference of 30-80, so no pair can pass; and PRIDICT's insert-at-one-site designs cannot have
-the nick spacing a pair needs in any case. The hand-written test fixtures hid this. It is not
-reachable from the web app, and `pegrna run --mode pa` warns before queuing anything. What a
-real implementation needs, and the decision it is waiting on, is in
-[ADR 0027](docs/decisions/0027-prime-assembly-status-and-what-a-designer-needs.md) and issue #29.
-Use `tjpe` for large inserts in the meantime.
+**Prime Assembly is `pegrna design-pa`, not a `run` mode.** For a cassette or a gene the insert is
+better carried by a separate donor DNA than by a pegRNA that grows with it. Prime Assembly
+(Liu et al., *Nature* 2026) does that: two pegRNAs on opposite strands write ~35 nt flaps at two
+nicks, and the ends of a linear donor match them. Here the donor also restores the DNA between the
+nicks, so nothing is deleted. `design-pa` chooses the guides itself, runs the same gates (folding,
+docking, splicing, off-target) with real models, and writes both pegRNAs, the donor and a list of
+every nucleotide that differs from your input. It needs an insert of at least two flaps (70 nt at the
+default flap of 35), and it is the web page's second way to write the insert ("As a separate donor DNA"). **No donor that restores the
+DNA between the nicks has been tested at the bench**, and every result says so. The design is
+specified in `docs/superpowers/specs/2026-11-04-prime-assembly-design.md`, drawn in
+[docs/STRUCTURE.md](docs/STRUCTURE.md) §2, and its real-model evidence and open points are in
+[ADR 0030](docs/decisions/0030-prime-assembly-design-pa.md). The earlier prototype (`run --mode pa`)
+could never pair real PRIDICT output ([ADR 0027](docs/decisions/0027-prime-assembly-status-and-what-a-designer-needs.md))
+and was removed; `pegrna run --mode pa` now refuses, with a pointer to `design-pa`.
 
 Foundations layer (agent + codon expander) in active development.
 
@@ -168,6 +171,9 @@ qsub -v PEGRNA_DATA=$PEGRNA_DATA,CONFIG=examples/ctcf_cterm/config.json \
 ```bash
 # Dry-run: full design logic with stand-in scorers (produces a real report):
 pegrna design-recoded --config examples/ctcf_cterm/config.json --mode fake --output-dir results/dry
+
+# Prime Assembly: two pegRNAs and a donor for a cassette (the example is the 499 nt CTCF cassette):
+pegrna design-pa --config examples/ctcf_cterm/config_pa.json --mode fake --output-dir results/dry_pa
 ```
 
 The config is a JSON of the design inputs (`rtt_aa`, `cargo`, `genome`,
@@ -205,8 +211,8 @@ launcher, not an AI.) Three ways to run, in increasing automation:
    pegrna status        # list runs        pegrna tail <run-id>   # stream the driver log
    pegrna list          # recorded runs    pegrna cancel <run-id> # stop a run
    ```
-   The launcher currently drives the `tjpe` / `pa` / `pe7` workflows; the recoded design
-   is run via the batch script or the `design-recoded` CLI above.
+   The launcher currently drives the `tjpe` / `pe7` workflows; the recoded design
+   is run via the batch script or the `design-recoded` CLI above, and Prime Assembly via `design-pa`.
 3. **From your own agent/automation.** Because everything is a normal CLI with JSON
    config in and text/CSV out, any external agent or workflow system can call it — it
    just shells out to `pegrna design-recoded` (or `qsub` the PBS script) and reads the

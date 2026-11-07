@@ -1,5 +1,9 @@
 # Prime Assembly (A+) Implementation Plan
 
+> **Status: executed, 2026-11-07.** Every task was done. What was built, the real-model evidence, and the places where the
+> build differs from this plan and the spec are in [ADR 0030](../../decisions/0030-prime-assembly-design-pa.md) and in the
+> spec's "As built" section. This file is kept as the record of how the work was ordered.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** `pegrna design-pa`: two pegRNAs plus one donor whose arms restore the DNA between the nicks, every gate a real model, reachable from the CLI, the API and the site.

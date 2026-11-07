@@ -128,3 +128,13 @@ Two corrections to the text above:
 
 The legacy prototype (`pa_workflow.py`, `pair_scorer.py`, the `pa` branch of `driver.py`) is removed when the new
 designer ships, and `tests/test_pa_real_pridict_shape.py` goes with it, as this ADR said it should.
+
+## Update, 2026-11-07: the prototype is gone
+
+Prime Assembly shipped as `design-pa` ([ADR 0030](0030-prime-assembly-design-pa.md)), and the prototype this ADR describes
+was removed: `pa_workflow.py`, `pair_scorer.py`, the `pa` branch of `driver.py`, `tests/test_pa_real_pridict_shape.py`, and
+the probe `scripts/analysis/probe_legacy_pa.py` that produced the numbers above. The numbers stay here, which is their
+record. The probe is not in the tree any more, so the promise above to "keep the evidence reproducible" is met through git
+instead: `git log --diff-filter=D -1 --format=%H -- scripts/analysis/probe_legacy_pa.py` prints the commit that removed
+it, and `git show <that commit>^:scripts/analysis/probe_legacy_pa.py` brings it back (it also needs `pair_scorer.py` from
+the same parent, and a PRIDICT2 install). `pegrna run --mode pa` still refuses, with a pointer to `design-pa`.

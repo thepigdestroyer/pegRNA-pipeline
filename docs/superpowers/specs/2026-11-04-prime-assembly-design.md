@@ -1,7 +1,8 @@
 # Prime Assembly on the canonical workflow, with the donor restoring the DNA between the nicks — Design Spec
 
 Date: 2026-11-04
-Status: Proposed (awaiting user review)
+Status: **Implemented** (2026-11-07). What was built, the real-model evidence and the corrections to this text are in
+ADR 0030 and in "As built" at the end of this document; sections marked *(as built)* below have been brought in line.
 Builds on: `docs/STRUCTURE.md` (the structure this spec relies on, read it first), ADR 0003 (arm partition),
 ADR 0004 and 0014 (pegRNA architecture, strand convention), ADR 0021 (one canonical workflow), ADR 0024 to 0026
 (calibrated gates, scaffold advisory), ADR 0027 (why the legacy PA prototype cannot work). Issues #29 (this
@@ -36,6 +37,11 @@ model. If nothing survives it fails loudly with a per-candidate diagnostic, as t
    allele, and every single wrong strand operation (reverse, complement, identity where a reverse complement
    belongs) on either pegRNA's RTT or PBS makes it raise.
 3. Stage 3 only: the live site offers it and the browser acceptance test passes with it.
+
+*Result (2026-11-07).* 1 is met: pair 101/164, both pegRNAs 147 nt, docking 0.72 and 0.61 against a neutral 0.58, no
+stand-in gate, INV-0 held, `simulate_pa` reproduced the product (the cassette is 499 nt, with the two-G T7 element of
+ADR 0029, not 480). 2 is met by `tests/test_pa_simulator.py`. 3 is met by `scripts/qa-browser.mjs pa` against
+https://pegrna-designer.vercel.app: a real design in the browser, all fifteen steps passed.
 
 **Non-goals.** Multi-fragment donors (the paper chains fragments with 30 bp overlaps up to 11 kb; here the donor
 is `arm5 + cargo + arm3`). PCR primer design. PRIDICT2 efficiency prediction for flaps (an unvalidated
@@ -81,7 +87,10 @@ for both strands, defined here and tested independently of `enumerate_nick_sites
 - **Arms.** `arm5 = genome[n1:S)` and `arm3 = genome[S:n2)`, each built by the existing partition: coding runs
   recoded synonymously with the longest stretch identical to the displaced strand at most `max_run`;
   non-coding runs byte-exact (Decision 15). Where a guide's PAM lies in a coding run, the recode is asked to
-  break it too (a synonymous change at the PAM) when one exists.
+  break it too (a synonymous change at the PAM) when one exists. *(As built.)* A change that leaves NAG or NGA does not
+  break a PAM (SpCas9 still cuts them: ADR 0030), so a C or a T is preferred to an A, and a PAM that can only be taken to
+  NAG or NGA is *weakened*, not broken. A PAM that cannot be changed is *regenerated*. Both are advisories that rank the
+  pair lower and never reject it.
 - **Donor.** `arm5 + cargo + arm3`. **Product.** `genome[:n1] + donor + genome[n2:]`, which is the reference plus
   the cargo at S plus silent changes: INV-0 holds, net deletion 0.
 - **Flaps and pegRNAs.** For a flap length `F` and PBS length `L`: guide A has `PBS = RC(genome[n1-L:n1])` and
@@ -100,28 +109,37 @@ expensive models cheap is therefore not independence but **memoization: every pe
 pegRNA's sequence**, so a pegRNA that appears in many pairs is folded and docked at most once, and a pair whose
 edit does not touch a flap re-uses its neighbour's verdicts.
 
-1. **Enumerate** guides on both strands; drop those failing `guide_sanity` (TTTT, GC) and the off-target screen
-   (cas-offinder, batched for all guides in one call, tolerance 0 and exact duplicates never tolerated: ADR 0025).
-2. **Pair and rank** (below). For each pair, in order:
+1. **Pair** *(as built)*. Every PAM-in pair of the window (§4.1), by geometry alone.
+2. **Screen the guides of those pairs.** Drop a guide that fails `guide_sanity` (TTTT, GC) or the off-target screen
+   (cas-offinder, batched for every remaining guide in one call, tolerance 0 and exact duplicates never tolerated: ADR
+   0025), and every pair that loses a guide. Only guides that can be used are screened.
 3. **Cheap, deterministic, per pair.** Build the two arms (coding runs recoded, non-coding byte-exact), break the
    PAMs where a synonymous change exists, assemble the donor and the product, assert INV-0, and check that the two
    donor ends share no run longer than `max_run` (`longest_common_run(donor[:F], donor[-F:])`; if they did, the
    two flaps could pair with each other instead of with the donor).
-4. **Per guide, choose the extension.** Scan the flap length `F` from 30 to 50 outward from 35 (35, 36, 34, 37,
-   ...): the first `F` whose RTT and PBS have no TTTT (a Pol III terminator) and whose RTT does not start with C
-   (it pairs with the scaffold); failing that, the first `F` with no TTTT; failing that, the pair is rejected. Then
-   for each PBS length make the pegRNA.
+4. **Per guide, choose the extension** *(as built)*. Scan the flap length `F` from 30 to 50 outward from 35 (35, 36,
+   34, 37, ...): the first `F` whose extension, **read as one transcript (the RTT followed by the PBS)**, has no TTTT
+   (a Pol III terminator) and whose RTT does not start with C (it pairs with the scaffold); failing that, the first `F`
+   with no TTTT; failing that, the pair is rejected. Then for each PBS length make the pegRNA and check it with
+   `simulate_side`. **Rank** the pairs that are built (below). Then, best first, for each pair:
 5. **Models on the product, once per pair:** MaxEnt cryptic-splice, SpliceAI, and the AlphaFold importance check
    at S (computed once and reused), all unchanged.
 6. **Models per pegRNA, memoized:** ViennaRNA folding (cross-region pairs at p >= 0.99, ADR 0024) with the
    scaffold-pairing advisory (ADR 0026), then Boltz-2 docking against the length-matched reference. A PA pegRNA is
    at most 166 nt (20 + 76 + 50 + 17 + 3), always inside the calibrated 96 to 232 nt, so docking is a verdict.
+   *(As built.)* The folding gate does not count three position pairs: the donor copies the genome at each nick, so the
+   RTT's last three bases are the reverse complement of the three bases right of the nick, which are the spacer's own
+   last three, and the spacer-PBS helix runs on into the RTT (spacer base `17 + m` against the RTT's last-but-`m` base,
+   `m` = 0, 1, 2). Without the exemption no pegRNA of the CTCF window ever folded clean. How many of the three folded is
+   reported (`nick_pairing_bp`). tj-PE has no such pairs and its gate is unchanged (ADR 0030).
 7. **First pair that passes everything wins**, after `simulate_pa` has confirmed the ordered sequences.
 
-**Ranking** (a heuristic, as there is no wet-lab data for PA here): fewest applicable advisories; then the
-smaller combined genomic run under the two flaps; then fewer restored base pairs (`arm5 + arm3`); then the higher
-summed on-target score; then the smaller span; then the cut positions, so the order is total and deterministic.
-It prefers pairs that avoid the two known risks (a flap that is a copy of the genome, a regenerated PAM).
+**Ranking** *(as built; a heuristic, as there is no wet-lab data for PA here)*: fewest applicable advisories; then the
+smaller combined genomic run under the two flaps; then the smaller span; then the higher summed on-target score; then
+the cut positions, so the order is total and deterministic. It prefers pairs that avoid the two known risks (a flap that
+is a copy of the genome, a regenerated PAM). This text first listed "fewer restored base pairs (`arm5 + arm3`)" before
+the on-target score and "the smaller span" after it; the donor restores exactly what lies between the nicks, so they are
+one number and are now one criterion, in the first place (the order is what the earlier wording gave).
 
 ### 4.3 The simulator: `simulate_pa`
 
@@ -148,17 +166,23 @@ It is a self-consistency check, not an experimental proof of the strand logic (A
   The paper replaced regions with non-genomic sequence; nothing validates a donor whose arms copy the genome
   under the flaps.
 - **CLI:** `pegrna design-pa --config ... --mode api|fake --output-dir ...`, writing
-  `recoded_pa_report.txt`, `recoded_pa_components.csv`, `recoded_pa_donor.fasta` and `recoded_pa_gates.json`.
+  `recoded_pa_report.txt`, `recoded_pa_components.csv`, `recoded_pa_changes.csv` (every nucleotide that differs from the
+  input, ADR 0029), `recoded_pa_donor.fasta` (pegRNA A, pegRNA B and the donor) and `recoded_pa_gates.json`.
   Example config: `examples/ctcf_cterm/config_pa.json`.
-- **API and UI (stage 3 only):** a `strategy` field on `/api/design` (`tjpe` by default, `pa`), and in the form a
-  choice of how the insert is delivered: inside the pegRNA, or as a separate donor DNA. The UI is built last,
-  after the acceptance run, as the plan for #29 already said.
+- **API and UI** *(as built)*: a `strategy` field on `/api/design` and `/api/design/stream` (`tjpe` by default, `pa`),
+  with the caps a public server needs (at most 60 pairs to try, `PEGRNA_PA_MAX_PAIRS`; at most 5 PBS lengths). In the form,
+  step 3 "How should the insert be written?": inside the pegRNA, or as a separate donor DNA; the page advises by insert
+  length and never switches by itself. The result is an order sheet (both pegRNAs and the donor drawn to scale, the PAM of
+  each guide in the genome and in the product, the changes table, the notes on preparing the donor from the server, and the
+  standing caveat as a callout). The pipeline panel shows fifteen steps in the order the walk does them, and a failed run
+  is explained by step.
 
 ### 4.5 Retiring the legacy prototype
 
-`pa_workflow.py`, `pair_scorer.py`, the `pa` branch of `driver.py` and their tests (including
-`tests/test_pa_real_pridict_shape.py`) are removed when `design-pa` ships. `pegrna run --mode pa` then points to
-`design-pa`.
+*(Done, 2026-11-07, ADR 0030.)* `pa_workflow.py`, `pair_scorer.py`, the `pa` branch of `driver.py` and their tests
+(including `tests/test_pa_real_pridict_shape.py`) are removed, with the probe `scripts/analysis/probe_legacy_pa.py` that
+showed why they could not work (recoverable from git: see ADR 0027's update). `pegrna run --mode pa` points to
+`design-pa` and submits nothing.
 
 ## 5. Defaults and where each comes from
 
@@ -166,12 +190,13 @@ It is a self-consistency check, not an experimental proof of the strand logic (A
 |---|---|---|
 | flap length `F` | 35, scanned 30 to 50 per side | the paper: 35 used, 30 and 50 robust, 13 very weak |
 | PBS length `L` | 13, 15, 17 | tj-PE's PBS1 lengths |
-| span `min` / `max` | 30 / 100 bp | the legacy plan's values; hard floor 23 (`pair_scorer`); geometric minimum 12 |
+| span `min` / `max` | 30 / 100 bp | the legacy plan's values; hard floor 23 (`pa_geometry.MIN_NICK_SEPARATION_BP`); geometric minimum 12 |
 | minimum cargo | `2 * F` (70 bp) | below it the flaps overlap each other, and a flap could reach into the other side's arm |
 | `max_run` | 8 | tj-PE's target (RecA MEPS about 8 bp; MMEJ onset 6 to 8) |
 | advisory on a genomic run under a flap | above `max_run`, where it cannot be recoded | project value, **unvalidated for PA** |
 | folding, scaffold advisory, docking | the existing `THRESHOLDS` | ADR 0024 (folding calibrated at 139, 191, 228 nt), 0026, 0024 (docking 96 to 232 nt) |
-| off-target tolerance | 0, exact duplicates never | ADR 0025 |
+| off-target tolerance | 0 per guide (`max_offtargets`), exact duplicates never | ADR 0025 |
+| pairs tried | 30 (`max_pairs`); at most 60 on the public server | each pair can need two docking calls |
 | pegRNA 3' tail | `UUU` (PolyU) | tj-PE's; see decision 1 |
 
 ## 6. Testing (TDD, tests first at each stage)
@@ -186,7 +211,7 @@ It is a self-consistency check, not an experimental proof of the strand logic (A
 - **CLI and report:** files, content, the standing caveat.
 - **Real models:** `scripts/analysis` acceptance run on DSI (acceptance 1), then the browser test at stage 3.
 
-## 7. Rollout (each stage its own commits, CI, and a DSI redeploy where code changes)
+## 7. Rollout (each stage its own commits, CI, and a DSI redeploy where code changes). All four stages are done.
 
 0. **Fixes first.** #30 (deterministic recoder, with the subprocess test) and #31 (one nick convention, with the
    independent test and a forward-strand design checked base by base). Real-model run of the CTCF demo before
@@ -206,9 +231,26 @@ It is a self-consistency check, not an experimental proof of the strand logic (A
 - Longer 5' arms need more edits (up to about 17 for 91 nt), so the ranking pushes toward short arms.
 - Real-model verification needs the DSI box and so Zscaler to be running.
 
-**Decisions for the owner** (defaults in brackets):
+**Decisions for the owner** (defaults in brackets). *Decided, as the defaults, and built so (ADR 0030).*
 1. **3' tail:** PolyU like tj-PE [default], or tevopreQ1 as in the paper's epegRNAs (an option I would add).
 2. **A PAM that cannot be recoded** (non-coding stretch): warn [default], or reject the pair.
 3. **TTTT in an RTT or PBS:** reject [default, consistent with the spacer rule in ADR 0025], or warn for users
    who order synthetic pegRNAs.
 4. **The advisory threshold for a genomic run under a flap** (8): keep, or change once there is bench data.
+
+## 9. As built (2026-11-07)
+
+The design above was built as specified, with these differences and additions. Each is explained, with the evidence, in
+[ADR 0030](../../decisions/0030-prime-assembly-design-pa.md).
+
+- **Pairing comes before screening**: only the guides that belong to a PAM-in pair are screened (§4.2 steps 1 and 2).
+- **TTTT is read on the transcript** (`RTT + PBS`), not per part (§4.2 step 4).
+- **The folding gate exempts the three nick-continuity position pairs** and reports them (§4.2 step 6). Found by the first
+  real run, not foreseen here: without it no pegRNA of the CTCF window passed.
+- **A change to NAG or NGA is not a break**: a *weakened* PAM, ranked lower (§4.1).
+- **The ranking** has one criterion where this text had two that were the same number (§4.2).
+- **Five output files**, not four: the changes table is a file of its own (§4.4).
+- **The caps and the failure view** of the API and the page, and the stall watchdog (a stream silent for 90 s is ended with
+  a message), were added with the UI (§4.4).
+- **Still untested:** a restoring donor at the bench; a way to recover a result after a lost stream (ADR 0030, "What is
+  left open").
