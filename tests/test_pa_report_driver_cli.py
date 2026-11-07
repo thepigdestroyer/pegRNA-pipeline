@@ -468,6 +468,16 @@ def test_the_payload_describes_both_guides_and_the_donor_for_the_result_view(res
     assert donor["flap_b"] == [len(result.donor) - result.guide_b.flap_len, len(result.donor)]
 
 
+def test_the_payload_gives_the_window_length_and_the_donor_notes_the_page_shows(result, locus):
+    pa = pa_gates_payload(result, stand_in_gates=[], mode="api")["pa"]
+    assert pa["window_length"] == len(locus.genome)
+    assert pa["window_length"] == pa["product_length"] - pa["cargo_length"]
+    from pegrna_pipeline.hpc import pa_report
+
+    assert pa["donor_prep"] == list(pa_report._DONOR_PREP) and len(pa["donor_prep"]) == 4
+    assert all(note in render_pa_report(result, MANIFEST) for note in pa["donor_prep"])
+
+
 def test_the_payload_is_plain_json(result):
     payload = pa_gates_payload(result, stand_in_gates=[], mode="fake")
     assert json.loads(json.dumps(payload)) == payload

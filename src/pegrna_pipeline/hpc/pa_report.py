@@ -296,6 +296,8 @@ def pa_gates_payload(
         "pa": {
             "site_s": result.site_s,
             "span": list(result.span),
+            "window_length": len(result.product) - len(result.cargo),
+            "donor_prep": list(_DONOR_PREP),
             "cargo_length": len(result.cargo),
             "donor_length": len(result.donor),
             "product_length": len(result.product),
