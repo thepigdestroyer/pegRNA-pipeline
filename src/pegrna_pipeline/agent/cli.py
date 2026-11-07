@@ -180,15 +180,18 @@ def run_cmd(
     import yaml
 
     if mode == "pa":
-        # Said before anything is queued: a PBS job would otherwise run for a long time and
-        # end in "no compatible pairs", with nothing to say why.
+        # Refused before anything is queued: the cluster job this used to submit was the earlier prototype, which
+        # compared a distance-from-nick as if it were a coordinate and so could never pair real PRIDICT output
+        # (ADR 0027). Prime Assembly is design-pa now, and it does not use the cluster queue.
         click.echo(
-            "WARNING: Prime Assembly (--mode pa) is a prototype. Against real PRIDICT output its "
-            "pair filter can never find a pair (it compares a distance-from-nick as if it were a "
-            "coordinate), so this run will report no compatible pairs. See issue #29 / ADR 0027. "
-            "Use --mode tjpe for the supported design.",
+            "Prime Assembly is run with design-pa, not with `run`:\n"
+            "  pegrna design-pa --config CONFIG.json --mode api --output-dir DIR\n"
+            "(see examples/ctcf_cterm/config_pa.json). `run --mode pa` submitted an earlier prototype that "
+            "could not pair real PRIDICT output (ADR 0027), so it no longer submits anything. "
+            "Use --mode tjpe for a tag or a short insert.",
             err=True,
         )
+        sys.exit(2)
 
     from pegrna_pipeline.agent.db import RunsDB
     from pegrna_pipeline.agent.launcher import HPCLauncher

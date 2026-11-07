@@ -686,6 +686,25 @@ def test_the_command_is_listed():
     assert "design-pa" in result.output and "design-recoded" in result.output
 
 
+def test_run_mode_pa_points_to_design_pa_and_submits_nothing(monkeypatch):
+    """The cluster job behind ``run --mode pa`` was the prototype that could never pair real PRIDICT output."""
+    from pegrna_pipeline.agent import launcher
+
+    def submitted(*_a, **_k):
+        raise AssertionError("a Prime Assembly run must not be queued on the cluster")
+
+    monkeypatch.setattr(launcher.HPCLauncher, "launch_run", submitted)
+    monkeypatch.setattr(launcher.HPCLauncher, "__init__", submitted)
+    result = CliRunner().invoke(
+        cli, ["run", "--gene", "CTCF", "--construct", "FLAG", "--mode", "pa", "--non-interactive"]
+    )
+    assert result.exit_code == 2
+    assert "design-pa" in result.output and "examples/ctcf_cterm/config_pa.json" in result.output
+    assert (
+        "prototype" not in result.output.split("design-pa")[0]
+    ), "it must not say it is merely a prototype"
+
+
 def test_the_command_designs_prints_the_report_and_writes_the_files(locus, tmp_path):
     result, out = _invoke(tmp_path, _config(locus))
     assert result.exit_code == 0, result.output
