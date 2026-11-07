@@ -54,7 +54,7 @@ def _fasta_wrap(seq: str, width: int = 80) -> str:
 def _guide_block(side: str, g: PAGuideDesign) -> List[str]:
     where = "5'" if side == "A" else "3'"
     end = f"the donor's {where} end"
-    return [
+    lines = [
         f"  pegRNA {side}  ({_STRAND_WORD[g.strand]}, nick between window nt {g.cut} and {g.cut + 1}; "
         f"Spacer.Scaffold.RTT.PBS.PolyU, {len(g.pegRNA_sequence)} nt)",
         f"    spacer  : {g.spacer}",
@@ -65,6 +65,14 @@ def _guide_block(side: str, g: PAGuideDesign) -> List[str]:
         f"    PolyU   : {g.tail}",
         f"    full    : {g.pegRNA_sequence}",
     ]
+    if g.nick_pairing_bp:
+        k = g.nick_pairing_bp
+        lines.insert(
+            6,
+            f"              (the RTT's last {k} nt pair with the spacer's last {k} nt, because the donor copies the "
+            "genome at this nick: expected, and not counted as a misfold)",
+        )
+    return lines
 
 
 def render_pa_report(result: RecodedPAResult, manifest: Mapping[str, Any]) -> str:
@@ -260,6 +268,7 @@ def _guide_payload(g: PAGuideDesign) -> Dict[str, Any]:
         "offtargets": g.offtargets,
         "on_target": g.on_target,
         "genomic_run": g.genomic_run,
+        "nick_pairing_bp": g.nick_pairing_bp,
     }
 
 

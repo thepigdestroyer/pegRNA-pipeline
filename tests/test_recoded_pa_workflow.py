@@ -925,6 +925,105 @@ def test_a_rejection_is_streamed_as_a_failed_gate(locus):
     assert ("docking_a", False) in events
 
 
+# ---- the pairing a donor that copies the genome at the nick makes inevitable ------------------------------------
+#
+# The first real run found it: ViennaRNA predicts, for every Prime Assembly pegRNA, that the RTT's last bases pair with
+# the spacer's last bases (the helix of the spacer with the PBS runs on into the RTT), and the tj-PE gate rejected all
+# of them. Those pairs, and only those, are expected.
+
+SCAFFOLD_LEN = 76
+
+
+class ContinuityFold:
+    """Folds each pegRNA the planning produced as the real folder does for a donor copying the genome at the nick:
+    spacer base 17 + m against the RTT's last-but-m base. The positions are derived here from the layout (spacer 20,
+    scaffold 76, then the RTT), independently of the function under test."""
+
+    def __init__(self, loc, *, n_pairs=3, prob=0.999, extra=None, shift=0):
+        """``n_pairs`` is one number, or ``(for guide A, for guide B)`` to tell the two sides apart."""
+        n_a, n_b = n_pairs if isinstance(n_pairs, tuple) else (n_pairs, n_pairs)
+        self.prob, self.extra, self.shift = prob, extra, shift
+        self.rtt_end, self.n = {}, {}
+        for plan in plan_pairs(**_plan_args(loc)).plans:
+            for n, cands in ((n_a, plan.candidates_a), (n_b, plan.candidates_b)):
+                for c in cands:
+                    self.rtt_end[c.pegrna] = 20 + SCAFFOLD_LEN + len(c.extension.rtt)
+                    self.n[c.pegrna] = n
+
+    def pair_probs(self, seq):
+        end = self.rtt_end[seq]
+        pairs = {(17 + m + self.shift, end - 1 - m): self.prob for m in range(self.n[seq])}
+        if self.extra:
+            pairs.update(self.extra(end))
+        return pairs
+
+
+def test_the_rtt_end_pairing_with_the_spacer_end_is_expected_and_reported_not_counted(locus):
+    res = run(locus, full_structure_scorer=ContinuityFold(locus))
+    assert res.guide_a.nick_pairing_bp == 3 and res.guide_b.nick_pairing_bp == 3
+    info = dict(res.gate_results)
+    for gate in ("structure_a", "structure_b"):
+        assert info[gate].startswith("0 cross-region pairs")
+        assert "the RTT's last 3 nt pair with the spacer's last 3 nt" in info[gate]
+        assert "expected, not counted" in info[gate]
+
+
+def test_each_side_is_reported_with_its_own_length(locus):
+    res = run(locus, full_structure_scorer=ContinuityFold(locus, n_pairs=(3, 2)))
+    assert (res.guide_a.nick_pairing_bp, res.guide_b.nick_pairing_bp) == (3, 2)
+    info = dict(res.gate_results)
+    assert "the RTT's last 3 nt pair with the spacer's last 3 nt" in info["structure_a"]
+    assert "the RTT's last 2 nt pair with the spacer's last 2 nt" in info["structure_b"]
+    flipped = run(locus, full_structure_scorer=ContinuityFold(locus, n_pairs=(1, 3)))
+    assert (flipped.guide_a.nick_pairing_bp, flipped.guide_b.nick_pairing_bp) == (1, 3)
+
+
+def test_a_continuity_pair_below_the_threshold_is_not_reported(locus):
+    res = run(
+        locus, full_structure_scorer=ContinuityFold(locus, prob=0.3)
+    )  # below any folder's cutoff
+    assert (res.guide_a.nick_pairing_bp, res.guide_b.nick_pairing_bp) == (0, 0)
+    assert "RTT's last" not in dict(res.gate_results)["structure_a"]
+
+
+def test_the_progress_event_carries_the_note_too(locus):
+    events = []
+    run(
+        locus,
+        full_structure_scorer=ContinuityFold(locus),
+        on_gate=lambda cand, gate, info, passed, metrics=None: events.append(
+            (gate, passed, info, metrics or {})
+        ),
+    )
+    shown = {
+        gate: (passed, info, metrics)
+        for gate, passed, info, metrics in events
+        if gate.startswith("structure")
+    }
+    for gate in ("structure_a", "structure_b"):
+        passed, info, metrics = shown[gate]
+        assert passed is True and "expected, not counted" in info
+        assert metrics["value"] == 0 and "expected, not counted" in metrics["extra"]
+
+
+def test_any_other_pairing_of_the_spacer_with_the_rtt_is_still_counted_and_rejects(locus):
+    """A second helix between the same two regions is not the continuity helix and is not exempt."""
+    fold = ContinuityFold(locus, extra=lambda end: {(5, end - 20): 0.999})
+    err = _fails(locus, "cross-region pairing", full_structure_scorer=fold)
+    assert "spacer[5..5]" in " ".join(err.diagnostics) and "RTT[" in " ".join(err.diagnostics)
+
+
+@pytest.mark.parametrize("shift", [-1, 1, 2])
+def test_a_pair_one_position_off_the_continuity_positions_is_counted(locus, shift):
+    """The exemption is exactly three position pairs: a helix shifted along the spacer is a different pairing."""
+    _fails(locus, "cross-region pairing", full_structure_scorer=ContinuityFold(locus, shift=shift))
+
+
+def test_the_exemption_does_not_make_the_scaffold_advisory_or_the_other_gates_disappear(locus):
+    res = run(locus, full_structure_scorer=ContinuityFold(locus), dock_scorer=RecordingDock())
+    assert [k for k, _ in res.gate_results][-2:] == ["docking_a", "docking_b"] and res.simulated
+
+
 # ---- the lock model: what may change, and what is reported -----------------------------------------------
 
 

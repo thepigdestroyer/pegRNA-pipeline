@@ -48,6 +48,8 @@ __all__ = [
     "genomic_run_under_flap",
     "assemble_pa_pegrna",
     "pa_regions",
+    "nick_continuity_pairs",
+    "SPACER_BASES_RIGHT_OF_NICK",
 ]
 
 #: Hard floor on the distance between the two nicks (the project's value since the original plan: closer
@@ -436,13 +438,18 @@ def choose_extension(
     lo: int = 30,
     hi: int = 50,
 ) -> Optional[Extension]:
-    """Scan the flap length from the default outward: the first length whose RTT and PBS hold no TTTT
-    (a Pol III terminator) and whose RTT does not start with C (a first-base C pairs with the scaffold);
-    failing that, the first length with no TTTT; failing that, ``None``."""
+    """Scan the flap length from the default outward: the first length whose extension (the RTT followed by the PBS,
+    as transcribed) holds no TTTT (a Pol III terminator) and whose RTT does not start with C (a first-base C pairs
+    with the scaffold); failing that, the first length with no TTTT; failing that, ``None``.
+
+    The two are read as one string because the polymerase reads one transcript: an RTT ending in TT followed by a
+    PBS starting TT terminates it, though neither part holds TTTT on its own. Note that the RTT's 3' end is fixed by
+    the donor's end, so a run formed there is the same at every flap length and no length can avoid it.
+    """
     fallback: Optional[Extension] = None
     for flap_len in flap_lengths(default, lo, hi):
         ext = derive_extension(side, genome, cut, donor, flap_len, pbs_len)
-        if ext is None or "TTTT" in ext.rtt or "TTTT" in ext.pbs:
+        if ext is None or "TTTT" in ext.rtt + ext.pbs:
             continue
         if ext.rtt[0] != "C":
             return ext
@@ -479,6 +486,25 @@ def assemble_pa_pegrna(
     if not tail or set(tail.upper()) - {"U"} or not 2 <= len(tail) <= 3:
         raise ValueError(f"tail must be 2-3 uridines (U only); got {tail!r}")
     return spacer + scaffold + rtt + pbs + tail
+
+
+#: SpCas9 nicks 3 bp from its PAM, so the spacer's last three bases lie to the right of the nick.
+SPACER_BASES_RIGHT_OF_NICK = 3
+
+
+def nick_continuity_pairs(regions: Dict[str, Tuple[int, int]]) -> Tuple[Tuple[int, int], ...]:
+    """The position pairs ``(i, j)``, i < j, at which the RTT's 3' end meets the spacer's 3' end.
+
+    The donor copies the genome at each nick, so the RTT's 3' end is the reverse complement of the bases just right
+    of the nick. The protospacer is continuous across the nick, so those bases are the spacer's own last three
+    (``SPACER_BASES_RIGHT_OF_NICK``), and the spacer-PBS helix runs on into the RTT: spacer base ``17 + m`` against
+    the RTT's last-but-``m`` base, for ``m`` = 0, 1, 2. The folding gate already treats the spacer-PBS helix as
+    expected; this is the same helix, up to three base pairs longer, and it is inherent to a donor that restores
+    the DNA between the nicks (tj-PE starts its insert at the nick, so never meets it).
+    """
+    first = regions["spacer"][1] - SPACER_BASES_RIGHT_OF_NICK
+    rtt_end = regions["rtt"][1]
+    return tuple((first + m, rtt_end - 1 - m) for m in range(SPACER_BASES_RIGHT_OF_NICK))
 
 
 def pa_regions(spacer: str, rtt: str, pbs: str, tail: str = "UUU") -> Dict[str, Tuple[int, int]]:

@@ -279,6 +279,49 @@ def test_the_arms_kept_exactly_line_is_under_the_arm_not_under_the_cargo(result)
     assert kept_arm and all(i > arm_at > cargo_at for i in kept_arm)
 
 
+def test_a_pegrna_block_says_when_its_rtt_end_pairs_with_its_spacer_end_and_why_that_is_fine(
+    result,
+):
+    ga = dataclasses.replace(result.guide_a, nick_pairing_bp=3)
+    gb = dataclasses.replace(result.guide_b, nick_pairing_bp=0)
+    text = render_pa_report(dataclasses.replace(result, guide_a=ga, guide_b=gb), MANIFEST)
+    block_a = _block(text, "  pegRNA A  (", "  pegRNA B  (")
+    block_b = _block(text, "  pegRNA B  (", "  donor DNA  (")
+    assert "the RTT's last 3 nt pair with the spacer's last 3 nt" in block_a
+    assert (
+        "the donor copies the genome at this nick: expected, and not counted as a misfold"
+        in block_a
+    )
+    assert (
+        block_a.index("PBS     :")
+        < block_a.index("the RTT's last 3 nt")
+        < block_a.index("PolyU   :")
+    )
+    assert "RTT's last" not in block_b, "a guide with no such pairing gets no note"
+
+
+def test_the_note_names_the_length_of_the_pairing_it_is_about(result):
+    gb = dataclasses.replace(result.guide_b, nick_pairing_bp=2)
+    text = render_pa_report(dataclasses.replace(result, guide_b=gb), MANIFEST)
+    assert "the RTT's last 2 nt pair with the spacer's last 2 nt" in _block(
+        text, "  pegRNA B  (", "  donor DNA  ("
+    )
+
+
+def test_without_such_a_pairing_the_report_has_no_note(result):
+    assert result.guide_a.nick_pairing_bp == 0 and result.guide_b.nick_pairing_bp == 0
+    assert "RTT's last" not in render_pa_report(result, MANIFEST)
+
+
+def test_the_payload_carries_each_guides_pairing_length(result):
+    ga = dataclasses.replace(result.guide_a, nick_pairing_bp=3)
+    gb = dataclasses.replace(result.guide_b, nick_pairing_bp=1)
+    guides = pa_gates_payload(dataclasses.replace(result, guide_a=ga, guide_b=gb), [], "api")["pa"][
+        "guides"
+    ]
+    assert [g["nick_pairing_bp"] for g in guides] == [3, 1]
+
+
 def test_the_changes_section_and_the_warnings_are_present(result):
     text = render_pa_report(result, MANIFEST)
     assert "Changes from your input:" in text

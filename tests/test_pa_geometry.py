@@ -12,6 +12,7 @@ from pa_helpers import make_cargo, make_locus, rc
 from pegrna_pipeline.hpc.microhomology import longest_common_run
 from pegrna_pipeline.hpc.pa_geometry import (
     MIN_NICK_SEPARATION_BP,
+    SPACER_BASES_RIGHT_OF_NICK,
     Arm,
     Extension,
     Guide,
@@ -27,6 +28,7 @@ from pegrna_pipeline.hpc.pa_geometry import (
     flap_lengths,
     footprints_clear,
     genomic_run_under_flap,
+    nick_continuity_pairs,
     pa_regions,
     pam_in_pairs,
     product_allele,
@@ -634,3 +636,89 @@ def test_a_pegrna_part_that_is_not_dna_is_refused():
         assemble_pa_pegrna(spacer="A" * 20, rtt="ACGU", pbs="ACGT")
     with pytest.raises(ValueError):
         assemble_pa_pegrna(spacer="A" * 20, rtt="ACGT", pbs="ACGT", tail="AAA")
+
+
+# ---- the terminator is read in the transcript, across the RTT-PBS junction too ----------------------------
+
+
+def test_a_run_of_t_that_forms_across_the_rtt_pbs_junction_rejects_every_flap_length_on_side_a():
+    """Genome ...AA|AA... at the nick and a donor that starts with the AA: the RTT ends in TT and the PBS starts
+    with TT, so the transcript holds TTTT although neither part does. The RTT's 3' end is the donor's start whatever
+    the flap length, so no length can avoid it."""
+    genome = "C" * 40 + "AAAA" + "C" * 40
+    donor = "AA" + "CG" * 60
+    ext = derive_extension("A", genome, 42, donor, 35, 13)
+    assert ext is not None and "TTTT" not in ext.rtt and "TTTT" not in ext.pbs
+    assert ext.rtt.endswith("TT") and ext.pbs.startswith("TT") and "TTTT" in ext.rtt + ext.pbs
+    assert choose_extension("A", genome, 42, donor, 13, default=35, lo=30, hi=50) is None
+
+
+def test_a_run_of_t_that_forms_across_the_rtt_pbs_junction_rejects_every_flap_length_on_side_b():
+    genome = "C" * 40 + "TTTT" + "C" * 40
+    donor = "CG" * 60 + "TT"  # its 3' end copies the genome left of the nick
+    ext = derive_extension("B", genome, 42, donor, 35, 13)
+    assert ext is not None and "TTTT" not in ext.rtt and "TTTT" not in ext.pbs
+    assert ext.rtt.endswith("TT") and ext.pbs.startswith("TT")
+    assert choose_extension("B", genome, 42, donor, 13, default=35, lo=30, hi=50) is None
+
+
+def test_two_ts_either_side_of_the_junction_are_not_enough_when_a_base_separates_them():
+    genome = "C" * 40 + "AGAA" + "C" * 40  # RTT would end ...TT and the PBS start TC... : TTTC
+    donor = "AA" + "CG" * 60
+    ext = choose_extension("A", genome, 42, donor, 13, default=35, lo=30, hi=50)
+    assert ext is not None and "TTTT" not in ext.rtt + ext.pbs
+
+
+# ---- the pairs a donor that copies the genome at the nick makes inevitable ---------------------------------
+
+
+def test_the_continuity_pairs_are_the_spacers_last_three_against_the_rtts_last_three():
+    regions = pa_regions("A" * 20, "C" * 35, "G" * 13, "UUU")
+    assert regions["spacer"] == (0, 20) and regions["rtt"][1] == 20 + 76 + 35
+    end = regions["rtt"][1]
+    assert nick_continuity_pairs(regions) == ((17, end - 1), (18, end - 2), (19, end - 3))
+    assert SPACER_BASES_RIGHT_OF_NICK == 3, "the cut is 3 bp from the PAM"
+    assert all(i < j for i, j in nick_continuity_pairs(regions))
+
+
+def test_the_continuity_pairs_move_with_the_rtt_length():
+    short = nick_continuity_pairs(pa_regions("A" * 20, "C" * 30, "G" * 13))
+    long_ = nick_continuity_pairs(pa_regions("A" * 20, "C" * 50, "G" * 13))
+    assert [j for _, j in long_] == [j + 20 for _, j in short] and [i for i, _ in long_] == [
+        17,
+        18,
+        19,
+    ]
+
+
+_COMP = {"A": "T", "T": "A", "C": "G", "G": "C"}
+
+
+@pytest.mark.parametrize("flap, pbs", [(35, 13), (30, 17), (50, 15), (41, 8)])
+def test_a_donor_that_copies_the_genome_at_the_nick_really_makes_those_pairs_complementary(
+    locus, flap, pbs
+):
+    """The claim behind the exemption, checked on assembled pegRNAs and not assumed: with the donor copying the
+    genome right at the nick, spacer base 17 + m is the Watson-Crick partner of the RTT's last-but-m base, for both
+    guides, whatever the flap and PBS lengths. (If a recoder changed one of those bases the pair would not form,
+    and exempting it would then change nothing.)"""
+    guides = find_guides(locus.genome)
+    tops = [g for g in guides if g.strand == "top" and g.cut <= S]
+    bottoms = [g for g in guides if g.strand == "bottom" and g.cut >= S]
+    checked = 0
+    for a in tops:
+        for b in bottoms:
+            if not footprints_clear(a, b) or not 30 <= b.cut - a.cut <= 100:
+                continue
+            donor = assemble_donor(
+                locus.genome[a.cut : S], make_cargo(120), locus.genome[S : b.cut]
+            )
+            for side, guide in (("A", a), ("B", b)):
+                ext = derive_extension(side, locus.genome, guide.cut, donor, flap, pbs)
+                if ext is None:
+                    continue
+                peg = assemble_pa_pegrna(spacer=guide.spacer, rtt=ext.rtt, pbs=ext.pbs)
+                for i, j in nick_continuity_pairs(pa_regions(guide.spacer, ext.rtt, ext.pbs)):
+                    assert _COMP[peg[i]] == peg[j], (side, guide.cut, i, j)
+                checked += 1
+    assert checked >= 6, "the locus must give several guides for this to mean anything"

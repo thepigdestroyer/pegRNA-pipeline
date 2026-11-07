@@ -15,7 +15,7 @@ the fake; the real adapters load heavy deps lazily and run on CX3.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Dict, Optional, Protocol, Tuple
+from typing import Dict, Iterable, Optional, Protocol, Tuple
 
 __all__ = [
     "FullStructureScorer",
@@ -111,6 +111,7 @@ def functional_region_pairing(
     scorer: FullStructureScorer,
     threshold: float = 0.5,
     pairs: Optional[Dict[Tuple[int, int], float]] = None,
+    expected_pairs: Optional[Iterable[Tuple[int, int]]] = None,
 ) -> StructureScore:
     """Count pairings (prob ≥ ``threshold``) that couple two DISTINCT functional
     regions, excluding any pair touching the scaffold.
@@ -121,12 +122,20 @@ def functional_region_pairing(
     pegRNA. Counting it as disruptive cross-region structure would reject every
     real candidate, so this intrinsic pair is excluded here (a learned model like
     RiNALMo does not flag it either). Genuinely disruptive couplings — e.g. the
-    spacer sequestered by the RTT cargo — are still counted."""
+    spacer sequestered by the RTT cargo — are still counted.
+
+    ``expected_pairs`` are further position pairs ``(i, j)`` that a design makes inevitable; they are not counted
+    either, and nothing else is exempted. Prime Assembly passes the three pairs of the RTT's last bases with the
+    spacer's last bases (``pa_geometry.nick_continuity_pairs``): its donor copies the genome at the nick, so the
+    spacer-PBS helix runs on into the RTT."""
     expected = ({"spacer", "pbs1"},)  # intrinsic PBS–protospacer complementarity
+    exempt = {(min(i, j), max(i, j)) for i, j in (expected_pairs or ())}
     pairs = pairs if pairs is not None else scorer.pair_probs(seq)
     counted: Dict[Tuple[int, int], float] = {}
     for (i, j), p in pairs.items():
         if p < threshold:
+            continue
+        if (min(i, j), max(i, j)) in exempt:
             continue
         ri, rj = _region_of(i, regions), _region_of(j, regions)
         if ri is None or rj is None:

@@ -55,6 +55,7 @@ from pegrna_pipeline.hpc.pa_geometry import (
     find_guides,
     flap_lengths,
     genomic_run_under_flap,
+    nick_continuity_pairs,
     pa_regions,
     pam_in_pairs,
     product_allele,
@@ -165,6 +166,9 @@ class PAGuideDesign:
     on_target: float
     #: Longest stretch the flap shares with the strand it displaces (a copy of the genome can re-anneal there).
     genomic_run: int
+    #: Base pairs of the RTT's last bases with the spacer's last bases that the fold predicted: the donor copies the
+    #: genome at the nick, so the spacer-PBS helix runs on into the RTT. Expected, so not counted by the gate.
+    nick_pairing_bp: int = 0
 
 
 @dataclass
@@ -688,6 +692,16 @@ class _Fold:
     helix: str = ""
     scaffold_nt: int = 0
     metrics: Optional[dict] = None
+    #: Base pairs between the RTT's last bases and the spacer's last bases that were predicted and NOT counted.
+    nick_bp: int = 0
+
+
+def _nick_text(nick_bp: int) -> str:
+    """Why a predicted pairing of the RTT's end with the spacer's end is not held against the pegRNA."""
+    return (
+        f"the RTT's last {nick_bp} nt pair with the spacer's last {nick_bp} nt (the donor copies the genome at "
+        "the nick, so the spacer-PBS helix runs on into the RTT: expected, not counted)"
+    )
 
 
 @dataclass(frozen=True)
@@ -759,12 +773,19 @@ class _Walker:
         try:
             # Fold once: the gate and the scaffold advisory read the same probability map.
             pair_map = self.fold_scorer.pair_probs(peg)
+            continuity = nick_continuity_pairs(regions)
             pairing = functional_region_pairing(
                 peg,
                 regions=regions,
                 scorer=self.fold_scorer,
                 threshold=self.threshold,
                 pairs=pair_map,
+                expected_pairs=continuity,
+            )
+            nick_bp = sum(
+                1
+                for i, j in continuity
+                if max(pair_map.get((i, j), 0.0), pair_map.get((j, i), 0.0)) >= self.threshold
             )
             scaffold = scaffold_extension_pairing(
                 peg,
@@ -786,10 +807,16 @@ class _Walker:
                 "extra": (
                     f"base-pair prob ≥ {self.threshold} · extension pairs with {scaffold.paired_nt} scaffold nt"
                     + (f" · {pairing.describe()}" if pairing.cross_region_pairs else "")
+                    + (f" · {_nick_text(nick_bp)}" if nick_bp else "")
                 ),
             }
             verdict = _Fold(
-                None, pairing.cross_region_pairs, pairing.describe(), scaffold.paired_nt, metrics
+                None,
+                pairing.cross_region_pairs,
+                pairing.describe(),
+                scaffold.paired_nt,
+                metrics,
+                nick_bp,
             )
         self.folds[peg] = verdict
         return verdict
@@ -844,8 +871,10 @@ class _Walker:
             if v.error is not None:
                 self.emit(idx, gate, f"structure scorer error: {v.error}", False, None)
             else:
-                info = f"{v.pairs} cross-region pairs (p>={self.threshold})" + (
-                    f": {v.helix}" if v.pairs else ""
+                info = (
+                    f"{v.pairs} cross-region pairs (p>={self.threshold})"
+                    + (f": {v.helix}" if v.pairs else "")
+                    + (f"; {_nick_text(v.nick_bp)}" if v.nick_bp else "")
                 )
                 self.emit(idx, gate, info, v.pairs == 0, v.metrics)
         return passing
@@ -1140,6 +1169,7 @@ def _build_result(
         gate_info[f"structure_{side}"] = (
             f"{fold.pairs} cross-region pairs (threshold p>={structure_threshold}); extension pairs with "
             f"{fold.scaffold_nt} scaffold nt"
+            + (f"; {_nick_text(fold.nick_bp)}" if fold.nick_bp else "")
         )
     gate_info["docking_a"] = won["dock_a"].why
     gate_info["docking_b"] = won["dock_b"].why
@@ -1157,7 +1187,7 @@ def _build_result(
         "docking_b",
     ]
 
-    def guide(side, g, cand, outcome, offs, on, run) -> PAGuideDesign:
+    def guide(side, g, cand, outcome, offs, on, run, nick_bp) -> PAGuideDesign:
         return PAGuideDesign(
             side=side,
             strand=g.strand,
@@ -1175,15 +1205,30 @@ def _build_result(
             offtargets=offs,
             on_target=on,
             genomic_run=run,
+            nick_pairing_bp=nick_bp,
         )
 
     parts = [("arm5", plan.arm5.sense), ("cargo", cargo), ("arm3", plan.arm3.sense)]
     return RecodedPAResult(
         guide_a=guide(
-            "A", a, cand_a, plan.pam_outcomes[0], plan.offtargets[0], plan.on_target[0], run_a
+            "A",
+            a,
+            cand_a,
+            plan.pam_outcomes[0],
+            plan.offtargets[0],
+            plan.on_target[0],
+            run_a,
+            won["fold_a"].nick_bp,
         ),
         guide_b=guide(
-            "B", b, cand_b, plan.pam_outcomes[1], plan.offtargets[1], plan.on_target[1], run_b
+            "B",
+            b,
+            cand_b,
+            plan.pam_outcomes[1],
+            plan.offtargets[1],
+            plan.on_target[1],
+            run_b,
+            won["fold_b"].nick_bp,
         ),
         site_s=site_s,
         span=(a.cut, b.cut),
