@@ -75,11 +75,33 @@ chk "no retired token left in pegrna.env" "ssh dsi '! grep -q -E \"^PEGRNA_(ACCE
 chk "fake mode stays open"          "[ \$(curl -s -o /dev/null -w '%{http_code}' --max-time 60 -X POST $URL/api/design -H 'Content-Type: application/json' -d '{\"mode\":\"fake\",\"config\":{\"genome\":\"ACGT\",\"site_s\":2,\"cargo\":\"ACG\",\"rtt_aa\":\"L\",\"cds_mask\":[true,true,false,false]}}') = 200 ]"
 
 echo
+echo "PRIME ASSEMBLY (the second way to write the insert)"
+# Through the public hostname, as the page calls it. These run no model: the refusal is answered before any work
+# starts, and the design is in fake mode (a few seconds). That a real-model design works is what
+# scripts/qa-browser.mjs pa shows, and it takes minutes, so it is not repeated here.
+pa_request() {   # pa_request MODE [KEEP]: the shipped example as a design request, its cargo cut to KEEP nt if given
+  curl -s --max-time 30 "$URL/api/example/pa" | python3 -c '
+import json, sys
+config = json.load(sys.stdin)
+if len(sys.argv) > 2:
+    config["cargo"] = config["cargo"][: int(sys.argv[2])]
+print(json.dumps({"mode": sys.argv[1], "strategy": "pa", "config": config}))' "$@"
+}
+pa_post() { curl -s --max-time 120 -w ' HTTP %{http_code}' -X POST "$URL/api/design" -H 'Content-Type: application/json' -d @-; }
+pa_refusal_probe() { pa_request api 60 | pa_post; }
+pa_design_probe()  { pa_request fake | pa_post; }
+chk "health lists both ways of writing the insert" "curl -s --max-time 20 $URL/api/health | grep -qF '\"strategies\":[\"tjpe\",\"pa\"]'"
+chk "the Prime Assembly example is served"  "curl -sf --max-time 20 $URL/api/example/pa | grep -qF '\"cargo\"'"
+chk "a cargo shorter than two flaps is refused before any work (400)" 'out=$(pa_refusal_probe); [[ $out == *"shorter than two flaps"* && $out == *"HTTP 400" ]]'
+chk "a fake-mode design completes, with its donor FASTA" 'out=$(pa_design_probe); [[ $out == *"HTTP 200" && $out == *"\"strategy\":\"pa\""* && $out == *"\"has_fasta\":true"* ]]'
+
+echo
 echo "PUBLIC SITE"
 chk "site returns 200"              "[ \$(curl -s -o /dev/null -w '%{http_code}' --max-time 30 $SITE) = 200 ]"
 chk "JS bundle resolves (not SPA fallback)" "curl -s $SITE | grep -oE '/assets/index-[A-Za-z0-9_-]+\.js' | head -1 | xargs -I{} curl -sf --max-time 20 -o /dev/null $SITE{}"
 chk "missing asset 404s properly"   "[ \$(curl -s -o /dev/null -w '%{http_code}' --max-time 20 $SITE/assets/nope.js) = 404 ]"
 chk "site build matches live tunnel" "curl -s \$(curl -s $SITE | grep -oE '/assets/index-[A-Za-z0-9_-]+\.js' | head -1 | sed 's|^|$SITE|') | grep -q '$URL'"
+chk "site build offers Prime Assembly (calls its example endpoint)" "curl -s \$(curl -s $SITE | grep -oE '/assets/index-[A-Za-z0-9_-]+\.js' | head -1 | sed 's|^|$SITE|') | grep -qF 'api/example/pa'"
 chk "CORS allows the site origin"   "curl -s -I --max-time 20 -H 'Origin: $SITE' $URL/api/health | grep -qi 'access-control-allow-origin'"
 
 echo
