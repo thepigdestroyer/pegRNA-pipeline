@@ -221,6 +221,51 @@ console.log(`\nAUTHOR LINK  (${SITE})`);
   await ctx.close();
 }
 
+// ------------------------------------------------------------------------------------------
+// HEADER ON A PHONE. The status chips arrive after the backend answers. They used to share one
+// row with the title, which crushed the subtitle into a column one word wide (a header 400 px
+// tall) and, when the chips appeared, pushed the whole form down by about 300 px (a layout shift
+// of 0.39, "poor" in Core Web Vitals). The backend is slowed down here so the chips arrive late,
+// as they do for a real visitor on a mobile connection.
+console.log(`\nHEADER ON A PHONE  (${SITE})`);
+{
+  const ctx = await browser.newContext({ viewport: { width: 412, height: 823 }, isMobile: true, hasTouch: true, deviceScaleFactor: 2 });
+  await ctx.addInitScript(() => {
+    window.__cls = 0;
+    new PerformanceObserver((list) => {
+      for (const e of list.getEntries()) if (!e.hadRecentInput) window.__cls += e.value;
+    }).observe({ type: "layout-shift", buffered: true });
+  });
+  const page = await ctx.newPage();
+  await page.route("**/api/health", async (route) => {
+    await new Promise((r) => setTimeout(r, 1500));
+    await route.continue();
+  });
+  await page.goto(SITE, { waitUntil: "domcontentloaded", timeout: 60000 });
+  const banner = page.getByRole("banner").first();
+  await banner.waitFor({ timeout: 30000 });
+  await page.waitForTimeout(400); // the app is drawn, the chips have not arrived
+  const before = (await banner.boundingBox()).height;
+  const chip = page.getByText(/service ready|pipeline not found/).first();
+  await chip.waitFor({ state: "visible", timeout: 30000 });
+  await page.waitForTimeout(800);
+  const after = (await banner.boundingBox()).height;
+  const sub = (await banner.locator("p").first().boundingBox()).width;
+  const cls = await page.evaluate(() => window.__cls);
+
+  Math.abs(after - before) <= 2
+    ? ok(`the header does not change height when the status chips arrive (${Math.round(before)} px)`)
+    : fail(`the header grows from ${Math.round(before)} px to ${Math.round(after)} px when the chips arrive`);
+  after <= 200 ? ok(`the header is compact on a phone (${Math.round(after)} px)`) : fail(`the header is ${Math.round(after)} px tall on a phone`);
+  sub >= 250 ? ok(`the subtitle has room to read (${Math.round(sub)} px wide)`) : fail(`the subtitle is squeezed to ${Math.round(sub)} px wide`);
+  cls < 0.02 ? ok(`no layout shift while the page loads (${cls.toFixed(3)})`) : fail(`layout shift ${cls.toFixed(3)} while the page loads`);
+
+  // The chips and the theme button are still there, and still reachable, on a phone.
+  (await chip.isVisible()) ? ok("the status chips are shown") : fail("the status chips are missing");
+  (await banner.locator("button[aria-label^='Switch to']").isVisible()) ? ok("the theme button is shown") : fail("the theme button is missing");
+  await ctx.close();
+}
+
 console.log("\nJS errors:", errors.length ? errors : "none");
 if (errors.length) process.exitCode = 1;
 await browser.close();
