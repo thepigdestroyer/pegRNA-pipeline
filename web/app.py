@@ -1,9 +1,10 @@
 """FastAPI web frontend for the pegRNA (prime-editing) design pipeline.
 
-Wraps the `pegrna design-recoded` CLI: the browser posts a design config, the
-server writes it to a per-run directory, runs the pipeline, and returns the text
-report + parsed CSV components. Runs the design logic on CPU. Heavy model gates
-are handled by the pipeline's scorer modes (`fake` today; `api` once wired).
+Wraps the `pegrna design-recoded` CLI (strategy "tjpe": the insert rides inside the pegRNA's
+extension) and the `pegrna design-pa` CLI (strategy "pa", Prime Assembly: two pegRNAs write flaps
+that a separate donor DNA matches): the browser posts a design config, the server writes it to a
+per-run directory, runs the pipeline, and returns the text report + parsed CSV components. Runs the
+design logic on CPU. Heavy model gates are handled by the pipeline's scorer modes (`fake` and `api`).
 """
 
 from __future__ import annotations
@@ -51,12 +52,25 @@ RUNS = Path(os.environ.get("PEGRNA_RUNS_DIR", str(HERE / "runs")))
 # (its large RTT is structure-gate-rejected in api mode -- see config_autospacer_flag
 # for a minimal FLAG preset that clears the real gates).
 EXAMPLE_CONFIG = REPO / "examples" / "ctcf_cterm" / "config_autospacer.json"
+# Prime Assembly example: the CTCF C-terminal cassette (499 nt, two-G T7 element) as a separate donor.
+PA_EXAMPLE = REPO / "examples" / "ctcf_cterm" / "config_pa.json"
 RUNS.mkdir(parents=True, exist_ok=True)
 
 # Modes offered to the browser. "fake" = design logic + stand-in scorers (light
 # env). "api" = CPU-real gates (SpliceAI/MaxEntScan/ViennaRNA/AlphaFold-DB) +
 # Boltz-2 docking via the NVIDIA-hosted NIM API. "real" (GPU/HPC) is not offered.
 SUPPORTED_MODES = ["fake", "api"]
+
+# The two ways the insert can be delivered. ``command`` is the CLI subcommand; ``prefix`` starts the name of every
+# file it writes into the run directory (report, components, changes, gates, and for "pa" the FASTA).
+STRATEGIES = {
+    "tjpe": {"command": "design-recoded", "prefix": "recoded_tjpe"},
+    "pa": {"command": "design-pa", "prefix": "recoded_pa"},
+}
+# Prime Assembly can need a paid docking call per pegRNA, and the walk docks each pegRNA of each pair it tries, so a
+# shared server bounds how much one request may ask for.
+PA_MAX_PAIRS = int(os.environ.get("PEGRNA_PA_MAX_PAIRS", "60"))
+PA_MAX_PBS_LENGTHS = 5
 
 # Each mode runs in its own conda env. The env root and both interpreter paths
 # are env-overridable so this deploys on any host (not just the original box).
@@ -125,8 +139,45 @@ def _nvidia_key() -> str:
     return ""
 
 
+def _validate_pa(config: dict[str, Any]) -> None:
+    """Refuse a Prime Assembly request that cannot work (400), in the engine's own words, before a job is launched.
+
+    It uses the engine's validator, so the page and the pipeline cannot disagree about what is valid, and adds only
+    the bounds a shared server needs. A cargo shorter than two flaps is refused here with the way out (the other
+    strategy), which is much kinder than a failed job.
+    """
+    import inspect
+
+    from pegrna_pipeline.hpc.recoded_pa_workflow import NoValidPADesign, validate_pa_request
+
+    missing = [k for k in ("cargo", "genome", "site_s", "cds_mask") if k not in config]
+    if missing:
+        raise HTTPException(400, f"config is missing {', '.join(missing)}")
+    pbs = config.get("pbs_lengths")
+    if isinstance(pbs, list) and len(pbs) > PA_MAX_PBS_LENGTHS:
+        raise HTTPException(
+            400,
+            f"pbs_lengths may name at most {PA_MAX_PBS_LENGTHS} lengths (each one is folded and docked)",
+        )
+    pairs = config.get("max_pairs")
+    if isinstance(pairs, int) and not isinstance(pairs, bool) and pairs > PA_MAX_PAIRS:
+        raise HTTPException(
+            400,
+            f"max_pairs may be at most {PA_MAX_PAIRS} on this server (each pair can need docking)",
+        )
+    accepted = inspect.signature(validate_pa_request).parameters
+    try:
+        validate_pa_request(**{k: v for k, v in config.items() if k in accepted})
+    except NoValidPADesign as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except (ValueError, TypeError, AttributeError) as exc:
+        raise HTTPException(400, f"Prime Assembly settings: {exc}") from exc
+
+
 def _validate(req: "DesignRequest") -> None:
-    """Reject bad mode (400), oversized config (413), or an overlong genome (400)."""
+    """Reject bad strategy or mode (400), oversized config (413), or an overlong genome (400)."""
+    if req.strategy not in STRATEGIES:
+        raise HTTPException(400, f"strategy must be one of {list(STRATEGIES)}")
     if req.mode not in SUPPORTED_MODES:
         raise HTTPException(400, f"mode must be one of {SUPPORTED_MODES}")
     if not isinstance(req.config, dict):
@@ -150,6 +201,8 @@ def _validate(req: "DesignRequest") -> None:
             )
         except (ValueError, TypeError, AttributeError) as exc:
             raise HTTPException(400, f"cargo lock settings: {exc}") from exc
+    if req.strategy == "pa":
+        _validate_pa(req.config)
 
 
 class _Slot:
@@ -208,6 +261,7 @@ def health() -> dict[str, Any]:
         "status": "ok",
         "version": app.version,
         "modes": SUPPORTED_MODES,
+        "strategies": list(STRATEGIES),
         "default_mode": "fake",
         "repo": str(REPO),
         "repo_ok": (REPO / "pyproject.toml").exists(),
@@ -222,6 +276,8 @@ def health() -> dict[str, Any]:
 class DesignRequest(BaseModel):
     config: dict[str, Any]
     mode: str = "fake"
+    #: "tjpe": the insert rides in the pegRNA's extension. "pa": Prime Assembly, a separate donor DNA.
+    strategy: str = "tjpe"
 
 
 def _pegrna_cli(mode: str) -> list[str]:
@@ -310,6 +366,30 @@ def _read_het_edit(run_dir: Path) -> dict[str, Any] | None:
     }
 
 
+def _collect(run_dir: Path, strategy: str) -> dict[str, Any]:
+    """What a finished run left in its directory, for the response: the report, the components, the gate record and
+    which downloads exist. The file names depend on the strategy (``STRATEGIES``)."""
+    prefix = STRATEGIES[strategy]["prefix"]
+    report_path = run_dir / f"{prefix}_report.txt"
+    csv_path = run_dir / f"{prefix}_components.csv"
+    gates_path = run_dir / f"{prefix}_gates.json"
+    gates: dict[str, Any] = {}
+    if gates_path.exists():
+        try:
+            gates = json.loads(gates_path.read_text())
+        except ValueError:
+            gates = {}
+    return {
+        "report": report_path.read_text() if report_path.exists() else "",
+        "components": _parse_csv(csv_path.read_text()) if csv_path.exists() else [],
+        "has_csv": csv_path.exists(),
+        "has_fasta": (run_dir / f"{prefix}_donor.fasta").exists(),
+        "gates": gates,
+        # only a tj-PE run can leave a het-edit pair behind; for any other run this is None
+        "het_edit": _read_het_edit(run_dir),
+    }
+
+
 @app.get("/", response_class=HTMLResponse)
 def index() -> HTMLResponse:
     return HTMLResponse((STATIC / "index.html").read_text())
@@ -336,6 +416,15 @@ def example_real() -> JSONResponse:
     if not REAL_EXAMPLE.exists():
         raise HTTPException(404, "real example config not found")
     return JSONResponse(json.loads(REAL_EXAMPLE.read_text()))
+
+
+@app.get("/api/example/pa")
+def example_pa() -> JSONResponse:
+    """The CTCF C-terminal cassette as a Prime Assembly donor: a 499 nt insert, far too long for the pegRNA's own
+    extension, with the transcript the SpliceAI cross-check needs."""
+    if not PA_EXAMPLE.exists():
+        raise HTTPException(404, "Prime Assembly example config not found")
+    return JSONResponse(json.loads(PA_EXAMPLE.read_text()))
 
 
 @app.get("/api/modes")
@@ -393,7 +482,7 @@ def design(req: DesignRequest) -> JSONResponse:
         cfg_path.write_text(json.dumps(req.config, indent=2))
 
         cmd = _pegrna_cli(req.mode) + [
-            "design-recoded",
+            STRATEGIES[req.strategy]["command"],
             "--config",
             str(cfg_path),
             "--mode",
@@ -419,30 +508,21 @@ def design(req: DesignRequest) -> JSONResponse:
         except Exception as exc:  # noqa: BLE001 - surface as structured error, not a 500
             error = f"pipeline failed to launch: {exc}"
 
-        report_path = run_dir / "recoded_tjpe_report.txt"
-        csv_path = run_dir / "recoded_tjpe_components.csv"
-        report = report_path.read_text() if report_path.exists() else ""
-        components = _parse_csv(csv_path.read_text()) if csv_path.exists() else []
-        gates_path = run_dir / "recoded_tjpe_gates.json"
-        gates = json.loads(gates_path.read_text()) if gates_path.exists() else {}
-        het_edit = _read_het_edit(run_dir)
+        found = _collect(run_dir, req.strategy)
         _cleanup_runs()
 
         return JSONResponse(
             {
-                "ok": returncode == 0 and bool(report) and not error,
+                "ok": returncode == 0 and bool(found["report"]) and not error,
                 "run_id": run_id,
                 "mode": req.mode,
+                "strategy": req.strategy,
                 "returncode": returncode,
                 "stdout": stdout,
                 "stderr": stderr,
                 "error": error,
-                "report": report,
-                "components": components,
-                "has_csv": csv_path.exists(),
                 "docking_stub": docking_stub,
-                "gates": gates,
-                "het_edit": het_edit,
+                **found,
             }
         )
 
@@ -462,7 +542,7 @@ def design_stream(req: DesignRequest) -> StreamingResponse:
     run_dir.mkdir(parents=True, exist_ok=True)
     (run_dir / "config.json").write_text(json.dumps(req.config, indent=2))
     cmd = _pegrna_cli(req.mode) + [
-        "design-recoded",
+        STRATEGIES[req.strategy]["command"],
         "--config",
         str(run_dir / "config.json"),
         "--mode",
@@ -527,28 +607,19 @@ def design_stream(req: DesignRequest) -> StreamingResponse:
             error = f"pipeline failed to launch: {exc}"
         finally:
             _SLOTS.release()
-        report_path = run_dir / "recoded_tjpe_report.txt"
-        csv_path = run_dir / "recoded_tjpe_components.csv"
-        gates_path = run_dir / "recoded_tjpe_gates.json"
-        report = report_path.read_text() if report_path.exists() else ""
-        components = _parse_csv(csv_path.read_text()) if csv_path.exists() else []
-        gates = json.loads(gates_path.read_text()) if gates_path.exists() else {}
-        het_edit = _read_het_edit(run_dir)
+        found = _collect(run_dir, req.strategy)
         _cleanup_runs()
         final = {
             "type": "result",
-            "ok": returncode == 0 and bool(report) and not error,
+            "ok": returncode == 0 and bool(found["report"]) and not error,
             "run_id": run_id,
             "mode": req.mode,
+            "strategy": req.strategy,
             "returncode": returncode,
             "error": error,
             "stderr": "\n".join(log[-60:]),
-            "report": report,
-            "components": components,
-            "has_csv": csv_path.exists(),
             "docking_stub": docking_stub,
-            "gates": gates,
-            "het_edit": het_edit,
+            **found,
         }
         yield json.dumps(final) + "\n"
 
@@ -557,11 +628,15 @@ def design_stream(req: DesignRequest) -> StreamingResponse:
 
 @app.get("/api/runs/{run_id}/{name}")
 def run_file(run_id: str, name: str) -> FileResponse:
-    # Guard against path traversal: only allow the two known artifacts.
+    # Guard against path traversal: only the known artifacts, for either strategy.
     allowed = {
         "recoded_tjpe_report.txt",
         "recoded_tjpe_components.csv",
         "recoded_tjpe_changes.csv",
+        "recoded_pa_report.txt",
+        "recoded_pa_components.csv",
+        "recoded_pa_changes.csv",
+        "recoded_pa_donor.fasta",
         "config.json",
     }
     if name not in allowed:

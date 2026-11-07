@@ -27,6 +27,7 @@ from pegrna_pipeline.hpc.recoded_pa_workflow import (
     plan_pairs,
     rank_key,
     run_recoded_pa,
+    validate_pa_request,
 )
 from pegrna_pipeline.hpc.recoded_tjpe_workflow import NoValidPegRNA
 from pegrna_pipeline.hpc.splice_screen import SpliceFake
@@ -55,9 +56,12 @@ def coding_locus():
     )
 
 
-def inputs(loc, cargo=None, **over):
+_DEFAULT = object()  # "not given", which a test must be able to tell from None
+
+
+def inputs(loc, cargo=_DEFAULT, **over):
     base = dict(
-        cargo=cargo or CARGO,
+        cargo=CARGO if cargo is _DEFAULT else cargo,
         genome=loc.genome,
         site_s=loc.site_s,
         cds_mask=loc.cds_mask,
@@ -67,7 +71,7 @@ def inputs(loc, cargo=None, **over):
     return base
 
 
-def run(loc, cargo=None, **over):
+def run(loc, cargo=_DEFAULT, **over):
     return run_recoded_pa(**inputs(loc, cargo, **over))
 
 
@@ -163,27 +167,114 @@ def test_the_refusal_is_a_no_valid_design_so_callers_that_catch_the_family_catch
         run(locus, cargo=make_cargo(40))
 
 
-@pytest.mark.parametrize(
-    "over, message",
-    [
-        (dict(flap_length=29), "flap_length"),
-        (dict(flap_length=51), "flap_length"),
-        (dict(flap_min=40, flap_max=30), "flap"),
-        (dict(pbs_lengths=()), "pbs_lengths"),
-        (dict(pbs_lengths=(13, 2)), "pbs_lengths"),
-        (dict(min_span=22), "at least 23"),
-        (dict(min_span=60, max_span=50), "max_span"),
-        (dict(site_s=-1), "site_s"),
-        (dict(site_s=301), "site_s"),
-        (dict(tail="AAA"), "tail"),
-        (dict(max_offtargets=-1), "max_offtargets"),
-        (dict(max_pairs=0), "max_pairs"),
-        (dict(max_run=0), "max_run"),
-    ],
-)
+BAD_ARGUMENTS = [
+    (dict(flap_length=29), "flap_length"),
+    (dict(flap_length=51), "flap_length"),
+    (dict(flap_min=40, flap_max=30), "flap"),
+    (dict(pbs_lengths=()), "pbs_lengths"),
+    (dict(pbs_lengths=(13, 2)), "pbs_lengths"),
+    (dict(min_span=22), "at least 23"),
+    (dict(min_span=60, max_span=50), "max_span"),
+    (dict(site_s=-1), "site_s"),
+    (dict(site_s=301), "site_s"),
+    (dict(tail="AAA"), "tail"),
+    (dict(max_offtargets=-1), "max_offtargets"),
+    (dict(max_pairs=0), "max_pairs"),
+    (dict(max_run=0), "max_run"),
+    # JSON can carry anything: a float, a string, a boolean or a null is not a whole number
+    (dict(flap_length=35.0), "flap_length must be a whole number"),
+    (dict(flap_length="35"), "flap_length must be a whole number"),
+    (dict(flap_length=True), "flap_length must be a whole number"),
+    (dict(flap_min=None), "flap_min must be a whole number"),
+    (dict(flap_max=50.5), "flap_max must be a whole number"),
+    (dict(site_s=147.0), "site_s must be a whole number"),
+    (dict(min_span="30"), "min_span must be a whole number"),
+    (dict(max_span=100.0), "max_span must be a whole number"),
+    (dict(max_run=8.0), "max_run must be a whole number"),
+    (dict(max_offtargets=0.5), "max_offtargets must be a whole number"),
+    (dict(max_offtargets=True), "max_offtargets must be a whole number"),
+    (dict(max_pairs="30"), "max_pairs must be a whole number"),
+    (dict(pbs_lengths=(13.0, 15)), "pbs_lengths"),
+    (dict(pbs_lengths=("13",)), "pbs_lengths"),
+    (dict(pbs_lengths=(True,)), "pbs_lengths"),
+    (dict(pbs_lengths=13), "pbs_lengths"),
+    (dict(tail=None), "tail"),
+    (dict(tail=3), "tail"),
+    (dict(genome=None), "genome"),
+    (dict(genome=""), "genome"),
+    (dict(cds_mask=None), "cds_mask"),
+    (dict(cargo=None), "cargo"),
+    (dict(cargo=["ACGT"]), "cargo"),
+]
+
+
+@pytest.mark.parametrize("over, message", BAD_ARGUMENTS)
 def test_bad_arguments_are_refused_with_the_name_of_the_argument(locus, over, message):
     with pytest.raises(ValueError, match=message):
         run(locus, **over)
+
+
+# ---- the validator the web API shares with the walk ---------------------------------------------------------------
+
+
+def _request(loc, **over):
+    base = dict(cargo=CARGO, genome=loc.genome, site_s=S, cds_mask=list(loc.cds_mask))
+    base.update(over)
+    return base
+
+
+def test_the_validator_accepts_what_the_walk_accepts_and_returns_the_cargo_spec(locus):
+    spec = validate_pa_request(**_request(locus))
+    assert spec.sequence == CARGO
+
+
+@pytest.mark.parametrize("over, message", BAD_ARGUMENTS)
+def test_the_validator_refuses_exactly_what_the_walk_refuses(locus, over, message):
+    with pytest.raises(ValueError, match=message):
+        validate_pa_request(**_request(locus, **over))
+
+
+def test_the_validator_refuses_a_cargo_too_short_to_assemble_and_names_the_way_out(locus):
+    with pytest.raises(NoValidPADesign, match="design-recoded"):
+        validate_pa_request(**_request(locus, cargo=CARGO[:69]))
+
+
+def test_the_validator_checks_the_locks_and_the_alphabet(locus):
+    with pytest.raises(ValueError, match="cargo_locked"):
+        validate_pa_request(**_request(locus, cargo_locked=[[1, 999]]))
+    with pytest.raises(ValueError, match="do not add up"):
+        validate_pa_request(
+            **_request(locus, cargo_parts=[{"name": "x", "dna": CARGO[:-3], "locked": False}])
+        )
+    with pytest.raises(ValueError, match="cargo"):
+        validate_pa_request(**_request(locus, cargo="ACGT" * 20 + "N"))
+
+
+class _TouchesNothing:
+    """Any use of it fails the test: a request that cannot work must be refused before a model is consulted."""
+
+    def __getattr__(self, name):
+        raise AssertionError(f"a scorer was touched ({name}) before the request was validated")
+
+    def __call__(self, *a, **k):
+        raise AssertionError("a scorer was called before the request was validated")
+
+
+@pytest.mark.parametrize("over, message", BAD_ARGUMENTS)
+def test_the_walk_validates_before_it_touches_any_scorer(locus, over, message):
+    nothing = _TouchesNothing()
+    scorers = dict(
+        splice_scorer=nothing,
+        full_structure_scorer=nothing,
+        importance_scorer=nothing,
+        dock_scorer=nothing,
+        offtarget_scorer=nothing,
+        maxent_scorer=nothing,
+    )
+    with pytest.raises(ValueError, match=message):
+        run_recoded_pa(**_request(locus, **over), **scorers)
+    with pytest.raises(NoValidPADesign, match="design-recoded"):
+        run_recoded_pa(**_request(locus, cargo=CARGO[:60]), **scorers)
 
 
 def test_a_mask_that_does_not_fit_the_window_is_refused(locus):

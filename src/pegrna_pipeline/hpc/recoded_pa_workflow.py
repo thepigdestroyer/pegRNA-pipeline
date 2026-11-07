@@ -87,6 +87,7 @@ __all__ = [
     "rank_key",
     "plan_pairs",
     "run_recoded_pa",
+    "validate_pa_request",
 ]
 
 STANDING_CAVEAT = (
@@ -228,6 +229,15 @@ def rank_key(
 # ---- argument checks ------------------------------------------------------------------------------------
 
 
+def _whole(name: str, value: Any) -> int:
+    """``value`` if it is a whole number; otherwise a ValueError that names it. A JSON ``35.0``, a string or a
+    boolean is not one, and would otherwise fail later, inside the pipeline, with an unhelpful message.
+    """
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError(f"{name} must be a whole number; got {value!r}")
+    return value
+
+
 def _check_args(
     *,
     cargo: str,
@@ -245,12 +255,22 @@ def _check_args(
     max_offtargets: int,
     max_pairs: int,
 ) -> None:
-    if not cargo or set(cargo.upper()) - set("ACGT"):
+    if not isinstance(cargo, str) or not cargo or set(cargo.upper()) - set("ACGT"):
         raise ValueError("cargo must be non-empty DNA (A, C, G, T only)")
-    if len(cds_mask) != len(genome):
-        raise ValueError(
-            f"cds_mask has {len(cds_mask)} entries but the genome window has {len(genome)} bases"
-        )
+    if not isinstance(genome, str) or not genome:
+        raise ValueError("genome must be the design window, as a DNA string")
+    if not isinstance(cds_mask, (list, tuple)) or len(cds_mask) != len(genome):
+        n = len(cds_mask) if isinstance(cds_mask, (list, tuple)) else "no"
+        raise ValueError(f"cds_mask has {n} entries but the genome window has {len(genome)} bases")
+    site_s = _whole("site_s", site_s)
+    flap_length = _whole("flap_length", flap_length)
+    flap_min = _whole("flap_min", flap_min)
+    flap_max = _whole("flap_max", flap_max)
+    min_span = _whole("min_span", min_span)
+    max_span = _whole("max_span", max_span)
+    max_run = _whole("max_run", max_run)
+    max_offtargets = _whole("max_offtargets", max_offtargets)
+    max_pairs = _whole("max_pairs", max_pairs)
     if not 0 <= site_s <= len(genome):
         raise ValueError(f"site_s must be between 0 and {len(genome)}; got {site_s}")
     if flap_min > flap_max:
@@ -263,9 +283,15 @@ def _check_args(
         raise ValueError(
             "flap_min and flap_max must stay within 30-50 nt, the range the paper found robust"
         )
-    if not pbs_lengths or any(int(x) != x or not 6 <= x <= 30 for x in pbs_lengths):
+    if (
+        not isinstance(pbs_lengths, (list, tuple))
+        or not pbs_lengths
+        or any(
+            isinstance(x, bool) or not isinstance(x, int) or not 6 <= x <= 30 for x in pbs_lengths
+        )
+    ):
         raise ValueError(
-            f"pbs_lengths must be a non-empty list of whole numbers from 6 to 30; got {list(pbs_lengths)}"
+            f"pbs_lengths must be a non-empty list of whole numbers from 6 to 30; got {pbs_lengths!r}"
         )
     if min_span < MIN_NICK_SEPARATION_BP:
         raise ValueError(
@@ -273,13 +299,18 @@ def _check_args(
         )
     if max_span < min_span:
         raise ValueError(f"max_span ({max_span}) must be at least min_span ({min_span})")
-    if int(max_run) != max_run or max_run < 1:
+    if max_run < 1:
         raise ValueError(f"max_run must be a whole number >= 1; got {max_run!r}")
-    if not tail or set(tail.upper()) - {"U"} or not 2 <= len(tail) <= 3:
+    if (
+        not isinstance(tail, str)
+        or not tail
+        or set(tail.upper()) - {"U"}
+        or not 2 <= len(tail) <= 3
+    ):
         raise ValueError(f"tail must be 2-3 uridines (U only); got {tail!r}")
-    if int(max_offtargets) != max_offtargets or max_offtargets < 0:
+    if max_offtargets < 0:
         raise ValueError(f"max_offtargets must be an integer >= 0; got {max_offtargets!r}")
-    if int(max_pairs) != max_pairs or max_pairs < 1:
+    if max_pairs < 1:
         raise ValueError(f"max_pairs must be a whole number >= 1; got {max_pairs!r}")
 
 
@@ -297,6 +328,58 @@ def _flap_ceiling(cargo: str, flap_length: int, flap_min: int, flap_max: int) ->
             diagnostics=[f"cargo {len(cargo)} nt < 2 x flap {flap_length} = {2 * flap_length} nt"],
         )
     return min(flap_max, len(cargo) // 2)
+
+
+def validate_pa_request(
+    *,
+    cargo: str,
+    genome: str,
+    site_s: int,
+    cds_mask: Sequence[bool],
+    pbs_lengths: Sequence[int] = (13, 15, 17),
+    flap_length: int = 35,
+    flap_min: int = 30,
+    flap_max: int = 50,
+    min_span: int = 30,
+    max_span: int = 100,
+    max_run: int = 8,
+    tail: str = "UUU",
+    max_offtargets: int = 0,
+    max_pairs: int = 30,
+    cargo_locked: Optional[Sequence[Sequence[int]]] = None,
+    cargo_parts: Optional[Sequence[Dict[str, Any]]] = None,
+) -> Any:
+    """Everything :func:`run_recoded_pa` checks before it runs a model, in one place.
+
+    ``run_recoded_pa`` calls this first, and the web API calls it before it launches a job, so a request that cannot
+    work is refused in milliseconds and the page and the pipeline cannot disagree about what is valid. Raises
+    :class:`ValueError` for an argument that makes no sense (the message names it) and :class:`NoValidPADesign` for a
+    cargo too short to assemble (it names the way out). Returns the cargo spec it built, which the walk needs next.
+    """
+    _check_args(
+        cargo=cargo,
+        genome=genome,
+        site_s=site_s,
+        cds_mask=cds_mask,
+        pbs_lengths=pbs_lengths,
+        flap_length=flap_length,
+        flap_min=flap_min,
+        flap_max=flap_max,
+        min_span=min_span,
+        max_span=max_span,
+        max_run=max_run,
+        tail=tail,
+        max_offtargets=max_offtargets,
+        max_pairs=max_pairs,
+    )
+    cargo = cargo.upper()
+    spec = build_cargo_spec(
+        cargo, parts=cargo_parts, locked=cargo_locked
+    )  # ValueError on bad lock inputs
+    _flap_ceiling(
+        cargo, flap_length, flap_min, flap_max
+    )  # the cargo rule: refuse before any model runs
+    return spec
 
 
 # ---- planning ---------------------------------------------------------------------------------------------
@@ -1292,9 +1375,7 @@ def run_recoded_pa(
     exactly as given; ``cargo_locked`` / ``cargo_parts`` are validated and reported (ADR 0029) though nothing in a
     donor ever recodes the cargo. Only the genomic arms are recoded, and only where the bases code for protein.
     """
-    cargo = (cargo or "").upper()
-    genome = genome.upper()
-    _check_args(
+    spec = validate_pa_request(
         cargo=cargo,
         genome=genome,
         site_s=site_s,
@@ -1309,13 +1390,10 @@ def run_recoded_pa(
         tail=tail,
         max_offtargets=max_offtargets,
         max_pairs=max_pairs,
+        cargo_locked=cargo_locked,
+        cargo_parts=cargo_parts,
     )
-    spec = build_cargo_spec(
-        cargo, parts=cargo_parts, locked=cargo_locked
-    )  # ValueError on bad lock inputs
-    _flap_ceiling(
-        cargo, flap_length, flap_min, flap_max
-    )  # the cargo rule: refuse before any model runs
+    cargo, genome = cargo.upper(), genome.upper()  # valid strings from here on
     emit = _emitter(on_gate)
 
     # The insertion site does not depend on which guides are used, so its structural tolerance is judged once, first:
