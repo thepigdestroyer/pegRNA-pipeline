@@ -224,12 +224,30 @@ def build_arm(
 @dataclass(frozen=True)
 class PamOutcome:
     side: str  # "A" | "B"
-    #: "broken-by-recode"            the recode already changed a base of the PAM
-    #: "broken"                      broken here by one synonymous base change (``position``)
+    #: "broken-by-recode"            the recode already changed a base of the PAM, and no PAM is left
+    #: "broken"                      no PAM is left, by one synonymous base change (``position``)
+    #: "weakened"                    only a weak PAM (NAG or NGA) is left: no synonymous change gives none, so
+    #:                               SpCas9 can still cut it, at a fraction of its NGG rate
     #: "intact-noncoding"            the PAM is regenerated: non-coding DNA is byte-exact (Decision 15)
     #: "intact-no-synonymous-change" the PAM is regenerated: no synonymous change exists there
     status: str
     position: Optional[int]
+    #: The PAM of the product as the guide reads it (3 nt, on its own strand).
+    pam: str = ""
+
+
+#: The last two bases of the PAMs that wild-type SpCas9 still cuts, at a fraction of its NGG rate. NAG: about a fifth
+#: of NGG (Hsu et al. 2013). NGA: 8-16% in one screen, and over 20% indels at 3 of 19 NGA sites in another
+#: (Nishimasu et al. 2018). Every other change to a G of NGG leaves no PAM; that second study found no such indels at
+#: 0 of 18 NGT and 0 of 15 NGC sites. So when a synonymous change can give a C or a T, it is preferred over an A.
+_WEAK_PAM_TAILS = frozenset({"AG", "GA"})
+
+
+def _product_pam(guide: Guide, restored: Sequence[str], n1: int, n2: int, genome: str) -> str:
+    """The guide's PAM in the restored DNA, 3 nt as the guide reads it (``restored`` is aligned to ``genome[n1:n2]``)."""
+    lo, hi = guide.pam_span
+    sense = "".join(restored[q - n1] if n1 <= q < n2 else genome[q] for q in range(lo, hi))
+    return sense if guide.strand == "top" else _rc(sense)
 
 
 def _with_edits(arm: Arm, sense: str) -> Arm:
@@ -257,6 +275,10 @@ def break_pams(
     and the arm still has no identical stretch over ``max_run``. Either guide's PAM may lie in either arm
     (in the CTCF best pair B's PAM is inside arm5), so this is a pair-level edit. Everything else is
     reported, not forced: non-coding DNA stays byte-exact.
+
+    A change that leaves NAG or NGA does not remove the PAM (see ``_WEAK_PAM_TAILS``), so a change to a C or a T
+    is always preferred, and a PAM that can only be taken to NAG or NGA is reported as ``weakened``, never as
+    broken. A change that merely undoes the recode's own edit (back to NGG) is not a break.
     """
     n1, s, n2 = arm5.lo, arm5.hi, arm3.hi
     if arm3.lo != s:
@@ -273,13 +295,19 @@ def break_pams(
         return span is not None and span[0] <= pos < span[1]
 
     for side, guide in guides:
-        crit, want = guide.critical_bases
+        crit, _want = guide.critical_bases
         if any(not n1 <= p < n2 for p in crit):
             raise ValueError("a PAM lies outside the replaced span: not a PAM-in pair")
-        if any(restored[p - n1] != want for p in crit):
-            outcomes.append(PamOutcome(side, "broken-by-recode", None))
+        tail = _product_pam(guide, restored, n1, n2, genome)[1:]
+        if tail != "GG" and tail not in _WEAK_PAM_TAILS:
+            outcomes.append(
+                PamOutcome(
+                    side, "broken-by-recode", None, _product_pam(guide, restored, n1, n2, genome)
+                )
+            )
             continue
-        best: Optional[Tuple[Tuple[float, int, str], int, str]] = None
+        # The PAM is NGG, or the recode left only a weak one: look for the best single synonymous change.
+        best: Optional[Tuple[Tuple[bool, float, int, str], int, str]] = None
         for p in crit:
             if not coding(p):
                 continue
@@ -297,22 +325,33 @@ def break_pams(
                     continue
                 trial = restored[:]
                 trial[p - n1] = alt
+                after = _product_pam(guide, trial, n1, n2, genome)[1:]
+                if after == "GG":
+                    continue  # this only undoes the recode's own change: the PAM is back
                 lo, hi = (0, s - n1) if arm is arm5 else (s - n1, n2 - n1)
                 # The edit may only break identity, never extend it past what the arm already allowed.
                 allowed = max(max_run, longest_common_run("".join(restored[lo:hi]), arm.original))
                 if longest_common_run("".join(trial[lo:hi]), arm.original) > allowed:
                     continue
-                key = (-codon_frequency(aa_new, new), p, alt)
+                key = (after in _WEAK_PAM_TAILS, -codon_frequency(aa_new, new), p, alt)
                 if best is None or key < best[0]:
                     best = (key, p, alt)
         if best is not None:
-            _, p, alt = best
+            key, p, alt = best
             restored[p - n1] = alt
-            outcomes.append(PamOutcome(side, "broken", p))
+            status = "weakened" if key[0] else "broken"
+            outcomes.append(
+                PamOutcome(side, status, p, _product_pam(guide, restored, n1, n2, genome))
+            )
+            continue
+        now = _product_pam(guide, restored, n1, n2, genome)
+        if tail != "GG":
+            status = "weakened"  # the recode left NAG or NGA and nothing synonymous improves on it
         elif any(coding(p) for p in crit):
-            outcomes.append(PamOutcome(side, "intact-no-synonymous-change", None))
+            status = "intact-no-synonymous-change"
         else:
-            outcomes.append(PamOutcome(side, "intact-noncoding", None))
+            status = "intact-noncoding"
+        outcomes.append(PamOutcome(side, status, None, now))
 
     new5, new3 = "".join(restored[: s - n1]), "".join(restored[s - n1 :])
     return (

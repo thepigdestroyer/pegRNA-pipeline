@@ -216,7 +216,8 @@ def test_a_pam_in_a_coding_arm_is_broken_by_a_synonymous_change():
     new5, new3, outcomes = break_pams(
         CRAFTED, arm5, arm3, [("A", _top_guide(31))], MASK_CRAFTED, max_run=8
     )
-    assert outcomes == [PamOutcome("A", "broken", 32)]
+    assert [(o.side, o.status, o.position) for o in outcomes] == [("A", "broken", 32)]
+    assert outcomes[0].pam[1:] not in {"GG", "AG", "GA"}, "no PAM, not even a weak one, is left"
     changed = [i for i, (a, b) in enumerate(zip(arm5.sense, new5.sense)) if a != b]
     assert changed == [32 - 28], "exactly one base moves, and it is the PAM's first G"
     assert str(Seq(new5.sense[2:5]).translate()) == "L"  # CTG -> CTA/CTC/CTT, still leucine
@@ -229,7 +230,7 @@ def test_a_pam_the_recode_already_broke_is_left_alone():
     arm5 = _crafted_arm(28, S_CRAFTED, sense=broken[28:S_CRAFTED])
     arm3 = _crafted_arm(S_CRAFTED, 60, coding=False)
     new5, _, outcomes = break_pams(CRAFTED, arm5, arm3, [("A", _top_guide(31))], MASK_CRAFTED, 8)
-    assert outcomes == [PamOutcome("A", "broken-by-recode", None)]
+    assert outcomes == [PamOutcome("A", "broken-by-recode", None, "TTG")]
     assert new5 == arm5
 
 
@@ -240,7 +241,7 @@ def test_a_pam_in_a_non_coding_arm_cannot_be_changed():
     arm5, arm3 = _crafted_arm(60, 60, genome), _crafted_arm(60, 90, genome, coding=False)
     guide = _top_guide(63)  # cut 60 = S: its PAM lies in the locked 3' arm
     _, new3, outcomes = break_pams(genome, arm5, arm3, [("A", guide)], mask, 8)
-    assert outcomes == [PamOutcome("A", "intact-noncoding", None)]
+    assert outcomes == [PamOutcome("A", "intact-noncoding", None, "TGG")]
     assert new3.sense == arm3.sense, "non-coding DNA is byte-exact (Decision 15)"
 
 
@@ -251,7 +252,7 @@ def test_a_pam_with_no_synonymous_alternative_is_reported():
     arm5, arm3 = _crafted_arm(30, 60, genome), _crafted_arm(60, 60, genome, coding=False)
     assert genome[33:36] == "TGG"
     new5, _, outcomes = break_pams(genome, arm5, arm3, [("A", _top_guide(33))], mask, 8)
-    assert outcomes == [PamOutcome("A", "intact-no-synonymous-change", None)]
+    assert outcomes == [PamOutcome("A", "intact-no-synonymous-change", None, "TGG")]
     assert new5.sense == arm5.sense
 
 
@@ -274,6 +275,177 @@ def test_a_bottom_guides_pam_is_broken_at_its_cc():
     assert outcomes[0].status == "broken" and outcomes[0].side == "B"
     assert new5.sense[pam_start - 21 : pam_start - 21 + 2] != "CC"
     assert str(Seq(new5.sense).translate()) == str(Seq(arm5.sense).translate())
+
+
+# ---- weak PAMs: NAG and NGA are still cut by SpCas9, so they are not a break --------------------------
+#
+# A synonymous change that leaves NAG or NGA does not remove the PAM. So a C or a T is preferred to an A however
+# common the A-ending codon is, and a PAM that can only be taken to NAG or NGA is "weakened", not "broken".
+
+
+def _guide_at(strand, pam_start, pam):
+    """A guide whose PAM sits at ``pam_start``; ``pam`` is how the guide reads it (its own strand)."""
+    if strand == "top":
+        return Guide(
+            "top",
+            "A" * 20,
+            pam,
+            pam_start - 3,
+            (pam_start, pam_start + 3),
+            (pam_start - 20, pam_start),
+        )
+    return Guide(
+        "bottom",
+        "A" * 20,
+        pam,
+        pam_start + 6,
+        (pam_start, pam_start + 3),
+        (pam_start + 3, pam_start + 23),
+    )
+
+
+def _run_break(genome, guide, arm5_lo, s=60, side="A"):
+    mask = [i < s for i in range(len(genome))]
+    arm5, arm3 = _crafted_arm(arm5_lo, s, genome), _crafted_arm(s, s, genome, coding=False)
+    new5, _, outcomes = break_pams(genome, arm5, arm3, [(side, guide)], mask, 8)
+    return arm5, new5, outcomes[0]
+
+
+def _prefer_a_endings(monkeypatch):
+    """Make every codon ending in A the most frequent, so a frequency-only choice would take the weak PAM."""
+    from pegrna_pipeline.hpc import pa_geometry as geometry
+
+    monkeypatch.setattr(
+        geometry, "codon_frequency", lambda aa, codon: 1.0 if codon.endswith("A") else 0.1
+    )
+
+
+def test_a_c_or_a_t_is_preferred_to_an_a_even_when_the_a_codon_is_the_most_common(monkeypatch):
+    """Top guide: PAM TGG, third base of CTG free. CTA would leave TAG (weak); CTC or CTT leave no PAM."""
+    _prefer_a_endings(monkeypatch)
+    arm5, new5, outcome = _run_break(CRAFTED, _top_guide(31), 28)
+    assert (outcome.status, outcome.position) == ("broken", 32)
+    assert new5.sense[32 - 28] in "CT" and outcome.pam in {"TCG", "TTG"}
+
+
+def test_the_bottom_strand_prefers_the_same_way_with_the_complement(monkeypatch):
+    """Sense GCC|CTG, bottom PAM read as AGG. A sense T is an A on the guide's strand, so T is the weak edit here
+    (GCT leaves AGA, TTG leaves AAG); A and G leave AGT and AGC. Make the weak codons the most common.
+    """
+    from pegrna_pipeline.hpc import pa_geometry as geometry
+
+    monkeypatch.setattr(
+        geometry,
+        "codon_frequency",
+        lambda aa, codon: 1.0 if codon in {"GCT", "TTG"} else 0.1,
+    )
+    genome = "GCT" * 8 + "GCC" + "CTG" + "GCT" * 25
+    guide = _guide_at("bottom", 26, "AGG")
+    arm5, new5, outcome = _run_break(genome, guide, 21, side="B")
+    assert genome[26:29] == "CCT"
+    assert outcome.status == "broken" and outcome.pam in {"AGT", "AGC"}
+    assert outcome.position == 26 and new5.sense[26 - 21] in "AG"
+
+
+def test_a_pam_that_can_only_be_taken_to_nag_is_weakened_not_broken():
+    """GAG|GCC: the PAM is AGG across the codon boundary. The one synonymous change is GAG -> GAA, giving AAG."""
+    genome = "GCT" * 8 + "GAG" + "GCC" + "GCT" * 25
+    assert genome[25:28] == "AGG"
+    arm5, new5, outcome = _run_break(genome, _guide_at("top", 25, "AGG"), 24)
+    assert (outcome.status, outcome.position, outcome.pam) == ("weakened", 26, "AAG")
+    assert new5.sense[26 - 24] == "A" and arm5.sense[26 - 24] == "G"
+
+
+def test_a_pam_that_can_only_be_taken_to_nga_is_weakened_too():
+    """AGG as the codon itself: the one synonymous change is AGG -> AGA, giving NGA."""
+    genome = "GCT" * 8 + "AGG" + "GCT" * 26
+    assert genome[24:27] == "AGG"
+    arm5, new5, outcome = _run_break(genome, _guide_at("top", 24, "AGG"), 24)
+    assert (outcome.status, outcome.position, outcome.pam) == ("weakened", 26, "AGA")
+
+
+def test_a_bottom_pam_that_can_only_be_taken_to_a_weak_one_is_weakened():
+    """Sense GAC|CTG: C|CT is the bottom PAM (AGG). The third base of Asp GAC may only become T, and so may the
+    first base of Leu CTG (TTG); a sense T reads as A on the guide's strand, so every option is weak.
+    """
+    genome = "GCT" * 8 + "GAC" + "CTG" + "GCT" * 25
+    assert genome[26:29] == "CCT"
+    arm5, new5, outcome = _run_break(genome, _guide_at("bottom", 26, "AGG"), 21, side="B")
+    assert outcome.status == "weakened" and outcome.pam in {"AGA", "AAG"}
+    assert new5.sense[outcome.position - 21] == "T"
+
+
+def test_a_pam_the_recode_left_weak_is_improved_when_a_synonymous_change_allows_it():
+    """CGG is Arg and the recode made it CGA, which leaves NGA (weak). CGC and CGT are Arg too and leave none."""
+    genome = "GCT" * 8 + "CGG" + "GCT" * 26
+    recoded = genome[:26] + "A" + genome[27:]  # CGG -> CGA
+    arm5 = _crafted_arm(24, 60, genome, sense=recoded[24:60])
+    arm3 = _crafted_arm(60, 60, genome, coding=False)
+    mask = [i < 60 for i in range(len(genome))]
+    new5, _, outcomes = break_pams(
+        genome, arm5, arm3, [("A", _guide_at("top", 24, "CGG"))], mask, 8
+    )
+    assert (outcomes[0].status, outcomes[0].position) == ("broken", 26)
+    assert new5.sense[26 - 24] in "CT" and outcomes[0].pam in {"CGC", "CGT"}
+
+
+def test_undoing_the_recodes_own_change_is_not_breaking_the_pam():
+    """The recode took GAG to GAA (PAM AAG, weak). Putting the G back would be NGG again, which is not a break,
+    and nothing else is synonymous: the outcome is weakened, and the arm is left exactly as the recode made it.
+
+    The arm also carries other recoding edits, so that putting the G back would NOT be refused by the rule that
+    keeps identical runs short: only the rule about undoing the recode can refuse it."""
+    genome = "GCT" * 8 + "GAG" + "GCC" + "GCT" * 25
+    sense = list(genome[24:60])
+    sense[26 - 24] = "A"  # GAG -> GAA
+    for third_base in (
+        32,
+        38,
+        44,
+        50,
+        56,
+    ):  # GCT -> GCC, still alanine, and identity never runs past 8
+        sense[third_base - 24] = "C"
+    recoded = "".join(sense)
+    assert longest_common_run(recoded, genome[24:60]) <= 8
+    arm5 = _crafted_arm(24, 60, genome, sense=recoded)
+    arm3 = _crafted_arm(60, 60, genome, coding=False)
+    mask = [i < 60 for i in range(len(genome))]
+    new5, _, outcomes = break_pams(
+        genome, arm5, arm3, [("A", _guide_at("top", 25, "AGG"))], mask, 8
+    )
+    assert outcomes == [PamOutcome("A", "weakened", None, "AAG")]
+    assert new5 == arm5
+
+
+def test_among_equally_good_options_the_more_common_codon_is_chosen(monkeypatch):
+    """CTG's third base can become C or T (neither leaves a PAM): the codon the host uses more wins, and the
+    choice follows the table, not a fixed order of bases."""
+    from pegrna_pipeline.hpc import pa_geometry as geometry
+
+    chosen = {}
+    for favoured in ("CTC", "CTT"):
+        monkeypatch.setattr(
+            geometry, "codon_frequency", lambda aa, codon, f=favoured: 1.0 if codon == f else 0.1
+        )
+        _, new5, outcome = _run_break(CRAFTED, _top_guide(31), 28)
+        chosen[favoured] = (outcome.status, new5.sense[32 - 28])
+    assert chosen == {"CTC": ("broken", "C"), "CTT": ("broken", "T")}
+
+
+def test_the_pam_of_every_outcome_is_the_pam_the_product_really_has():
+    """For each outcome the stated PAM is read back from the restored arm, on the guide's own strand."""
+    cases = [
+        ("GCT" * 8 + "GAG" + "GCC" + "GCT" * 25, _guide_at("top", 25, "AGG"), 24, "A"),
+        (CRAFTED, _top_guide(31), 28, "A"),
+        ("GCT" * 8 + "GAC" + "CTG" + "GCT" * 25, _guide_at("bottom", 26, "AGG"), 21, "B"),
+    ]
+    for genome, guide, lo, side in cases:
+        arm5, new5, outcome = _run_break(genome, guide, lo, side=side)
+        lo_p, hi_p = guide.pam_span
+        sense = new5.sense[lo_p - lo : hi_p - lo]
+        expected = sense if guide.strand == "top" else str(Seq(sense).reverse_complement())
+        assert outcome.pam == expected
 
 
 # a coding stretch holding BOTH guides' PAMs (the CTCF best pair has B's PAM inside arm5):
