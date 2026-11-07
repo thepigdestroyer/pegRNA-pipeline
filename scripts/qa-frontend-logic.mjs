@@ -14,14 +14,17 @@
  *  - which strategy is advised for an insert of a given length, and that advice never forces a switch;
  *  - how the failure view reads the pipeline's diagnostic lines: which step each line belongs to, how many
  *    rejections each step accounts for, and that a line no step claims is counted and never dropped;
- *  - the live state of the Prime Assembly steps while a run streams, which a one-shot mocked response cannot show.
+ *  - the live state of the Prime Assembly steps while a run streams, which a one-shot mocked response cannot show;
+ *  - reading the progress stream, and giving up on one that has gone silent, with a fake reader on a timer.
  */
+import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
 const SRC = join(dirname(fileURLToPath(import.meta.url)), "..", "web", "frontend", "src");
 const pa = await import(join(SRC, "pa.ts"));
 const pl = await import(join(SRC, "pipeline.ts"));
+const st = await import(join(SRC, "stream.ts"));
 
 let failures = 0;
 const fail = (m) => {
@@ -257,6 +260,82 @@ console.log("\nTHE STEPS WHILE A RUN STREAMS");
   check(pl.mergeProgress({ importance: ev(1, "importance"), cryptic: ev(3, "cryptic") }, ev(2, "structure_a"), "pa").cryptic?.cand === 3, "an event that arrives late does not erase a newer pair's results");
   check(same(Object.keys(pl.mergeProgress(p1, ev(2, "structure_a"), "tjpe")).sort(), ["docking_a", "importance", "structure_a"]) && pl.mergeProgress(p1, ev(2, "structure_a"), "tjpe").structure_a.cand === 2, "tj-PE just keeps the newest event of each gate, as it always did");
   check(pl.mergeProgress(p1, ev(2, "structure_a"), "pa") !== p1 && p1.structure_a.cand === 1, "merging never changes the progress it was given");
+}
+
+// ------------------------------------------------------------------------------------------------------------
+console.log("\nTHE PROGRESS STREAM");
+{
+  const enc = new TextEncoder();
+  const line = (o) => JSON.stringify(o) + "\n";
+  const progress = (gate, cand = 1) => ({ cand, gate, info: gate, passed: true, metrics: {} });
+  const beat = { type: "heartbeat" };
+  const result = { type: "result", ok: true, run_id: "r1" };
+
+  /** A reader that plays [delay in ms, text] steps (text null ends the stream), then goes silent, or fails. */
+  function reader(script, failWith) {
+    let i = 0;
+    const r = { cancelled: 0 };
+    r.read = () => {
+      if (i >= script.length) return failWith ? Promise.reject(failWith) : new Promise(() => {});
+      const [delay, text] = script[i++];
+      return new Promise((go) => setTimeout(() => go(text === null ? { done: true } : { done: false, value: enc.encode(text) }), delay));
+    };
+    r.cancel = () => {
+      r.cancelled += 1;
+      return Promise.resolve();
+    };
+    return r;
+  }
+  /** Run a read and settle it, or report that it hung, so a missing watchdog fails a check and not the whole script. */
+  const play = (rd, stallMs) => {
+    const seen = [];
+    const run = st.readDesignStream(rd, (ev) => seen.push(ev), stallMs).then((value) => ({ value }), (error) => ({ error }));
+    const hung = new Promise((go) => setTimeout(() => go({ hung: true }), 1500));
+    return Promise.race([run, hung]).then((out) => ({ ...out, seen }));
+  };
+
+  const text = line(progress("importance")) + line(beat) + line(progress("structure_a")) + line(result);
+  const whole = await play(reader([[0, text.slice(0, 40)], [0, text.slice(40, 150)], [0, text.slice(150)], [0, null]]), 500);
+  check(
+    whole.value?.run_id === "r1" && same(whole.seen.map((e) => e.gate), ["importance", "structure_a"]),
+    "a stream cut in the middle of its lines is read whole: the progress in order, the keepalive not shown as progress, then the result",
+    show(whole),
+  );
+  const mixed = await play(reader([[0, "not json at all\n" + line(progress("importance")) + "{broken\n" + line(result)], [0, null]]), 500);
+  check(mixed.value?.run_id === "r1" && mixed.seen.length === 1, "a line that is not JSON is skipped and does not end the stream", show(mixed));
+
+  const silent = reader([[0, line(progress("importance"))]]);
+  const t0 = Date.now();
+  const stalled = await play(silent, 80);
+  const waited = Date.now() - t0;
+  check(!stalled.hung && /Lost contact with the design server/.test(stalled.error?.message ?? ""), "a stream that goes silent ends with a message that says so", show({ hung: stalled.hung, error: stalled.error?.message }));
+  check(silent.cancelled === 1, "and the connection is closed, once");
+  check(waited >= 70 && waited < 1000, "and only after the silence has lasted as long as allowed", `${waited} ms`);
+  check(stalled.seen.length === 1, "what arrived before the silence is kept");
+  const lateGap = reader([[0, line(progress("importance"))], [300, line(result)]]);
+  const gap = await play(lateGap, 80);
+  check(/Lost contact/.test(gap.error?.message ?? "") && lateGap.cancelled === 1, "a single gap longer than the limit in the middle of a stream is enough");
+
+  const slow = reader([[40, line(progress("importance"))], [40, line(beat)], [40, line(beat)], [40, line(progress("structure_a"))], [40, line(result)], [40, null]]);
+  const alive = await play(slow, 100);
+  check(alive.value?.run_id === "r1", "a stream that is slow but never silent for the whole limit is never given up on, however long it runs", show(alive));
+  check(Boolean(alive.value) && !alive.hung, "even though the whole read took longer than the limit");
+
+  const noResult = await play(reader([[0, line(progress("importance"))], [0, null]]), 500);
+  check(/ended without returning a result/.test(noResult.error?.message ?? ""), "a stream that closes without a result says so", show(noResult.error?.message));
+  const aborted = Object.assign(new Error("The user aborted a request."), { name: "AbortError" });
+  const cancelled = await play(reader([[0, line(progress("importance"))]], aborted), 500);
+  check(cancelled.error === aborted, "a read that fails (an abort, a dropped connection) fails with its own error, unchanged");
+
+  const timers = () => process.getActiveResourcesInfo().filter((x) => x === "Timeout").length;
+  const before = timers();
+  await st.readDesignStream(reader([[0, line(progress("importance")) + line(result)], [0, null]]), () => undefined);
+  check(timers() === before, "a finished stream leaves no timer behind (a 90 s deadline left running would keep a process alive)");
+
+  check(/90 seconds/.test(st.stalledMessage(90_000)) && /Run it again/.test(st.stalledMessage(90_000)), "the message gives the time and says what to do");
+  check(st.STREAM_STALL_MS >= 4 * 15_000 && st.STREAM_STALL_MS <= 180_000, "the limit is several times the server's 15 s keepalive, and not unbounded");
+  const api = readFileSync(join(SRC, "api.ts"), "utf8");
+  check(api.includes("readDesignStream(r.body.getReader(), onProgress)") && !api.includes("reader.read()"), "the page reads its streams with this code and no other");
 }
 
 console.log(`\n${failures === 0 ? "all checks passed" : `${failures} check(s) FAILED`}`);

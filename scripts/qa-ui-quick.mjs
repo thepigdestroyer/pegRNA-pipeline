@@ -564,7 +564,12 @@ console.log(`\nSERVER REFUSAL  (${SITE})`);
 // it), keep the insertion-site result while pairs are tried one after another, and drop a pair's results when the next
 // pair starts. This needs a response that arrives one event at a time, so a small server here streams it by hand.
 console.log(`\nPRIME ASSEMBLY, LIVE  (${SITE})`);
-{
+if (SITE.startsWith("https:")) {
+  // Playwright can only send a request on to a server that speaks the page's own protocol, so an https site cannot
+  // be pointed at the plain-http server below. The same checks run against the local build, and against the bundle
+  // the backend serves, which is the code the deployed site is built from.
+  console.log("  SKIP  these checks need an http page: run this script against the local build to run them");
+} else {
   const { createServer } = await import("node:http");
   let live = null;
   const headers = { "content-type": "application/x-ndjson", "access-control-allow-origin": "*", "access-control-allow-headers": "*" };

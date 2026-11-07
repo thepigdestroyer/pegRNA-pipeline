@@ -1,3 +1,4 @@
+import { readDesignStream } from "./stream";
 import type {
   DesignConfig,
   DesignResult,
@@ -126,33 +127,5 @@ export async function streamDesign(
   }
   if (!r.body) throw new Error("The server returned no response stream.");
 
-  const reader = r.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = "";
-  let final: DesignResult | null = null;
-
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
-    let nl: number;
-    while ((nl = buffer.indexOf("\n")) >= 0) {
-      const line = buffer.slice(0, nl).trim();
-      buffer = buffer.slice(nl + 1);
-      if (!line) continue;
-      let obj: unknown;
-      try {
-        obj = JSON.parse(line);
-      } catch {
-        continue; // a partial or non-JSON line is not fatal to the stream
-      }
-      const kind = (obj as { type?: string }).type;
-      if (kind === "result") final = obj as DesignResult;
-      // Keepalives exist only to stop an idle proxy dropping a long design.
-      else if (kind !== "heartbeat") onProgress(obj as ProgressEvent);
-    }
-  }
-
-  if (!final) throw new Error("The design stream ended without returning a result.");
-  return final;
+  return readDesignStream(r.body.getReader(), onProgress);
 }
