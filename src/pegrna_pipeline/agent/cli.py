@@ -645,6 +645,11 @@ def design_recoded_cmd(config_path: str, mode: str, output_dir: str, progress: b
 #: Config keys that the command line decides; a config may not override them.
 _PA_CLI_OWNED = ("mode", "output_dir", "manifest", "progress_cb")
 
+#: How many of a failed run's diagnostic lines the record keeps. The web page counts rejections from them, so a cut
+#: would make its counts too low; a run the API accepts (60 pairs, 5 PBS lengths) writes well under 1000 lines. This
+#: only stops a pathological command-line configuration from writing an unbounded record.
+_MAX_RECORDED_DIAGNOSTICS = 5000
+
 
 @cli.command("design-pa")
 @click.option("--config", "config_path", required=True, type=click.Path(exists=True))
@@ -701,7 +706,9 @@ def design_pa_cmd(config_path: str, mode: str, output_dir: str, progress: bool) 
             stubs_of=pa_stand_in_gates,
             extra={
                 "strategy": "pa",
-                "diagnostics": [str(d) for d in (getattr(exc, "diagnostics", None) or [])][:200],
+                "diagnostics": [str(d) for d in (getattr(exc, "diagnostics", None) or [])][
+                    :_MAX_RECORDED_DIAGNOSTICS
+                ],
             },
         )
         sys.exit(1)

@@ -823,6 +823,41 @@ def test_a_walk_that_finds_no_pair_records_every_diagnostic(locus, tmp_path):
     assert any("PAM-in" in d for d in gates["diagnostics"]) and "NoValidPADesign" in gates["error"]
 
 
+def _fail_with_lines(monkeypatch, n):
+    def refuse(**_kw):
+        raise NoValidPADesign(
+            "nothing worked", diagnostics=[f"pair 1/2: line {i}" for i in range(n)]
+        )
+
+    monkeypatch.setattr(driver, "design_pa", refuse)
+
+
+def test_a_failed_run_keeps_every_diagnostic_line_the_page_counts_from(
+    locus, tmp_path, monkeypatch
+):
+    """The page counts rejections from these lines, so a record cut short would make its counts too low. A run the
+    API accepts (60 pairs, 5 PBS lengths) writes under 1000 lines; this used to keep only the first 200.
+    """
+    _fail_with_lines(monkeypatch, 950)
+    result, out = _invoke(tmp_path, _config(locus))
+    assert result.exit_code == 1
+    kept = json.loads((out / PA_FILES["gates"]).read_text())["diagnostics"]
+    assert len(kept) == 950 and kept[0] == "pair 1/2: line 0" and kept[-1] == "pair 1/2: line 949"
+
+
+def test_the_record_of_a_failed_run_is_bounded_so_a_runaway_cannot_fill_the_disk(
+    locus, tmp_path, monkeypatch
+):
+    from pegrna_pipeline.agent import cli as cli_module
+
+    cap = cli_module._MAX_RECORDED_DIAGNOSTICS
+    assert cap >= 1000, "below what a maximal request writes"
+    _fail_with_lines(monkeypatch, cap + 25)
+    result, out = _invoke(tmp_path, _config(locus))
+    kept = json.loads((out / PA_FILES["gates"]).read_text())["diagnostics"]
+    assert len(kept) == cap and kept[-1] == f"pair 1/2: line {cap - 1}"
+
+
 def test_a_bad_argument_fails_loudly_through_the_command(locus, tmp_path):
     result, out = _invoke(tmp_path, _config(locus, flap_length=12))
     assert result.exit_code == 1 and "design-pa failed: ValueError:" in result.output
