@@ -47,6 +47,33 @@ const PART_STYLES: Record<string, { bar: string; dot: string; text: string }> = 
     dot: "bg-[var(--color-part-polyu)]",
     text: "text-[var(--color-part-polyu)]",
   },
+  // Prime Assembly. The RTT is the flap template, the PBS is tj-PE's PBS1, and the donor is two arms around the
+  // cargo: the arms are restored genomic DNA (the same colour as tj-PE's recoded stretch), the cargo is the insert.
+  rtt: {
+    bar: "bg-[var(--color-part-pbs2)]",
+    dot: "bg-[var(--color-part-pbs2)]",
+    text: "text-[var(--color-part-pbs2)]",
+  },
+  pbs: {
+    bar: "bg-[var(--color-part-pbs1)]",
+    dot: "bg-[var(--color-part-pbs1)]",
+    text: "text-[var(--color-part-pbs1)]",
+  },
+  arm5: {
+    bar: "bg-[var(--color-part-recode)]",
+    dot: "bg-[var(--color-part-recode)]",
+    text: "text-[var(--color-part-recode)]",
+  },
+  arm3: {
+    bar: "bg-[var(--color-part-recode)]",
+    dot: "bg-[var(--color-part-recode)]",
+    text: "text-[var(--color-part-recode)]",
+  },
+  cargo: {
+    bar: "bg-[var(--color-part-insert)]",
+    dot: "bg-[var(--color-part-insert)]",
+    text: "text-[var(--color-part-insert)]",
+  },
 };
 
 const FALLBACK = {
@@ -55,8 +82,18 @@ const FALLBACK = {
   text: "text-ink-500",
 };
 
+/**
+ * The key into the part tables for a component name. tj-PE's names are the keys; Prime Assembly's name the guide
+ * ("spacer A", "PBS B", "RTT A (flap A)"), which this strips.
+ */
+export function partKey(component: string | undefined): string {
+  const name = (component ?? "").toLowerCase().trim();
+  if (name in PART_STYLES) return name;
+  return name.replace(/\s*\(.*\)$/, "").replace(/\s+[ab]$/, "");
+}
+
 export function partStyle(component: string | undefined) {
-  return PART_STYLES[(component ?? "").toLowerCase()] ?? FALLBACK;
+  return PART_STYLES[partKey(component)] ?? FALLBACK;
 }
 
 /** Plain-language one-liners for the construct parts. */
@@ -68,7 +105,17 @@ const PART_PLAIN: Record<string, string> = {
   replacement_gdna: "The recoded stretch that breaks homology with the genome.",
   pbs1: "Binds the nicked strand so the template can be copied.",
   polyu: "A short U tail that stabilises the pegRNA.",
+  rtt: "The template for the flap: the reverse transcriptase copies it onto the nicked strand, and the donor's end must match what it writes.",
+  pbs: "Binds the nicked strand so the template can be copied.",
+  arm5: "Restored genomic DNA left of your insertion point, recoded where it codes for protein.",
+  arm3: "Restored genomic DNA right of your insertion point, copied exactly where it does not code for protein.",
+  cargo: "Your insert, used exactly as you gave it.",
 };
+
+/** The plain-language line for a part, for the Prime Assembly maps. */
+export function partPlain(component: string | undefined): string | undefined {
+  return PART_PLAIN[partKey(component)];
+}
 
 export function SequenceMap({ components }: { components: ComponentRow[] }) {
   const [selected, setSelected] = useState<string | null>(null);
@@ -168,7 +215,7 @@ export function SequenceMap({ components }: { components: ComponentRow[] }) {
             <CopyButton value={active.sequence ?? ""} label="Copy sequence" />
           </div>
           <p className="mb-2 text-xs leading-relaxed text-ink-600 dark:text-ink-400">
-            {PART_PLAIN[(active.component ?? "").toLowerCase()] ?? active.role}
+            {partPlain(active.component) ?? active.role}
           </p>
           <p className="seq rounded border border-ink-200 bg-white p-2.5 text-xs text-ink-800 dark:border-ink-700 dark:bg-ink-900 dark:text-ink-100">
             {active.sequence}

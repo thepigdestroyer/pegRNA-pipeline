@@ -5,6 +5,7 @@ import type {
   Mode,
   MotifGroups,
   ProgressEvent,
+  Strategy,
 } from "./types";
 
 /**
@@ -73,6 +74,7 @@ export const getHealth = () => getJSON<Health>("/api/health");
 export const getModes = () => getJSON<{ modes: Mode[]; default: Mode }>("/api/modes");
 export const getExample = () => getJSON<DesignConfig>("/api/example");
 export const getRealExample = () => getJSON<DesignConfig>("/api/example/real");
+export const getPaExample = () => getJSON<DesignConfig>("/api/example/pa");
 export const getMotifs = () => getJSON<{ groups: MotifGroups }>("/api/motifs");
 
 export function runFileURL(runId: string, name: string): string {
@@ -88,6 +90,7 @@ export function runFileURL(runId: string, name: string): string {
 export async function streamDesign(
   config: DesignConfig,
   mode: Mode,
+  strategy: Strategy,
   onProgress: (ev: ProgressEvent) => void,
   signal?: AbortSignal,
 ): Promise<DesignResult> {
@@ -96,7 +99,7 @@ export async function streamDesign(
     r = await fetch(apiURL("/api/design/stream"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ config, mode }),
+      body: JSON.stringify({ config, mode, strategy }),
       signal,
     });
   } catch (err) {
@@ -114,6 +117,10 @@ export async function streamDesign(
       } catch {
         /* no body to read */
       }
+    }
+    // A 400 carries the engine's own reason (a cargo too short to assemble, a setting out of range): say it.
+    if (r.status === 400 && detail) {
+      throw new Error(`The server rejected these inputs: ${String(detail).slice(0, 400)}`);
     }
     throw new Error(`${statusMessage(r.status)}${detail ? ` ${String(detail).slice(0, 300)}` : ""}`);
   }

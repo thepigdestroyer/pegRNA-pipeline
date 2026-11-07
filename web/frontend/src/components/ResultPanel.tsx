@@ -1,5 +1,7 @@
 import { runFileURL } from "../api";
-import type { ChangeRow, ChangesPayload, ComponentRow, DesignResult } from "../types";
+import type { ChangeRow, ChangesPayload, ComponentRow, DesignResult, Strategy } from "../types";
+import { isStandingCaveat } from "../pa";
+import { PaFailure, PaResult } from "./PaResult";
 import { Badge, Callout, CopyButton, Disclosure, cx } from "./Primitives";
 import { SequenceMap, partStyle } from "./SequenceMap";
 
@@ -84,7 +86,17 @@ const CHANGE_LABEL: Record<ChangeRow["scope"], string> = {
  * Exactly what differs from what was specified (ADR 0029): every changed nucleotide, which part it is in, and
  * what was kept exactly. The amino acid never changes; it is shown so that can be checked by eye.
  */
-function ChangesPanel({ changes, runId }: { changes: ChangesPayload; runId: string }) {
+function ChangesPanel({
+  changes,
+  runId,
+  strategy,
+}: {
+  changes: ChangesPayload;
+  runId: string;
+  strategy: Strategy;
+}) {
+  const isPa = strategy === "pa";
+  const armKept = changes.arm_kept_exactly ?? [];
   const rows = [...changes.cargo_changes, ...changes.arm_changes];
   const shown = rows.slice(0, 250);
   const summary = changes.cargo_unchanged
@@ -108,7 +120,7 @@ function ChangesPanel({ changes, runId }: { changes: ChangesPayload; runId: stri
           )}
         </p>
         <p>
-          <span className="font-semibold">Genomic arm: </span>
+          <span className="font-semibold">{isPa ? "Donor arms: " : "Genomic arm: "}</span>
           {changes.arm_changes.length === 0
             ? "copied exactly (no nucleotide changed)."
             : `${changes.arm_changes.length} nucleotide${changes.arm_changes.length === 1 ? "" : "s"} of the design window changed by the silent recode. Every amino acid is identical.`}
@@ -158,11 +170,11 @@ function ChangesPanel({ changes, runId }: { changes: ChangesPayload; runId: stri
           </div>
         )}
 
-        {changes.kept_exactly.length > 0 && (
+        {changes.kept_exactly.length + armKept.length > 0 && (
           <div>
             <p className="font-semibold">Kept exactly as specified</p>
             <ul className="mt-1 list-disc space-y-0.5 pl-5 text-ink-700 dark:text-ink-300">
-              {changes.kept_exactly.map((line, i) => (
+              {[...changes.kept_exactly, ...armKept].map((line, i) => (
                 <li key={i}>{line}</li>
               ))}
             </ul>
@@ -184,7 +196,7 @@ function ChangesPanel({ changes, runId }: { changes: ChangesPayload; runId: stri
           </p>
           <a
             className="btn btn-secondary ml-auto px-2.5 py-1 text-xs"
-            href={runFileURL(runId, "recoded_tjpe_changes.csv")}
+            href={runFileURL(runId, isPa ? "recoded_pa_changes.csv" : "recoded_tjpe_changes.csv")}
           >
             Changes (.csv)
           </a>
@@ -197,12 +209,22 @@ function ChangesPanel({ changes, runId }: { changes: ChangesPayload; runId: stri
 export function ResultPanel({ result }: { result: DesignResult }) {
   const standIn = result.gates?.stand_in_gates ?? [];
   const isDryRun = result.mode === "fake";
+  // A server that predates Prime Assembly sends no strategy, and that means tj-PE.
+  const strategy: Strategy = result.strategy ?? "tjpe";
+  const isPa = strategy === "pa";
+  const prefix = isPa ? "recoded_pa" : "recoded_tjpe";
+  const pa = result.gates?.pa;
+  const warnings = result.gates?.warnings ?? [];
+  // The one standing caveat (the combination is untested) is not a finding about this design: it gets its own place.
+  const caveat = isPa ? warnings.find(isStandingCaveat) : undefined;
+  const findings = isPa ? warnings.filter((w) => !isStandingCaveat(w)) : warnings;
 
   return (
     <div className="card overflow-hidden">
       <header className="flex flex-wrap items-center gap-3 border-b border-ink-200 px-5 py-4 dark:border-ink-800">
         <h2 className="text-base font-semibold text-ink-900 dark:text-ink-50">Result</h2>
         {result.ok ? <Badge tone="ok">Design found</Badge> : <Badge tone="error">No design</Badge>}
+        <Badge tone="neutral">{isPa ? "Prime Assembly" : "Inside the pegRNA"}</Badge>
         <span className="text-xs text-ink-500 dark:text-ink-400">
           run {result.run_id} · {result.mode} mode
         </span>
@@ -210,16 +232,24 @@ export function ResultPanel({ result }: { result: DesignResult }) {
           <span className="ml-auto flex flex-wrap gap-2">
             <a
               className="btn btn-secondary px-2.5 py-1 text-xs"
-              href={runFileURL(result.run_id, "recoded_tjpe_report.txt")}
+              href={runFileURL(result.run_id, `${prefix}_report.txt`)}
             >
               Report (.txt)
             </a>
             <a
               className="btn btn-secondary px-2.5 py-1 text-xs"
-              href={runFileURL(result.run_id, "recoded_tjpe_components.csv")}
+              href={runFileURL(result.run_id, `${prefix}_components.csv`)}
             >
               Components (.csv)
             </a>
+            {isPa && result.has_fasta && (
+              <a
+                className="btn btn-secondary px-2.5 py-1 text-xs"
+                href={runFileURL(result.run_id, "recoded_pa_donor.fasta")}
+              >
+                Sequences (.fasta)
+              </a>
+            )}
             <CopyButton value={result.report} label="Copy report" />
           </span>
         )}
@@ -286,37 +316,55 @@ export function ResultPanel({ result }: { result: DesignResult }) {
           </Callout>
         )}
 
+        {!result.ok && isPa && result.gates?.failed && <PaFailure gates={result.gates} />}
+
+        {result.ok && caveat && (
+          <Callout tone="warn" title="This combination is untested">
+            {caveat}
+          </Callout>
+        )}
+
         {/*
           Advisories the design carries (a check that could only report, a tolerated
           off-target, a guide sequence worth a second look). They were only in the collapsed
           text report, so a reader ordering DNA could miss them.
         */}
-        {result.ok && (result.gates?.warnings?.length ?? 0) > 0 && (
+        {result.ok && findings.length > 0 && (
           <Callout tone="warn" title="Check these before you order">
             <ul className="mt-1 list-disc space-y-1 pl-5">
-              {result.gates.warnings!.map((w, i) => (
+              {findings.map((w, i) => (
                 <li key={i}>{w}</li>
               ))}
             </ul>
           </Callout>
         )}
 
+        {result.ok && isPa && pa && <PaResult result={result} pa={pa} />}
+
         {result.ok && result.gates?.changes && (
-          <ChangesPanel changes={result.gates.changes} runId={result.run_id} />
+          <ChangesPanel changes={result.gates.changes} runId={result.run_id} strategy={strategy} />
         )}
 
-        {result.ok && result.components.length > 0 && (
+        {result.ok && !isPa && result.components.length > 0 && (
           <SequenceMap components={result.components} />
         )}
 
         {result.gates?.gate_results && result.gates.gate_results.length > 0 && (
           <dl className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-            {[
-              ["Candidates tried", result.gates.candidates_tried],
-              ["Recode edits", result.gates.recode_edits],
-              ["Deletion size", `${result.gates.deletion_size ?? 0} bp`],
-              ["Checks passed", `${result.gates.gate_results.length}`],
-            ].map(([label, value]) => (
+            {(isPa
+              ? [
+                  ["Guide pairs considered", result.gates.pairs_considered],
+                  ["Pairs tried", result.gates.candidates_tried],
+                  ["Recode edits", result.gates.recode_edits],
+                  ["Deletion size", `${result.gates.deletion_size ?? 0} bp`],
+                ]
+              : [
+                  ["Candidates tried", result.gates.candidates_tried],
+                  ["Recode edits", result.gates.recode_edits],
+                  ["Deletion size", `${result.gates.deletion_size ?? 0} bp`],
+                  ["Checks passed", `${result.gates.gate_results.length}`],
+                ]
+            ).map(([label, value]) => (
               <div
                 key={String(label)}
                 className="rounded-lg border border-ink-200 bg-ink-50 px-3 py-2 dark:border-ink-800 dark:bg-ink-950/50"

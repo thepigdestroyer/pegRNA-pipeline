@@ -1,8 +1,14 @@
-import type { DesignResult, GateMetric, ProgressEvent } from "../types";
-import { COMPARISON_SYMBOL, PIPELINE, blockReason, findBlockingStep } from "../pipeline";
+import type { DesignResult, GateMetric, ProgressEvent, Strategy } from "../types";
+import {
+  COMPARISON_SYMBOL,
+  type StepState,
+  blockReason,
+  findBlockingStep,
+  paLatestEvent,
+  paLiveStates,
+  pipelineFor,
+} from "../pipeline";
 import { InfoHint, cx } from "./Primitives";
-
-export type StepState = "idle" | "running" | "passed" | "blocked" | "visited" | "unreached";
 
 const DOT: Record<StepState, string> = {
   idle: "border-ink-300 bg-white dark:border-ink-700 dark:bg-ink-900",
@@ -49,25 +55,40 @@ interface Props {
   running: boolean;
   progress: Record<string, ProgressEvent>;
   result: DesignResult | null;
+  strategy: Strategy;
 }
 
-export function PipelinePanel({ running, progress, result }: Props) {
+export function PipelinePanel({ running, progress, result, strategy }: Props) {
+  const steps = pipelineFor(strategy);
+  const isPa = strategy === "pa";
   const gateProse: Record<string, string> = {};
   (result?.gates?.gate_results ?? []).forEach(([id, info]) => {
     gateProse[id] = info;
   });
+  if (isPa && result?.ok && result.gates?.pairs_considered != null) {
+    gateProse.pairs = `${result.gates.pairs_considered} guide pair${result.gates.pairs_considered === 1 ? "" : "s"} survived the guide screens; ${result.gates.candidates_tried ?? "?"} tried, best first.`;
+  }
 
+  // A stand-in is named for the model ("structure", "docking"); Prime Assembly runs it once per guide.
   const standIn = new Set(result?.gates?.stand_in_gates ?? []);
-  const blockIdx = result && !result.ok ? findBlockingStep(result.stderr ?? "", result.report) : -1;
-  const activeGate = running
-    ? Object.values(progress).reduce<ProgressEvent | null>(
-        (latest, ev) => (latest === null || ev.cand >= latest.cand ? ev : latest),
-        null,
-      )?.gate
-    : undefined;
+  const blockIdx =
+    result && !result.ok
+      ? findBlockingStep(result.stderr ?? "", result.report, steps, result.gates?.diagnostics ?? [])
+      : -1;
+  // tj-PE keeps the page's original rule: the gate of the newest event is the one shown as running.
+  const activeGate =
+    running && !isPa
+      ? Object.values(progress).reduce<ProgressEvent | null>(
+          (latest, ev) => (latest === null || ev.cand >= latest.cand ? ev : latest),
+          null,
+        )?.gate
+      : undefined;
+  const paLive = running && isPa ? paLiveStates(progress) : null;
+  const paLatest = isPa ? paLatestEvent(progress) : null;
 
   function stateFor(index: number, id: string): StepState {
     if (running) {
+      if (paLive) return paLive[id] ?? "idle";
       if (id === activeGate) return "running";
       return progress[id] ? (progress[id].passed ? "passed" : "blocked") : "idle";
     }
@@ -87,20 +108,26 @@ export function PipelinePanel({ running, progress, result }: Props) {
         </h2>
         <p className="mt-1 text-sm leading-relaxed text-ink-600 dark:text-ink-400">
           {running
-            ? "Running now — each step shows its measured value as it completes."
+            ? isPa && paLatest && paLatest.gate !== "importance"
+              ? `Running now — trying guide pair ${paLatest.cand}. Each step shows its measured value as it completes.`
+              : isPa && paLatest
+                ? "Running now — screening the guides against the genome, the slow part. The pairs are tried after that."
+                : "Running now — each step shows its measured value as it completes."
             : result
               ? result.ok
                 ? "Every check passed. The winning candidate is shown below."
                 : "A check rejected every candidate. The blocking step is marked in red."
-              : "Candidates run cheapest check first. The first one to pass every step wins."}
+              : isPa
+                ? "Guide pairs are tried best first, cheapest check first. The first pair to pass every step wins."
+                : "Candidates run cheapest check first. The first one to pass every step wins."}
         </p>
       </header>
 
       <ol className="divide-y divide-ink-100 dark:divide-ink-800">
-        {PIPELINE.map((step, i) => {
+        {steps.map((step, i) => {
           const state = stateFor(i, step.id);
           const live = progress[step.id];
-          const isStandIn = standIn.has(step.id);
+          const isStandIn = standIn.has(step.id) || standIn.has(step.id.replace(/_[ab]$/, ""));
           return (
             <li
               key={step.id}
@@ -119,7 +146,7 @@ export function PipelinePanel({ running, progress, result }: Props) {
                     state === "running" && "animate-pulse",
                   )}
                 />
-                {i < PIPELINE.length - 1 && (
+                {i < steps.length - 1 && (
                   <span
                     aria-hidden
                     className="mt-1 w-px flex-1 bg-ink-200 dark:bg-ink-800"

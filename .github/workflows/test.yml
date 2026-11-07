@@ -34,3 +34,29 @@ jobs:
 
       - name: Pytest
         run: pytest -ra
+
+  # The page is built from TypeScript and its bundle is committed, so nothing else would notice a type error in the
+  # source or a broken rule in the logic that decides what the page sends and how it explains a failed run.
+  frontend:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: web/frontend/package-lock.json
+
+      - name: Install the page's dependencies
+        working-directory: web/frontend
+        run: npm ci
+
+      - name: Type-check the page
+        working-directory: web/frontend
+        run: npx tsc -b
+
+      - name: The page's own logic (form rules, what each strategy sends, the failure view, the live steps)
+        run: node scripts/qa-frontend-logic.mjs

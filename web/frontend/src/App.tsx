@@ -4,6 +4,7 @@ import {
   getHealth,
   getModes,
   getMotifs,
+  getPaExample,
   getRealExample,
   streamDesign,
 } from "./api";
@@ -14,11 +15,16 @@ import type {
   Mode,
   MotifGroups,
   ProgressEvent,
+  Strategy,
 } from "./types";
 import { Header } from "./components/Header";
 import { CargoBuilder } from "./components/CargoBuilder";
+import { PaOptions } from "./components/PaOptions";
+import { StrategyChoice } from "./components/StrategyChoice";
+import { PA_DEFAULTS, PA_ONLY_KEYS, strategyAdvice, toPaConfig, toTjpeConfig, validatePa } from "./pa";
 import { type BuilderPart, cargoOf, newPartId, parseExcluded, rangesToText, toCargoParts } from "./cargo";
 import { PipelinePanel } from "./components/PipelinePanel";
+import { mergeProgress } from "./pipeline";
 import { ResultPanel } from "./components/ResultPanel";
 import { Badge, Callout, Disclosure, Field, Section, cx } from "./components/Primitives";
 import { useTheme } from "./useTheme";
@@ -43,6 +49,12 @@ interface FormState {
   spacer: string;
   het_snps: string;
   het_edit: boolean;
+  // Prime Assembly
+  flap_length: string;
+  min_span: string;
+  max_span: string;
+  max_offtargets: string;
+  max_pairs: string;
 }
 
 const EMPTY_FORM: FormState = {
@@ -62,6 +74,7 @@ const EMPTY_FORM: FormState = {
   spacer: "",
   het_snps: "",
   het_edit: false,
+  ...PA_DEFAULTS,
 };
 
 export default function App() {
@@ -71,6 +84,10 @@ export default function App() {
   const [modes, setModes] = useState<Mode[]>(["fake"]);
   const [mode, setMode] = useState<Mode>("fake");
   const [motifs, setMotifs] = useState<MotifGroups>({});
+  const [strategy, setStrategy] = useState<Strategy>("tjpe");
+  // The strategy of the run in progress. Loading an example mid-run can change `strategy`, but the panel that is
+  // showing the run must keep describing the run.
+  const [runStrategy, setRunStrategy] = useState<Strategy>("tjpe");
 
   const [form, setForm] = useState<FormState>(EMPTY_FORM);
   const [cargoMode, setCargoMode] = useState<"builder" | "raw">("builder");
@@ -132,6 +149,8 @@ export default function App() {
   );
 
   function applyConfig(cfg: DesignConfig) {
+    // A config that carries Prime Assembly settings is a Prime Assembly config; any other is tj-PE.
+    setStrategy(PA_ONLY_KEYS.some((k) => cfg[k] != null) ? "pa" : "tjpe");
     setForm({
       gene: cfg.gene ?? "",
       transcript: cfg.transcript ?? "",
@@ -150,6 +169,11 @@ export default function App() {
       spacer: cfg.spacer ?? "",
       het_snps: cfg.het_snps ? JSON.stringify(cfg.het_snps) : "",
       het_edit: Boolean(cfg.het_edit),
+      flap_length: cfg.flap_length != null ? String(cfg.flap_length) : PA_DEFAULTS.flap_length,
+      min_span: cfg.min_span != null ? String(cfg.min_span) : PA_DEFAULTS.min_span,
+      max_span: cfg.max_span != null ? String(cfg.max_span) : PA_DEFAULTS.max_span,
+      max_offtargets: cfg.max_offtargets != null ? String(cfg.max_offtargets) : PA_DEFAULTS.max_offtargets,
+      max_pairs: cfg.max_pairs != null ? String(cfg.max_pairs) : PA_DEFAULTS.max_pairs,
     });
     // A loaded config carries cargo DNA. If it names its parts (with their locks), keep them as parts so the
     // locks stay editable; otherwise it is pasted DNA, with any excluded ranges it carries.
@@ -197,6 +221,13 @@ export default function App() {
       const parsed = parseExcluded(rawExcluded, cargo.length);
       if (parsed.error) e.cargo = `Never-change ranges: ${parsed.error}`;
     }
+    if (strategy === "pa") {
+      // Prime Assembly chooses its own guides and has no allele-specific pass: only its own settings apply.
+      const { cargo: tooShort, ...rest } = validatePa(form, cargo.length);
+      if (tooShort && !e.cargo) e.cargo = tooShort;
+      Object.assign(e, rest);
+      return e;
+    }
     if (form.spacer && form.spacer.trim().length !== 20)
       e.spacer = `A spacer is 20 nt (this is ${form.spacer.trim().length}).`;
     const tolerance = Number(form.ngrna_max_offtargets);
@@ -211,7 +242,15 @@ export default function App() {
       }
     }
     return e;
-  }, [form, cargo, cargoMode, rawExcluded, siteS, genomeLength]);
+  }, [form, cargo, cargoMode, rawExcluded, siteS, genomeLength, strategy]);
+
+  /** Which strategy fits an insert of this length. It only advises; the choice is the user's. */
+  const advice = useMemo(
+    () => strategyAdvice(strategy, cargo.length, Number(form.flap_length) || 35),
+    [strategy, cargo, form.flap_length],
+  );
+  // A server that predates Prime Assembly does not list it. Until the health check answers, assume it is there.
+  const paAvailable = health === null ? true : (health.strategies ?? []).includes("pa");
 
   const hasErrors = Object.keys(errors).length > 0;
 
@@ -261,15 +300,20 @@ export default function App() {
     if (form.spacer.trim()) cfg.spacer = form.spacer.trim().toUpperCase();
     else delete cfg.spacer;
 
-    if (form.het_snps.trim()) cfg.het_snps = JSON.parse(form.het_snps);
+    // The allele-specific inputs are tj-PE's; Prime Assembly neither shows nor reads them (and they may hold
+    // text that is not valid JSON, which must not stop a Prime Assembly request).
+    if (strategy === "tjpe" && form.het_snps.trim()) cfg.het_snps = JSON.parse(form.het_snps);
     else delete cfg.het_snps;
-    if (form.het_edit) cfg.het_edit = true;
+    if (strategy === "tjpe" && form.het_edit) cfg.het_edit = true;
     else delete cfg.het_edit;
 
     // Coding up to the insertion site, non-coding after it.
     cfg.cds_mask = Array.from({ length: cfg.genome.length }, (_, i) => i < siteS);
-    return cfg;
+    // Each strategy sends its own settings and none of the other's.
+    return strategy === "pa" ? toPaConfig(cfg, form) : toTjpeConfig(cfg);
   }
+
+  const shownStrategy = running ? runStrategy : strategy;
 
   async function run() {
     setSubmitAttempted(true);
@@ -280,13 +324,15 @@ export default function App() {
     setSubmitError(null);
     setResult(null);
     setProgress({});
+    setRunStrategy(strategy);
     setRunning(true);
     abortRef.current = new AbortController();
     try {
       const res = await streamDesign(
         buildConfig(),
         mode,
-        (ev) => setProgress((p) => ({ ...p, [ev.gate]: ev })),
+        strategy,
+        (ev) => setProgress((p) => mergeProgress(p, ev, strategy)),
         abortRef.current.signal,
       );
       setResult(res);
@@ -318,8 +364,9 @@ export default function App() {
             )}
 
             <Callout tone="info">
-              New here? Load the worked <strong>CTCF</strong> example below to see every field
-              filled in correctly, then change one thing at a time.
+              New here? Load a worked <strong>CTCF</strong> example below to see every field
+              filled in correctly, then change one thing at a time. The cassette example is a
+              499 nt insert, built for Prime Assembly.
               <span className="mt-2 flex flex-wrap gap-2">
                 <button
                   type="button"
@@ -341,6 +388,13 @@ export default function App() {
                   }
                 >
                   Load example for real models
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-secondary px-2.5 py-1 text-xs"
+                  onClick={() => getPaExample().then(applyConfig).catch(() => undefined)}
+                >
+                  Load cassette example (Prime Assembly)
                 </button>
               </span>
             </Callout>
@@ -364,7 +418,7 @@ export default function App() {
                   <Field
                     label="Transcript"
                     htmlFor="transcript"
-                    help="The Ensembl transcript ID. If your window is too short, the pipeline uses this to fetch more sequence from Ensembl."
+                    help="The Ensembl transcript ID. The pipeline uses it to fetch more sequence if your window is short, and to give the splicing check the real genomic sequence around your window, which is what lets that check accept or reject."
                   >
                     <input
                       id="transcript"
@@ -428,19 +482,21 @@ export default function App() {
                       placeholder="147"
                     />
                   </Field>
-                  <Field
-                    label="Anchor amino acid (optional)"
-                    htmlFor="rtt_aa"
-                    help="Does not change the design: the recoded arm and the RTT are built from the genome and your cargo, so any residue, or none, gives the same pegRNA. Kept so older configs still load."
-                  >
-                    <input
-                      id="rtt_aa"
-                      className="input"
-                      value={form.rtt_aa}
-                      onChange={(e) => set("rtt_aa", e.target.value.toUpperCase().slice(0, 1))}
-                      placeholder="not needed"
-                    />
-                  </Field>
+                  {strategy === "tjpe" && (
+                    <Field
+                      label="Anchor amino acid (optional)"
+                      htmlFor="rtt_aa"
+                      help="Does not change the design: the recoded arm and the RTT are built from the genome and your cargo, so any residue, or none, gives the same pegRNA. Kept so older configs still load."
+                    >
+                      <input
+                        id="rtt_aa"
+                        className="input"
+                        value={form.rtt_aa}
+                        onChange={(e) => set("rtt_aa", e.target.value.toUpperCase().slice(0, 1))}
+                        placeholder="not needed"
+                      />
+                    </Field>
+                  )}
                 </div>
 
                 {genomeLength > 0 && form.site_s !== "" && (
@@ -488,178 +544,208 @@ export default function App() {
 
             <Section
               step={3}
+              title="How should the insert be written?"
+              description="Inside the pegRNA suits a tag or a short insert. A separate donor DNA suits a cassette or a gene."
+            >
+              <StrategyChoice
+                value={strategy}
+                onChange={setStrategy}
+                disabled={running}
+                paAvailable={paAvailable}
+                advice={advice}
+              />
+            </Section>
+
+            <Section
+              step={4}
               title="How should it be designed?"
               description="Sensible defaults are filled in. Change these only if you have a reason."
             >
-              <div className="space-y-4">
-                <div className="grid gap-4 sm:grid-cols-2">
-                  <Field
-                    label="pegRNA strand"
-                    htmlFor="pegrna_strand"
-                    help="Which strand the edit is written on. This names the flap strand, not where the guide reads."
-                  >
-                    <select
-                      id="pegrna_strand"
-                      className="input"
-                      value={form.pegrna_strand}
-                      onChange={(e) => set("pegrna_strand", e.target.value as "Fw" | "Rv")}
-                    >
-                      <option value="Fw">Forward</option>
-                      <option value="Rv">Reverse</option>
-                    </select>
-                  </Field>
-                  <Field
-                    label="Recoded arm side"
-                    htmlFor="arm_side"
-                    help="Which side of the insertion point gets rewritten with synonymous codons to break homology."
-                  >
-                    <select
-                      id="arm_side"
-                      className="input"
-                      value={form.arm_side}
-                      onChange={(e) => set("arm_side", e.target.value as "5prime" | "3prime")}
-                    >
-                      <option value="5prime">5′ side</option>
-                      <option value="3prime">3′ side</option>
-                    </select>
-                  </Field>
-                </div>
-
-                <Disclosure
-                  title="Fine-tuning"
-                  description="PBS lengths, nick distance, homopolymer limit, off-target tolerance"
-                >
+              {strategy === "pa" ? (
+                <PaOptions
+                  form={form}
+                  set={(key, value) => set(key, value)}
+                  error={(name) => shownError(name)}
+                  touch={touch}
+                />
+              ) : (
+                <div className="space-y-4">
                   <div className="grid gap-4 sm:grid-cols-2">
                     <Field
-                      label="PBS lengths to try"
-                      htmlFor="pbs_lengths"
-                      help="Primer-binding site lengths, in nucleotides. The pipeline tries each and keeps the first that passes everything."
+                      label="pegRNA strand"
+                      htmlFor="pegrna_strand"
+                      help="Which strand the edit is written on. This names the flap strand, not where the guide reads."
                     >
-                      <input
-                        id="pbs_lengths"
+                      <select
+                        id="pegrna_strand"
                         className="input"
-                        value={form.pbs_lengths}
-                        onChange={(e) => set("pbs_lengths", e.target.value)}
-                        placeholder="13,15,17"
-                      />
+                        value={form.pegrna_strand}
+                        onChange={(e) => set("pegrna_strand", e.target.value as "Fw" | "Rv")}
+                      >
+                        <option value="Fw">Forward</option>
+                        <option value="Rv">Reverse</option>
+                      </select>
                     </Field>
                     <Field
-                      label="Longest allowed repeat"
-                      htmlFor="max_run"
-                      help="Maximum run of one base. Long homopolymers are hard to synthesise and encourage misrepair."
+                      label="Recoded arm side"
+                      htmlFor="arm_side"
+                      help="Which side of the insertion point gets rewritten with synonymous codons to break homology."
                     >
-                      <input
-                        id="max_run"
-                        type="number"
+                      <select
+                        id="arm_side"
                         className="input"
-                        value={form.max_run}
-                        onChange={(e) => set("max_run", e.target.value)}
-                      />
-                    </Field>
-                    <Field label="Nick distance, minimum" htmlFor="ngrna_distance_min">
-                      <input
-                        id="ngrna_distance_min"
-                        type="number"
-                        className="input"
-                        value={form.ngrna_distance_min}
-                        onChange={(e) => set("ngrna_distance_min", e.target.value)}
-                      />
-                    </Field>
-                    <Field
-                      label="Nick distance, maximum"
-                      htmlFor="ngrna_distance_max"
-                      help="How far the second nick may sit from the insertion point, in bases."
-                    >
-                      <input
-                        id="ngrna_distance_max"
-                        type="number"
-                        className="input"
-                        value={form.ngrna_distance_max}
-                        onChange={(e) => set("ngrna_distance_max", e.target.value)}
-                      />
-                    </Field>
-                    <Field
-                      label="Off-target hits allowed, second nick"
-                      htmlFor="ngrna_max_offtargets"
-                      error={shownError("ngrna_max_offtargets")}
-                      help="How many near-matches elsewhere in the genome the second nick's guide may have. The second nick cuts one strand only, so a near-match costs less than for a cutting guide. 0 is strict and recommended; raise it only if every good guide is being rejected. Whatever the chosen guide has is shown on the result."
-                    >
-                      <input
-                        id="ngrna_max_offtargets"
-                        type="number"
-                        min={0}
-                        max={10}
-                        className={cx(
-                          "input",
-                          shownError("ngrna_max_offtargets") && "input-invalid",
-                        )}
-                        value={form.ngrna_max_offtargets}
-                        onBlur={() => touch("ngrna_max_offtargets")}
-                        onChange={(e) => set("ngrna_max_offtargets", e.target.value)}
-                      />
+                        value={form.arm_side}
+                        onChange={(e) => set("arm_side", e.target.value as "5prime" | "3prime")}
+                      >
+                        <option value="5prime">5′ side</option>
+                        <option value="3prime">3′ side</option>
+                      </select>
                     </Field>
                   </div>
-                </Disclosure>
 
-                <Disclosure title="Use my own guide" description="optional override">
-                  <Field
-                    label="Spacer"
-                    htmlFor="spacer"
-                    error={shownError("spacer")}
-                    hint="Leave blank and PRIDICT2 designs the guide for you. This is the recommended path."
+                  <Disclosure
+                    title="Fine-tuning"
+                    description="PBS lengths, nick distance, homopolymer limit, off-target tolerance"
                   >
-                    <input
-                      id="spacer"
-                    onBlur={() => touch("spacer")}
-                      className={cx("input seq", shownError("spacer") && "input-invalid")}
-                      value={form.spacer}
-                      onChange={(e) => set("spacer", e.target.value.toUpperCase())}
-                      placeholder="20-nt spacer, e.g. TCAGCATGATGGACCGGTGA"
-                    />
-                  </Field>
-                </Disclosure>
+                    <div className="grid gap-4 sm:grid-cols-2">
+                      <Field
+                        label="PBS lengths to try"
+                        htmlFor="pbs_lengths"
+                        help="Primer-binding site lengths, in nucleotides. The pipeline tries each and keeps the first that passes everything."
+                      >
+                        <input
+                          id="pbs_lengths"
+                          className="input"
+                          value={form.pbs_lengths}
+                          onChange={(e) => set("pbs_lengths", e.target.value)}
+                          placeholder="13,15,17"
+                        />
+                      </Field>
+                      <Field
+                        label="Longest allowed repeat"
+                        htmlFor="max_run"
+                        help="Maximum run of one base. Long homopolymers are hard to synthesise and encourage misrepair."
+                      >
+                        <input
+                          id="max_run"
+                          type="number"
+                          className="input"
+                          value={form.max_run}
+                          onChange={(e) => set("max_run", e.target.value)}
+                        />
+                      </Field>
+                      <Field label="Nick distance, minimum" htmlFor="ngrna_distance_min">
+                        <input
+                          id="ngrna_distance_min"
+                          type="number"
+                          className="input"
+                          value={form.ngrna_distance_min}
+                          onChange={(e) => set("ngrna_distance_min", e.target.value)}
+                        />
+                      </Field>
+                      <Field
+                        label="Nick distance, maximum"
+                        htmlFor="ngrna_distance_max"
+                        help="How far the second nick may sit from the insertion point, in bases."
+                      >
+                        <input
+                          id="ngrna_distance_max"
+                          type="number"
+                          className="input"
+                          value={form.ngrna_distance_max}
+                          onChange={(e) => set("ngrna_distance_max", e.target.value)}
+                        />
+                      </Field>
+                      <Field
+                        label="Off-target hits allowed, second nick"
+                        htmlFor="ngrna_max_offtargets"
+                        error={shownError("ngrna_max_offtargets")}
+                        help="How many near-matches elsewhere in the genome the second nick's guide may have. The second nick cuts one strand only, so a near-match costs less than for a cutting guide. 0 is strict and recommended; raise it only if every good guide is being rejected. Whatever the chosen guide has is shown on the result."
+                      >
+                        <input
+                          id="ngrna_max_offtargets"
+                          type="number"
+                          min={0}
+                          max={10}
+                          className={cx(
+                            "input",
+                            shownError("ngrna_max_offtargets") && "input-invalid",
+                          )}
+                          value={form.ngrna_max_offtargets}
+                          onBlur={() => touch("ngrna_max_offtargets")}
+                          onChange={(e) => set("ngrna_max_offtargets", e.target.value)}
+                        />
+                      </Field>
+                    </div>
+                  </Disclosure>
 
-                <Disclosure
-                  title="Allele-specific design"
-                  description="for heterozygous sites"
-                >
-                  <Field
-                    label="Phased heterozygous SNPs"
-                    htmlFor="het_snps"
-                    error={shownError("het_snps")}
-                    help="A JSON array locating each SNP by the guide element it falls in. Discrimination is strongest in the PAM, then the seed region."
-                    hint='e.g. [{"element":"pegrna_pam","offset":1,"haplotype":1,"phased":true}]'
+                  <Disclosure title="Use my own guide" description="optional override">
+                    <Field
+                      label="Spacer"
+                      htmlFor="spacer"
+                      error={shownError("spacer")}
+                      hint="Leave blank and PRIDICT2 designs the guide for you. This is the recommended path."
+                    >
+                      <input
+                        id="spacer"
+                      onBlur={() => touch("spacer")}
+                        className={cx("input seq", shownError("spacer") && "input-invalid")}
+                        value={form.spacer}
+                        onChange={(e) => set("spacer", e.target.value.toUpperCase())}
+                        placeholder="20-nt spacer, e.g. TCAGCATGATGGACCGGTGA"
+                      />
+                    </Field>
+                  </Disclosure>
+
+                  <Disclosure
+                    title="Allele-specific design"
+                    description="for heterozygous sites"
                   >
-                    <textarea
-                      id="het_snps"
-                    onBlur={() => touch("het_snps")}
-                      rows={3}
-                      className={cx("input seq text-xs", shownError("het_snps") && "input-invalid")}
-                      value={form.het_snps}
-                      onChange={(e) => set("het_snps", e.target.value)}
-                    />
-                  </Field>
-                  <label className="flex items-center gap-2 text-sm">
-                    <input
-                      type="checkbox"
-                      checked={form.het_edit}
-                      onChange={(e) => set("het_edit", e.target.checked)}
-                      className="h-4 w-4 rounded border-ink-300 text-brand-600 focus:ring-brand-500"
-                    />
-                    Also design an allele-specific pair
-                  </label>
-                  <p className="field-hint">
-                    Allele specificity is limited by the natural variation at your locus — it is
-                    never manufactured, so a pair appears only when a discriminating SNP exists.
-                  </p>
-                </Disclosure>
-              </div>
+                    <Field
+                      label="Phased heterozygous SNPs"
+                      htmlFor="het_snps"
+                      error={shownError("het_snps")}
+                      help="A JSON array locating each SNP by the guide element it falls in. Discrimination is strongest in the PAM, then the seed region."
+                      hint='e.g. [{"element":"pegrna_pam","offset":1,"haplotype":1,"phased":true}]'
+                    >
+                      <textarea
+                        id="het_snps"
+                      onBlur={() => touch("het_snps")}
+                        rows={3}
+                        className={cx("input seq text-xs", shownError("het_snps") && "input-invalid")}
+                        value={form.het_snps}
+                        onChange={(e) => set("het_snps", e.target.value)}
+                      />
+                    </Field>
+                    <label className="flex items-center gap-2 text-sm">
+                      <input
+                        type="checkbox"
+                        checked={form.het_edit}
+                        onChange={(e) => set("het_edit", e.target.checked)}
+                        className="h-4 w-4 rounded border-ink-300 text-brand-600 focus:ring-brand-500"
+                      />
+                      Also design an allele-specific pair
+                    </label>
+                    <p className="field-hint">
+                      Allele specificity is limited by the natural variation at your locus — it is
+                      never manufactured, so a pair appears only when a discriminating SNP exists.
+                    </p>
+                  </Disclosure>
+                </div>
+              )}
             </Section>
           </div>
 
           {/* ---- pipeline column ---- */}
           <div className="space-y-5 lg:sticky lg:top-6 lg:self-start">
-            <PipelinePanel running={running} progress={progress} result={result} />
+            <PipelinePanel
+              running={running}
+              progress={progress}
+              // A result belongs to the strategy that made it: while the form is set to the other one, the panel
+              // describes how a design is checked and does not show another strategy's verdicts.
+              result={result && (result.strategy ?? "tjpe") === shownStrategy ? result : null}
+              strategy={shownStrategy}
+            />
           </div>
         </div>
 
@@ -694,7 +780,9 @@ export default function App() {
             <p className="max-w-sm flex-1 pb-2 text-xs leading-relaxed text-ink-500 dark:text-ink-400">
               {mode === "fake"
                 ? "Checks your inputs flow through the design logic in about a second. Every verdict is a placeholder."
-                : "Runs the real models — this can take 15 minutes or more. Progress appears as each check completes."}
+                : strategy === "pa"
+                  ? "Runs the real models — Prime Assembly usually takes three to five minutes. Progress appears as each check completes."
+                  : "Runs the real models — this can take 15 minutes or more. Progress appears as each check completes."}
             </p>
             {running && (
               <button
@@ -717,7 +805,7 @@ export default function App() {
                   className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-white/40 border-t-white"
                 />
               )}
-              {running ? "Designing…" : "Design pegRNA"}
+              {running ? "Designing…" : strategy === "pa" ? "Design pegRNAs and donor" : "Design pegRNA"}
             </button>
           </div>
           {submitError && (
@@ -737,8 +825,8 @@ export default function App() {
       </main>
 
       <footer className="mx-auto max-w-7xl px-4 py-8 text-xs text-ink-500 sm:px-6 dark:text-ink-400">
-        Recoded TJ-PE pegRNA designer · designs are engineering previews — validate at the bench
-        before ordering. Built by{" "}
+        pegRNA designer for prime-editing insertions (inside the pegRNA, or Prime Assembly) · designs
+        are engineering previews — validate at the bench before ordering. Built by{" "}
         <a
           href="https://mrinal.is-a.dev/"
           rel="author"
