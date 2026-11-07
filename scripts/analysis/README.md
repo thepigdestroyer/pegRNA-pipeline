@@ -12,6 +12,10 @@ here, not by assertion.
 | `calibrate_docking_gate.py` | **Measures** Boltz-2 ipTM for neutral, non-binder and scaffold-sequestering RNAs, and appends to `data/docking_calibration.jsonl` (spends NVIDIA credits; resumable) |
 | `docking_reference.py` | **Derives** `DOCKING_REFERENCE` and `DOCKING_CALIBRATED_RANGE` from that file, and tests the gate on it (leave-one-out, a held-out spacer, the sequestering sweep, real candidates) |
 | `sample_pool_candidates.py` | Measures the docking gate on the **pegRNAs the pipeline itself produces** (spends NVIDIA credits; resumable) |
+| `probe_pa_geometry.py` | What would a Prime Assembly designer find at the CTCF locus: which guide pairs flank the insertion point, how much DNA the donor must restore, how much of each flap is genomic, where the PAMs fall? Read-only, no model (spec 2026-11-04) |
+| `probe_pa_levers.py` | Where do real Prime Assembly designs fail, and which lever (off-target tolerance, flap length) rescues them? Real cas-offinder and ViennaRNA; run on DSI (ADR 0030) |
+| `probe_pa_nick_helices.py` | Which pairs does the folding gate count on a Prime Assembly pegRNA, and are they the three that a donor copying the genome at the nick makes inevitable? Real ViennaRNA; run on DSI (ADR 0030) |
+| `acceptance_pa.py` | Does a real-model Prime Assembly run meet the acceptance criteria? Checks the files a reader would order from, not the pipeline's own objects; run it after `design-pa --mode api` |
 
 A gate that rejects ~all random designs is not screening out bad ones; a threshold that sits
 inside the model's own sampling noise is not a threshold. These scripts exist to tell the
