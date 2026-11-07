@@ -5,7 +5,11 @@ _extract_winning_guides.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
+
+import pytest
+import yaml
 
 from pegrna_pipeline.hpc.data_types import (
     NgRNADesign,
@@ -17,8 +21,8 @@ from pegrna_pipeline.hpc.driver import (
     _build_variant_scores_from_batch,
     _extract_winning_guides,
     _local_compute_ssh,
+    run_driver,
 )
-from pegrna_pipeline.hpc.pa_workflow import PAResult
 from pegrna_pipeline.hpc.pridict_submitter import BatchResult
 from pegrna_pipeline.hpc.tjpe_workflow import TJPEResult
 
@@ -203,54 +207,10 @@ def test_extract_winning_guides_from_tjpe_result():
     assert ids == {"pegrna_spacer", "ngrna_spacer"}
 
 
-def test_extract_winning_guides_from_pa_result():
-    from pegrna_pipeline.hpc.pair_scorer import PegRNAPair
-
-    up = PegRNADesign(
-        sequence_name="u",
-        spacer="AAAAAAAAAAAAAAAAAAAA",
-        pbs="A",
-        rt="T",
-        pbs_length=1,
-        rt_length=1,
-        target_strand="Fw",
-        editing_position=0,
-        pe2_hek293t=0.5,
-        pe2_k562=0.4,
-        pegrna_full="ACGT",
-    )
-    down = PegRNADesign(
-        sequence_name="d",
-        spacer="TTTTTTTTTTTTTTTTTTTT",
-        pbs="A",
-        rt="T",
-        pbs_length=1,
-        rt_length=1,
-        target_strand="Rv",
-        editing_position=0,
-        pe2_hek293t=0.6,
-        pe2_k562=0.5,
-        pegrna_full="TGCA",
-    )
-    pair = PegRNAPair(upstream=up, downstream=down, joint_score=1.0, nick_distance=40)
-    result = PAResult(
-        winning_pair=pair,
-        top_pairs=[pair],
-        linear_donor_dna="ACGT",
-        upstream_pegRNA_sequence="U",
-        downstream_pegRNA_sequence="D",
-        upstream_flap_dna="A",
-        downstream_flap_dna="G",
-        bulk_dna="C",
-        full_integrated_product="ACGT",
-        upstream_pegRNA_off_target="",
-        downstream_pegRNA_off_target="",
-        total_pairs_evaluated=2,
-        pairs_after_compat_filter=1,
-    )
-    guides = _extract_winning_guides(result)
-    ids = {g["guide_id"] for g in guides}
-    assert ids == {"upstream_pegrna_spacer", "downstream_pegrna_spacer"}
+def test_extract_winning_guides_refuses_a_result_it_does_not_know():
+    """There is no Prime Assembly result here: it has its own driver (``design-pa``)."""
+    with pytest.raises(TypeError, match="unsupported result type"):
+        _extract_winning_guides(object())
 
 
 def test_extract_winning_guides_from_pe7_result():
@@ -298,3 +258,41 @@ def test_extract_winning_guides_empty_results():
         ngrna_nick_in_mrna=0,
     )
     assert _extract_winning_guides(res) == []
+
+
+# ------------------------------------------------------ run_driver: the modes it has
+def _run_dir(tmp_path: Path, mode: str) -> Path:
+    gene = {
+        "gene_name": "CTCF",
+        "refseq_accession": "NM_006565.4",
+        "mrna_sequence": "ACGT" * 20,
+        "cds_start": 0,
+        "cds_end": 60,
+        "stop_codon_start": 57,
+        "stop_codon": "TAA",
+        "upstream_flank": "ACGT",
+        "downstream_flank": "ACGT",
+        "flanking_bp": 4,
+    }
+    inputs = {
+        "gene": gene,
+        "mode": mode,
+        "pridict_install_path": "/nonexistent/PRIDICT2",
+        "rscript_path": "/nonexistent/Rscript",
+    }
+    (tmp_path / "inputs.json").write_text(json.dumps(inputs))
+    (tmp_path / "construct.yaml").write_text(yaml.safe_dump({"aa": "MK", "dna": "ATGAAA"}))
+    return tmp_path
+
+
+def test_run_driver_sends_an_old_prime_assembly_job_to_design_pa(tmp_path):
+    """A job file that still asks for mode "pa" (the prototype this driver used to run) is told where Prime
+    Assembly is now, and nothing is submitted: the error comes before any cluster work."""
+    with pytest.raises(ValueError, match=r"unknown mode 'pa'.*design-pa"):
+        run_driver(_run_dir(tmp_path, "pa"))
+
+
+def test_run_driver_refuses_any_other_mode_without_that_pointer(tmp_path):
+    with pytest.raises(ValueError, match="unknown mode 'bogus'") as exc:
+        run_driver(_run_dir(tmp_path, "bogus"))
+    assert "design-pa" not in str(exc.value)

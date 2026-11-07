@@ -4,21 +4,19 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from pegrna_pipeline.hpc.annotator import (
     ComponentSource,
-    annotate_pa_result,
     annotate_pe7_result,
     annotate_tjpe_result,
 )
 from pegrna_pipeline.hpc.data_types import GeneRecord, PegRNADesign, VariantScore
 from pegrna_pipeline.hpc.offtarget_scorer import OffTargetReport
-from pegrna_pipeline.hpc.pa_workflow import PAResult
-from pegrna_pipeline.hpc.pair_scorer import PegRNAPair
 from pegrna_pipeline.hpc.pe7_workflow import PE7DesignPair, PE7Result
 from pegrna_pipeline.hpc.report_writer import (
     ALL_VARIANTS_CSV_COLUMNS,
     OFFTARGET_CSV_COLUMNS,
-    PA_CSV_COLUMNS,
     PE7_CSV_COLUMNS,
     TJPE_CSV_COLUMNS,
     write_reports,
@@ -79,45 +77,6 @@ def _fake_tjpe_result() -> TJPEResult:
         edit_position_in_mrna=200,
         ngrna_nick_in_mrna=150,
         all_evaluated_variants=[variant],
-    )
-
-
-def _fake_pa_result() -> PAResult:
-    up = _fake_pegrna(name="u1", pe2=38.0, strand="Fw")
-    # downstream editing_position differs to give non-zero distance
-    dn_obj = PegRNADesign(
-        sequence_name="d1",
-        spacer="AAACCCGGGTTTAAACCCGG",
-        pbs="CCAGCAGCAGCAGC",
-        rt="ATCGTCGTCCTTGT",
-        pbs_length=14,
-        rt_length=14,
-        target_strand="Rv",
-        editing_position=160,
-        pe2_hek293t=40.0,
-        pe2_k562=30.0,
-        pegrna_full="PEG_FULL_DN",
-    )
-    pair = PegRNAPair(
-        upstream=up,
-        downstream=dn_obj,
-        nick_distance=60,
-        joint_score=(38.0 * 40.0) ** 0.5,
-    )
-    return PAResult(
-        winning_pair=pair,
-        top_pairs=[pair],
-        linear_donor_dna="GGCGGCGGCGGCAGCGACTACAAG" + "A" * 1000 + "GTGTGCGTGCACTTCGTGGCCGAG",
-        upstream_pegRNA_sequence="UP_PEGRNA",
-        downstream_pegRNA_sequence="DOWN_PEGRNA",
-        upstream_flap_dna="GGCGGCGGCGGCAGCGACTACAAG",
-        downstream_flap_dna="GTGTGCGTGCACTTCGTGGCCGAG",
-        bulk_dna="A" * 1000,
-        full_integrated_product="<product>",
-        upstream_pegRNA_off_target="",
-        downstream_pegRNA_off_target="",
-        total_pairs_evaluated=4,
-        pairs_after_compat_filter=1,
     )
 
 
@@ -199,14 +158,6 @@ def test_annotate_pe7_yields_expected_components():
     assert rt.source == ComponentSource.PRIDICT2
 
 
-def test_annotate_pa_includes_donor():
-    annotations = annotate_pa_result(_fake_pa_result(), _fake_gene())
-    names = [a.name for a in annotations]
-    assert "linear_donor_DNA" in names
-    assert "upstream_flap_DNA" in names
-    assert "downstream_flap_DNA" in names
-
-
 # ----------------------------------------------------- report writers
 
 
@@ -230,20 +181,43 @@ def test_write_reports_tjpe_produces_expected_files(tmp_path: Path):
     assert paths["all_variants"].suffix == ".gz"
 
 
-def test_write_reports_pa_produces_expected_files(tmp_path: Path):
+def test_write_reports_refuses_a_result_it_has_no_writer_for(tmp_path: Path):
+    """Prime Assembly writes its own files (``pa_report``). Its result handed to this writer would be a mistake, and
+    it must fail loudly instead of writing a report of the wrong kind."""
+    with pytest.raises(TypeError, match="unknown result type"):
+        write_reports(
+            result=object(),
+            gene=_fake_gene(),
+            construct_str="FLAG",
+            offtarget_reports=[],
+            all_evaluated_variants=[],
+            reports_dir=tmp_path,
+            base_name="nope",
+        )
+    assert not list(tmp_path.glob("nope*")), "nothing is written for a result it does not know"
+
+
+@pytest.mark.parametrize("make_result", [_fake_tjpe_result, _fake_pe7_result])
+def test_the_shared_caveats_point_at_design_pa_and_not_at_a_removed_mode(
+    tmp_path: Path, make_result
+):
+    """The caveats are printed under both the TJ-PE and the PE7 report. They used to send a long insert to a
+    "Prime Assembly mode" of ``run`` and to quote that prototype's own settings; that mode is gone.
+    """
     paths = write_reports(
-        result=_fake_pa_result(),
+        result=make_result(),
         gene=_fake_gene(),
-        construct_str="GGGGS-FLAG-P2A-ZEOCINr",
-        offtarget_reports=_fake_offtarget(),
+        construct_str="FLAG",
+        offtarget_reports=[],
         all_evaluated_variants=[],
         reports_dir=tmp_path,
-        base_name="pa_smoke",
+        base_name="caveats",
     )
     txt = paths["txt"].read_text()
-    assert "Prime Assembly mode" in txt
-    assert "LINEAR DONOR DNA" in txt
-    assert "COMPONENT BREAKDOWN" in txt
+    caveats = txt.split("CAVEATS")[-1]
+    assert "pegrna design-pa" in caveats
+    for gone in ("Prime Assembly mode", "PA 30 bp", "house rule", "30-80 bp"):
+        assert gone not in txt, gone
 
 
 def test_write_reports_pe7_produces_expected_files(tmp_path: Path):
@@ -340,7 +314,6 @@ def test_write_reports_pe7_empty_result_no_misleading_ngrna(tmp_path: Path):
 def test_column_schemas_exposed():
     # Sanity: column constants are non-empty so downstream tooling can rely on them
     assert TJPE_CSV_COLUMNS[0] == "rank"
-    assert PA_CSV_COLUMNS[0] == "rank"
     assert PE7_CSV_COLUMNS[0] == "rank"
     assert OFFTARGET_CSV_COLUMNS[0] == "guide_id"
     assert ALL_VARIANTS_CSV_COLUMNS[0] == "variant_rank"

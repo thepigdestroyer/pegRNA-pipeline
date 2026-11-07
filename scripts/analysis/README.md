@@ -12,7 +12,6 @@ here, not by assertion.
 | `calibrate_docking_gate.py` | **Measures** Boltz-2 ipTM for neutral, non-binder and scaffold-sequestering RNAs, and appends to `data/docking_calibration.jsonl` (spends NVIDIA credits; resumable) |
 | `docking_reference.py` | **Derives** `DOCKING_REFERENCE` and `DOCKING_CALIBRATED_RANGE` from that file, and tests the gate on it (leave-one-out, a held-out spacer, the sequestering sweep, real candidates) |
 | `sample_pool_candidates.py` | Measures the docking gate on the **pegRNAs the pipeline itself produces** (spends NVIDIA credits; resumable) |
-| `probe_legacy_pa.py` | Shows the legacy Prime Assembly path cannot pair real PRIDICT output (needs PRIDICT2; run on DSI; issue #29) |
 
 A gate that rejects ~all random designs is not screening out bad ones; a threshold that sits
 inside the model's own sampling noise is not a threshold. These scripts exist to tell the

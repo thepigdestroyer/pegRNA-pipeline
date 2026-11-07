@@ -1,6 +1,6 @@
-"""Per-component annotations for TJ-PE, PA, and PE7 results.
+"""Per-component annotations for TJ-PE and PE7 results.
 
-Takes Plan 2's TJPEResult / PAResult / PE7Result plus a GeneRecord and
+Takes Plan 2's TJPEResult / PE7Result plus a GeneRecord and
 produces an ordered list of ComponentAnnotation records that the report
 writers render mode-aware.
 """
@@ -12,7 +12,6 @@ from enum import Enum
 from typing import List
 
 from pegrna_pipeline.hpc.data_types import GeneRecord
-from pegrna_pipeline.hpc.pa_workflow import PAResult
 from pegrna_pipeline.hpc.pe7_workflow import PE7Result
 from pegrna_pipeline.hpc.tjpe_workflow import STANDARD_SGRNA_SCAFFOLD, TJPEResult
 
@@ -218,134 +217,5 @@ def annotate_pe7_result(result: PE7Result, gene: GeneRecord) -> List[ComponentAn
             length_bp=len(STANDARD_SGRNA_SCAFFOLD),
             functional_role="Invariant sgRNA scaffold (same as pegRNA scaffold).",
             source=ComponentSource.INVARIANT,
-        ),
-    ]
-
-
-def annotate_pa_result(
-    result: PAResult,
-    gene: GeneRecord,
-    score_cell_line: str = "k562",
-) -> List[ComponentAnnotation]:
-    """Build per-component annotations for a Prime Assembly design.
-
-    ``score_cell_line`` controls which PRIDICT PE2 column the per-pegRNA
-    notes display ("k562" or "hek293t").
-    """
-    from pegrna_pipeline.hpc.data_types import _score_attr
-
-    score_attr = _score_attr(score_cell_line)
-    up = result.winning_pair.upstream
-    dn = result.winning_pair.downstream
-    cl_label = score_cell_line.upper()
-    up_score = float(getattr(up, score_attr))
-    dn_score = float(getattr(dn, score_attr))
-    return [
-        ComponentAnnotation(
-            name="upstream_pegRNA_spacer",
-            sequence=up.spacer,
-            length_bp=len(up.spacer),
-            functional_role=(
-                f"20-nt spacer for the upstream pegRNA. Targets the "
-                f"{up.target_strand} strand of {gene.gene_name} at editing "
-                f"position {up.editing_position}. Installs the upstream flap."
-            ),
-            source=ComponentSource.PRIDICT2,
-            design_notes=f"PE2 {cl_label} = {up_score:.2f}%",
-        ),
-        ComponentAnnotation(
-            name="upstream_sgRNA_scaffold",
-            sequence=STANDARD_SGRNA_SCAFFOLD,
-            length_bp=len(STANDARD_SGRNA_SCAFFOLD),
-            functional_role="Invariant scaffold for the upstream pegRNA.",
-            source=ComponentSource.INVARIANT,
-        ),
-        ComponentAnnotation(
-            name="upstream_PBS",
-            sequence=up.pbs,
-            length_bp=up.pbs_length,
-            functional_role="PBS for the upstream pegRNA; primes RT on the upstream nick.",
-            source=ComponentSource.PRIDICT2,
-        ),
-        ComponentAnnotation(
-            name="upstream_RTT",
-            sequence=up.rt,
-            length_bp=up.rt_length,
-            functional_role=(
-                "RT template for the upstream pegRNA. Encodes the upstream flap "
-                "(= 5' HA of the linear donor)."
-            ),
-            source=ComponentSource.PRIDICT2,
-        ),
-        ComponentAnnotation(
-            name="upstream_flap_DNA",
-            sequence=result.upstream_flap_dna,
-            length_bp=len(result.upstream_flap_dna),
-            functional_role=(
-                "What the upstream pegRNA writes into the genome. Identical to "
-                "the linear donor's 5' homology arm; they hybridise during "
-                "in-cell assembly."
-            ),
-            source=ComponentSource.CODON_ENUMERATION,
-        ),
-        ComponentAnnotation(
-            name="downstream_pegRNA_spacer",
-            sequence=dn.spacer,
-            length_bp=len(dn.spacer),
-            functional_role=(
-                f"20-nt spacer for the downstream pegRNA. Targets the "
-                f"{dn.target_strand} strand of {gene.gene_name} at editing "
-                f"position {dn.editing_position}. Installs the downstream flap."
-            ),
-            source=ComponentSource.PRIDICT2,
-            design_notes=f"PE2 {cl_label} = {dn_score:.2f}%",
-        ),
-        ComponentAnnotation(
-            name="downstream_sgRNA_scaffold",
-            sequence=STANDARD_SGRNA_SCAFFOLD,
-            length_bp=len(STANDARD_SGRNA_SCAFFOLD),
-            functional_role="Invariant scaffold for the downstream pegRNA.",
-            source=ComponentSource.INVARIANT,
-        ),
-        ComponentAnnotation(
-            name="downstream_PBS",
-            sequence=dn.pbs,
-            length_bp=dn.pbs_length,
-            functional_role="PBS for the downstream pegRNA.",
-            source=ComponentSource.PRIDICT2,
-        ),
-        ComponentAnnotation(
-            name="downstream_RTT",
-            sequence=dn.rt,
-            length_bp=dn.rt_length,
-            functional_role=(
-                "RT template for the downstream pegRNA. Encodes the downstream "
-                "flap (= 3' HA of the donor)."
-            ),
-            source=ComponentSource.PRIDICT2,
-        ),
-        ComponentAnnotation(
-            name="downstream_flap_DNA",
-            sequence=result.downstream_flap_dna,
-            length_bp=len(result.downstream_flap_dna),
-            functional_role="What the downstream pegRNA writes into the genome.",
-            source=ComponentSource.CODON_ENUMERATION,
-        ),
-        ComponentAnnotation(
-            name="linear_donor_DNA",
-            sequence=result.linear_donor_dna,
-            length_bp=len(result.linear_donor_dna),
-            functional_role=(
-                "Linear dsDNA donor (gBlock). 5' matches upstream_flap_DNA "
-                "verbatim; 3' matches downstream_flap_DNA verbatim. Middle is "
-                "codon-optimised. Gibson-like in-cell assembly bridges the two "
-                "installed flaps with this donor."
-            ),
-            source=ComponentSource.CODON_OPTIMISED_BULK,
-            design_notes=(
-                "Order as IDT gBlock or Twist Gene Fragment. Consider AZD-7648 "
-                "(DNA-PK inhibitor) co-treatment for ~2x efficiency gain "
-                "(Liu 2025)."
-            ),
         ),
     ]

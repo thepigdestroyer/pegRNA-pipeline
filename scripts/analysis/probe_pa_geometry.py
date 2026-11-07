@@ -40,7 +40,7 @@ PBS_MAX = 13  # room needed beside a cut for a 13-nt PBS
 SPAN_MIN, SPAN_MAX = (
     30,
     100,
-)  # nick-to-nick, bp (project floor 23: pair_scorer.MIN_NICK_SEPARATION_BP)
+)  # nick-to-nick, bp (project floor 23: pa_geometry.MIN_NICK_SEPARATION_BP)
 PAM_CLASH = 12  # the two PAM-bearing footprints overlap below this span (geometric minimum)
 
 

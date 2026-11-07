@@ -8,11 +8,15 @@ module:
 3. For TJ-PE: enumerates the first 8 amino acids of the construct,
    formats PRIDICT inputs, submits PRIDICT batches, and runs
    :func:`run_tjpe_workflow`.
-4. For PA: enumerates upstream (first 10 aa) AND downstream (last 10
-   aa) as two separate PRIDICT batches, optimises the bulk, assembles
-   the donor, then runs :func:`run_pa_workflow`.
+4. For PE7: submits the exact insert as a single PRIDICT variant and runs
+   :func:`run_pe7_workflow`.
 5. Scores the winning guide(s) against the genome off-target database.
 6. Calls :func:`write_reports` (Plan 4 — stubbed here).
+
+Prime Assembly is not run here. It is ``pegrna design-pa``
+(:mod:`pegrna_pipeline.hpc.recoded_pa_driver`), which does not use the cluster
+queue. An earlier PA mode of this driver could not pair real PRIDICT output
+(ADR 0027) and was removed (ADR 0030).
 
 All expensive operations go through an ``ssh``-like client returned by
 :func:`_local_compute_ssh`, which is either a
@@ -42,7 +46,6 @@ from pegrna_pipeline.hpc.data_types import (
     VariantScore,
 )
 from pegrna_pipeline.hpc.input_formatter import format_bracket_insertion
-from pegrna_pipeline.hpc.pa_workflow import PAResult, run_pa_workflow
 from pegrna_pipeline.hpc.pe7_workflow import PE7Result, run_pe7_workflow
 from pegrna_pipeline.hpc.pridict_parser import parse_ngrna_csv, parse_pegrna_csv
 from pegrna_pipeline.hpc.pridict_submitter import (
@@ -174,7 +177,7 @@ def _build_variant_scores_from_batch(
 
 # --------------------------------------------------------------- winners -> guides
 def _extract_winning_guides(
-    result: Union[TJPEResult, PAResult, PE7Result],
+    result: Union[TJPEResult, PE7Result],
 ) -> List[Dict[str, str]]:
     """Return ``{"guide_id", "spacer"}`` dicts for off-target scoring.
 
@@ -206,12 +209,6 @@ def _extract_winning_guides(
         _add("pegrna_spacer", result.spacer)
         _add("ngrna_spacer", result.ngrna_spacer)
         return out
-    if isinstance(result, PAResult):
-        if result.winning_pair is None:
-            return []
-        _add("upstream_pegrna_spacer", result.winning_pair.upstream.spacer)
-        _add("downstream_pegrna_spacer", result.winning_pair.downstream.spacer)
-        return out
     raise TypeError(f"unsupported result type {type(result).__name__}")
 
 
@@ -220,7 +217,7 @@ def write_reports(
     *,
     run_dir: Path,
     gene: GeneRecord,
-    result: Union[TJPEResult, PAResult, PE7Result],
+    result: Union[TJPEResult, PE7Result],
     offtarget_reports: Sequence[Any],
     construct_str: str = "",
     all_evaluated_variants: Optional[Sequence[Any]] = None,
@@ -258,20 +255,13 @@ def _enumerate_first_aa(aa: str, n: int) -> List[str]:
     return [v.dna for v in enumerate_variants(window, max_variants=100)]
 
 
-def _enumerate_last_aa(aa: str, n: int) -> List[str]:
-    from pegrna_pipeline.hpc.codon_expander import enumerate_variants
-
-    window = aa[-n:]
-    return [v.dna for v in enumerate_variants(window, max_variants=100)]
-
-
 # --------------------------------------------------------------- driver core
 @dataclass
 class DriverConfig:
     """Parsed ``inputs.json`` + ``construct.yaml`` shape."""
 
     gene: GeneRecord
-    mode: str  # "tjpe" | "pa" | "pe7"
+    mode: str  # "tjpe" | "pe7"
     construct_aa: str
     construct_dna: str
     cell_line: str
@@ -333,13 +323,12 @@ def _pridict_variants_for_window(
     return out
 
 
-def run_driver(run_dir: Union[str, Path]) -> Union[TJPEResult, PAResult, PE7Result]:
+def run_driver(run_dir: Union[str, Path]) -> Union[TJPEResult, PE7Result]:
     """Run the full compute-node pipeline for ``run_dir``.
 
     Writes a report into ``run_dir/reports/<gene>.txt`` (Plan 4 will
-    expand this). Returns the :class:`TJPEResult`, :class:`PAResult`, or
-    :class:`PE7Result` so callers (the integration tests) can assert on
-    the shape.
+    expand this). Returns the :class:`TJPEResult` or :class:`PE7Result`
+    so callers (the integration tests) can assert on the shape.
     """
     run_path = Path(run_dir)
     cfg = _load_inputs(run_path)
@@ -363,7 +352,7 @@ def run_driver(run_dir: Union[str, Path]) -> Union[TJPEResult, PAResult, PE7Resu
                 conda_env=cfg.conda_env,
             )
             variant_scores = _build_variant_scores_from_batch(batch, variants)
-            result: Union[TJPEResult, PAResult, PE7Result] = run_pe7_workflow(
+            result: Union[TJPEResult, PE7Result] = run_pe7_workflow(
                 gene=cfg.gene,
                 insert_full_dna=cfg.construct_dna,
                 variant_scores=variant_scores,
@@ -386,64 +375,13 @@ def run_driver(run_dir: Union[str, Path]) -> Union[TJPEResult, PAResult, PE7Resu
                 variant_scores=variant_scores,
                 score_cell_line=cfg.score_cell_line,
             )
-        elif cfg.mode == "pa":
-            from pegrna_pipeline.hpc.codon_expander import optimise_bulk
-            from pegrna_pipeline.hpc.pa_workflow import (
-                assemble_linear_donor,
-                compute_flap_boundaries,
-            )
-
-            up_aa, bulk_aa, down_aa = compute_flap_boundaries(cfg.construct_aa, flap_length_aa=10)
-            bulk_dna = optimise_bulk(bulk_aa)
-
-            up_variants_dna = _enumerate_first_aa(cfg.construct_aa, 10)
-            down_variants_dna = _enumerate_last_aa(cfg.construct_aa, 10)
-
-            upstream_variants = _pridict_variants_for_window(
-                cfg.gene, up_variants_dna, name_prefix="pa_up"
-            )
-            downstream_variants = _pridict_variants_for_window(
-                cfg.gene, down_variants_dna, name_prefix="pa_down"
-            )
-
-            up_batch = submit_pridict_batches(
-                ssh=ssh,
-                variants=upstream_variants,
-                remote_run_dir=str(run_path / "upstream"),
-                pridict_install_path=cfg.pridict_install_path,
-                conda_env=cfg.conda_env,
-            )
-            down_batch = submit_pridict_batches(
-                ssh=ssh,
-                variants=downstream_variants,
-                remote_run_dir=str(run_path / "downstream"),
-                pridict_install_path=cfg.pridict_install_path,
-                conda_env=cfg.conda_env,
-            )
-            up_scores = _build_variant_scores_from_batch(up_batch, upstream_variants)
-            down_scores = _build_variant_scores_from_batch(down_batch, downstream_variants)
-
-            # Assemble donor from the winning flaps + optimised bulk
-            # (we still pass both here so the workflow can validate).
-            upstream_flap_dna = up_variants_dna[0] if up_variants_dna else "A"
-            downstream_flap_dna = down_variants_dna[0] if down_variants_dna else "A"
-            linear_donor = assemble_linear_donor(
-                upstream_flap_dna=upstream_flap_dna,
-                bulk_dna=bulk_dna,
-                downstream_flap_dna=downstream_flap_dna,
-            )
-            result = run_pa_workflow(
-                gene=cfg.gene,
-                upstream_variant_scores=up_scores,
-                downstream_variant_scores=down_scores,
-                upstream_flap_dna=upstream_flap_dna,
-                downstream_flap_dna=downstream_flap_dna,
-                bulk_dna=bulk_dna,
-                donor_dna=linear_donor,
-                score_cell_line=cfg.score_cell_line,
-            )
         else:
-            raise ValueError(f"unknown mode {cfg.mode!r}")
+            hint = (
+                " (Prime Assembly is `pegrna design-pa`, not a mode of this driver)"
+                if cfg.mode == "pa"
+                else ""
+            )
+            raise ValueError(f"unknown mode {cfg.mode!r}{hint}")
 
         # Off-target score the winning guides.
         guides = _extract_winning_guides(result)
@@ -471,8 +409,6 @@ def run_driver(run_dir: Union[str, Path]) -> Union[TJPEResult, PAResult, PE7Resu
         all_variants: Sequence[Any] = ()
         if isinstance(result, (TJPEResult, PE7Result)):
             all_variants = result.all_evaluated_variants
-        # PAResult doesn't expose a single all-variants list (it has
-        # per-flap rankings); leave empty for now.
 
         write_reports(
             run_dir=run_path,

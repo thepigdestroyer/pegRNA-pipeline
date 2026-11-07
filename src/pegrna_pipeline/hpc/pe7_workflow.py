@@ -18,7 +18,7 @@ this pipeline:
   user can inspect alternatives — not just the rank-1 winner.
 
 Hard limit: the insert must be ≤ ``PRIDICT_MAX_INSERT_BP`` (40 bp). Larger
-edits should go through TJ-PE or PA — see ``tjpe_workflow`` / ``pa_workflow``.
+edits should go through TJ-PE (``tjpe_workflow``) or Prime Assembly (``pegrna design-pa``).
 """
 
 from __future__ import annotations
