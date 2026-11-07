@@ -1118,12 +1118,19 @@ def _arm_change_rows(
     genome: str, plan: PairPlan, cds_mask: Sequence[bool]
 ) -> Tuple[BaseChange, ...]:
     """Every base the donor's arms change from the window, each tagged with the arm it is in, and with the guide
-    whose PAM it breaks (or only weakens) where that is why it was made."""
+    whose PAM it breaks (or only weakens) where that is why it was made. A change the recoder made for its own
+    reasons that happens to lie in a PAM is tagged too (the PAM edit may only finish what the recoder began), so no
+    edit to a PAM goes unmarked, whoever made it."""
     verbs = {"broken": "breaks", "weakened": "weakens"}
     pam_edits = {
         o.position: (o.side, verbs[o.status])
         for o in plan.pam_outcomes
         if o.status in verbs and o.position is not None
+    }
+    pam_bases = {
+        q: side
+        for side, guide in (("A", plan.pair.a), ("B", plan.pair.b))
+        for q in range(*guide.pam_span)
     }
     rows: List[BaseChange] = []
     for arm, label in ((plan.arm5, "donor arm 5'"), (plan.arm3, "donor arm 3'")):
@@ -1134,6 +1141,8 @@ def _arm_change_rows(
             if edit:
                 side, verb = edit
                 c = replace(c, part=f"{label}, {verb} the PAM of guide {side}")
+            elif c.position - 1 in pam_bases:
+                c = replace(c, part=f"{label}, in the PAM of guide {pam_bases[c.position - 1]}")
             rows.append(c)
     return tuple(rows)
 

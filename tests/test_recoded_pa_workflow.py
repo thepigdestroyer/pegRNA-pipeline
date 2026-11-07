@@ -894,6 +894,96 @@ def test_the_recode_summary_says_what_became_of_each_pam(locus, outcome, words):
     assert f"(5' arm {plan.arm5.n_edits}, 3' arm {plan.arm3.n_edits})" in text
 
 
+def _extra_synonymous_edit_in_pam(plan, locus, side):
+    """``(arm name, plan with one more synonymous edit, its 0-based position)`` for a PAM base of ``side`` that the
+    plan's arm leaves as the genome has it, as a recoder's edit would be."""
+    from Bio.Seq import Seq
+
+    guide = plan.pair.a if side == "A" else plan.pair.b
+    for name in ("arm5", "arm3"):
+        arm = getattr(plan, name)
+        if not arm.sense:
+            continue
+        for q in range(*guide.pam_span):
+            if (
+                not arm.lo <= q < arm.hi
+                or arm.sense[q - arm.lo] != locus.genome[q]
+                or not locus.cds_mask[q]
+            ):
+                continue
+            first = q - ((q - locus.cds_mask.index(True)) % 3)
+            codon = locus.genome[first : first + 3]
+            for alt in "ACGT":
+                new = codon[: q - first] + alt + codon[q - first + 1 :]
+                if alt != locus.genome[q] and str(Seq(new).translate()) == str(
+                    Seq(codon).translate()
+                ):
+                    sense = arm.sense[: q - arm.lo] + alt + arm.sense[q - arm.lo + 1 :]
+                    edited = dataclasses.replace(arm, sense=sense, n_edits=arm.n_edits + 1)
+                    return name, dataclasses.replace(plan, **{name: edited}), q
+    raise AssertionError("no PAM base of this guide can take a synonymous edit")
+
+
+@pytest.mark.parametrize("side, which", [("A", "locus"), ("B", "coding_locus")])
+def test_every_edit_inside_a_pam_is_marked_whoever_made_it(request, side, which):
+    """The recoder can change a base of a PAM for its own reasons, and the dedicated PAM edit may then only finish
+    the job, so a table that marks only the dedicated edit shows one edit where the PAM saw two."""
+    from pegrna_pipeline.hpc import recoded_pa_workflow as wf
+
+    loc = request.getfixturevalue(which)
+    plan = plan_pairs(**_plan_args(loc)).plans[0]
+    name, edited, q = _extra_synonymous_edit_in_pam(plan, loc, side)
+    rows = wf._arm_change_rows(loc.genome, edited, loc.cds_mask)
+    arm_label = "donor arm 5'" if name == "arm5" else "donor arm 3'"
+    mine = [r for r in rows if r.position - 1 == q]
+    assert len(mine) == 1 and mine[0].part == f"{arm_label}, in the PAM of guide {side}", mine
+    pam_positions = {
+        g: set(range(*(plan.pair.a if g == "A" else plan.pair.b).pam_span)) for g in "AB"
+    }
+    for r in rows:
+        inside = [g for g in "AB" if r.position - 1 in pam_positions[g]]
+        assert ("PAM" in r.part) == bool(inside), (r.position, r.part, inside)
+        if inside:
+            assert r.part.endswith(f"the PAM of guide {inside[0]}"), r.part
+
+
+def test_exactly_the_bases_of_a_pam_are_marked_and_none_beside_it(locus, monkeypatch):
+    """With a change at every base in and around both PAMs, the marked ones are the PAM bases and no others, each
+    with its own guide's letter."""
+    from pegrna_pipeline.hpc import recoded_pa_workflow as wf
+    from pegrna_pipeline.hpc.cargo_spec import BaseChange
+
+    plan = plan_pairs(**_plan_args(locus)).plans[0]
+    pams = {"A": set(range(*plan.pair.a.pam_span)), "B": set(range(*plan.pair.b.pam_span))}
+    around = sorted({q for span in pams.values() for q in range(min(span) - 2, max(span) + 3)})
+
+    def everywhere(genome, lo, hi, sense, mask, part=""):
+        return tuple(
+            BaseChange("genomic arm", part, q + 1, 1, "AAA", "AAG", "K", "A", "G")
+            for q in around
+            if lo <= q < hi
+        )
+
+    monkeypatch.setattr(wf, "arm_changes", everywhere)
+    both = dataclasses.replace(
+        plan,
+        arm5=dataclasses.replace(plan.arm5, n_edits=1),
+        arm3=dataclasses.replace(plan.arm3, n_edits=1),
+    )
+    rows = {r.position - 1: r.part for r in wf._arm_change_rows(locus.genome, both, locus.cds_mask)}
+    reachable = {
+        q for q in around if plan.arm5.lo <= q < plan.arm5.hi or plan.arm3.lo <= q < plan.arm3.hi
+    }
+    assert {
+        q for q in pams["A"] | pams["B"]
+    } & reachable, "the test must reach a PAM for this to mean anything"
+    for q in reachable:
+        guide = next((g for g in "AB" if q in pams[g]), None)
+        assert ("PAM" in rows[q]) == (guide is not None), (q, rows[q], guide)
+        if guide:
+            assert rows[q].endswith(f"the PAM of guide {guide}"), rows[q]
+
+
 def test_the_pam_edit_is_in_the_donor_and_not_in_the_cargo_or_the_genome_window(short_arm_locus):
     res = run(short_arm_locus)
     assert res.arm5[-1] in "CT" and short_arm_locus.genome[res.span[0] : res.site_s][-1] == "G"
