@@ -124,9 +124,10 @@ unit suite is fast and deterministic.
 
 ## Output
 
-Four files per winning tj-PE design (Prime Assembly writes five, above):
+Up to five files per winning tj-PE design (the DOCX needs the optional `python-docx`; Prime Assembly writes five, above):
 
 - `recoded_tjpe_report.txt` — human-readable text report.
+- `recoded_tjpe_gates.json` — the machine-readable record of every gate.
 - `recoded_tjpe_components.csv` — `index,component,role,part_of,sequence,length`, one row
   per labelled component. The RTT is split into `insert` and `replacement_gDNA`, and
   `part_of` distinguishes the tjPE template-jumping portion (rcPBS2·RTT·PBS1) from the

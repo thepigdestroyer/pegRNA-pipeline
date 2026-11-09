@@ -223,17 +223,27 @@ The only hard requirement for a *full* (real-gate) run is the **HPC environment*
 
 ### Output
 
-Each run writes two files to `--output-dir`:
+Each `design-recoded` (tj-PE) run writes these files to `--output-dir`:
 
 - `recoded_tjpe_report.txt` — human-readable design + coordinates + gate results.
 - `recoded_tjpe_components.csv` — one row per labelled construct component
   (`index,component,role,part_of,sequence,length`) for table/list consumption.
+- `recoded_tjpe_changes.csv` — every nucleotide that differs from what you specified, with its
+  part and codon (ADR 0029).
+- `recoded_tjpe_gates.json` — the result of every gate, for scripts and records.
+- `recoded_tjpe_verification.docx` — a colour-annotated manual cross-check (ADR 0012), written
+  only when the optional `python-docx` package is installed.
 
-The construct is reported 5′→3′ as **Spacer · Scaffold · PBS2 · RTT · PBS1 · PolyU**.
+A `design-pa` (Prime Assembly) run writes five: `recoded_pa_report.txt`, `recoded_pa_components.csv`,
+`recoded_pa_changes.csv`, `recoded_pa_donor.fasta` (pegRNA A, pegRNA B and the donor, the three
+sequences to order) and `recoded_pa_gates.json`.
+
+The tj-PE construct is reported 5′→3′ as **Spacer · Scaffold · rcPBS2 · RTT · PBS1 · PolyU**
+(rcPBS2 is the reverse complement of PBS2, ADR 0014).
 The **RTT is decomposed** into its labelled sub-parts rather than a single opaque
 block: `insert` (the cargo payload) and `replacement_gDNA` (the synonymously recoded
 deletion-replacement arm) — these reconcatenate to the RTT exactly. `part_of`
-distinguishes the **tjPE template-jumping portion** (PBS2 · RTT · PBS1) from the
+distinguishes the **tjPE template-jumping portion** (rcPBS2 · RTT · PBS1) from the
 spacer/scaffold that complete the full construct.
 
 Full install/usage/troubleshooting: [`scripts/hpc/README.md`](scripts/hpc/README.md)
