@@ -333,6 +333,10 @@ no weights. Coverage by area:
 
 ## Licence and citation
 
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.24383400.svg)](https://doi.org/10.5281/zenodo.24383400)
+
 MIT licence, see [`LICENSE`](LICENSE). Third-party code and terms are listed in
 [`NOTICE`](NOTICE). To cite pegRNA, use [`CITATION.cff`](CITATION.cff) (GitHub's "Cite this
-repository" button reads it) or the Zenodo record for the release.
+repository" button reads it) or the Zenodo record: <https://doi.org/10.5281/zenodo.24383400>
+always resolves to the latest version, and v1.0.0 is
+[10.5281/zenodo.24383401](https://doi.org/10.5281/zenodo.24383401).

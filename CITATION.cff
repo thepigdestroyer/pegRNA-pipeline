@@ -4,6 +4,7 @@ type: software
 title: "pegRNA: automated pegRNA design for prime editing (template-jumping PE and Prime Assembly)"
 version: 1.0.0
 date-released: 2026-11-20
+doi: 10.5281/zenodo.24383400
 license: MIT
 url: "https://pegrna.ukdri.org"
 repository-code: "https://github.com/thepigdestroyer/pegRNA-pipeline"
