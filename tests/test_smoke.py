@@ -17,4 +17,4 @@ def test_subpackage_imports():
 def test_version_attribute():
     module = importlib.import_module("pegrna_pipeline")
     assert hasattr(module, "__version__")
-    assert module.__version__ == "1.0.0a1"
+    assert module.__version__ == "1.0.0"

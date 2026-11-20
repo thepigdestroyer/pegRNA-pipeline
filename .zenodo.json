@@ -1,0 +1,49 @@
+{
+  "upload_type": "software",
+  "title": "pegRNA: automated pegRNA design for prime editing (template-jumping PE and Prime Assembly)",
+  "description": "<p>pegRNA is a design pipeline and web tool for prime editing. Given a target gene and an insert (a tag, cassette or gene), it designs pegRNAs, nicking guides and, for Prime Assembly, the linear donor DNA, and ranks the candidates. It supports template-jumping prime editing (tj-PE; Zheng et al. 2023) for inserts up to about 500 bp, and Prime Assembly (Liu et al. 2026). Each design passes gates for codon recoding (every changed nucleotide is reported), RNA folding, cryptic splicing, off-target sites, predicted editing efficiency, and structure and docking. It runs as a command-line tool and as a web app at <a href=\"https://pegrna.ukdri.org\">https://pegrna.ukdri.org</a>. Designs are computational predictions and have not been validated at the bench.</p>",
+  "creators": [
+    {
+      "name": "Joshi, Mrinal",
+      "affiliation": "UK Dementia Research Institute at Imperial College London",
+      "orcid": "0009-0008-2924-1509"
+    },
+    {
+      "name": "Moore, Jay",
+      "affiliation": "UK Dementia Research Institute at Imperial College London"
+    },
+    {
+      "name": "Skene, Nathan",
+      "affiliation": "UK Dementia Research Institute at Imperial College London"
+    }
+  ],
+  "access_right": "open",
+  "license": "mit",
+  "language": "eng",
+  "keywords": [
+    "prime editing",
+    "pegRNA",
+    "CRISPR",
+    "genome editing",
+    "protein tagging",
+    "knock-in",
+    "Prime Assembly",
+    "template-jumping prime editing",
+    "iPSC"
+  ],
+  "related_identifiers": [
+    { "identifier": "10.1038/s41586-026-10460-4", "relation": "references" },
+    { "identifier": "10.1038/s41467-023-39137-6", "relation": "references" },
+    { "identifier": "10.1038/s41586-019-1711-4", "relation": "references" },
+    { "identifier": "10.1038/s41587-024-02268-2", "relation": "references" },
+    { "identifier": "10.1016/j.cell.2018.12.015", "relation": "references" },
+    { "identifier": "10.1089/1066527041410418", "relation": "references" },
+    { "identifier": "10.1186/1748-7188-6-26", "relation": "references" },
+    { "identifier": "10.1093/bioinformatics/btu048", "relation": "references" },
+    { "identifier": "10.1101/2025.06.14.659707", "relation": "references" },
+    { "identifier": "10.1093/nar/gkab1061", "relation": "references" },
+    { "identifier": "10.1038/nbt.2647", "relation": "references" },
+    { "identifier": "10.1126/science.aas9129", "relation": "references" },
+    { "identifier": "10.1016/j.cr.2019.08.002", "relation": "references" }
+  ]
+}

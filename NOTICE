@@ -1,0 +1,24 @@
+pegRNA is released under the MIT licence (see LICENSE). It includes, or depends
+on, the third-party work below.
+
+Bundled in this repository
+--------------------------
+
+web/maxentpy_src/  (maxentpy)
+    A Python port of MaxEntScan, from https://github.com/kepbod/maxentpy,
+    released under the MIT licence (web/maxentpy_src/LICENSE). It is kept
+    byte-identical to upstream.
+
+    The splice-site scoring tables inside it come from MaxEntScan:
+    Copyright 2004, Gene Yeo and Chris Burge. Their notice asks that uses of the
+    models cite: Yeo G, Burge CB. Maximum entropy modeling of short sequence
+    motifs with applications to RNA splicing signals. Journal of Computational
+    Biology 11:377-394 (2004). doi:10.1089/1066527041410418
+
+Not bundled
+-----------
+
+SpliceAI, PRIDICT2, ViennaRNA, Cas-OFFinder, Boltz-2, AlphaFold DB data and the
+other packages listed in pyproject.toml are installed separately by whoever runs
+the pipeline. Each keeps its own licence and terms; those are not changed by the
+licence of this repository. Check them before any use beyond academic research.

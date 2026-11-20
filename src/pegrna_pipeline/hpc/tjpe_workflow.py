@@ -1,4 +1,4 @@
-"""Tethered-junction prime editing (TJ-PE) workflow — shared primitives + legacy orchestrator.
+"""Template-jumping prime editing (TJ-PE) workflow — shared primitives + legacy orchestrator.
 
 .. note:: SINGLE CANONICAL DESIGN WORKFLOW (Stage H, ADR 0021).
    :func:`pegrna_pipeline.hpc.recoded_tjpe_workflow.run_recoded_tjpe` is the ONE canonical

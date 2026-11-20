@@ -4,8 +4,8 @@ build-backend = "hatchling.build"
 
 [project]
 name = "pegrna_pipeline"
-version = "1.0.0a1"
-description = "Automated pegRNA design pipeline for prime editing C-terminal tagging."
+version = "1.0.0"
+description = "Automated pegRNA design pipeline for prime editing: template-jumping PE (tj-PE) and Prime Assembly."
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }

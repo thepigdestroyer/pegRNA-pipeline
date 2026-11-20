@@ -1,0 +1,40 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+type: software
+title: "pegRNA: automated pegRNA design for prime editing (template-jumping PE and Prime Assembly)"
+version: 1.0.0
+date-released: 2026-11-20
+license: MIT
+url: "https://pegrna.ukdri.org"
+repository-code: "https://github.com/thepigdestroyer/pegRNA-pipeline"
+abstract: >-
+  pegRNA is a design pipeline and web tool for prime editing. Given a target gene
+  and an insert (a tag, cassette or gene), it designs pegRNAs, nicking guides and,
+  for Prime Assembly, the linear donor DNA, and ranks the candidates. It supports
+  template-jumping prime editing (tj-PE; Zheng et al. 2023) for inserts up to about
+  500 bp, and Prime Assembly (Liu et al. 2026). Each design passes gates for codon
+  recoding (every changed nucleotide is reported), RNA folding, cryptic splicing,
+  off-target sites, predicted editing efficiency, and structure and docking. It runs
+  as a command-line tool and as a web app at https://pegrna.ukdri.org. Designs are
+  computational predictions and have not been validated at the bench.
+keywords:
+  - prime editing
+  - pegRNA
+  - CRISPR
+  - genome editing
+  - protein tagging
+  - knock-in
+  - Prime Assembly
+  - template-jumping prime editing
+  - iPSC
+authors:
+  - given-names: Mrinal
+    family-names: Joshi
+    affiliation: "UK Dementia Research Institute at Imperial College London"
+    orcid: "https://orcid.org/0009-0008-2924-1509"
+  - given-names: Jay
+    family-names: Moore
+    affiliation: "UK Dementia Research Institute at Imperial College London"
+  - given-names: Nathan
+    family-names: Skene
+    affiliation: "UK Dementia Research Institute at Imperial College London"

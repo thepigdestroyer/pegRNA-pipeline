@@ -1,6 +1,8 @@
 # pegrna_pipeline
 
-Automated pegRNA design pipeline for prime editing C-terminal protein tagging.
+Automated pegRNA design pipeline for prime editing: C-terminal protein tagging with
+template-jumping PE (tj-PE), and cassettes or whole genes with Prime Assembly. A live
+web app is at <https://pegrna.ukdri.org>.
 
 > **New here? Read [`docs/DESIGN_HISTORY.md`](docs/DESIGN_HISTORY.md) first.** It is
 > the canonical, self-contained explanation of the recoded TJ-PE designer: what it
@@ -17,7 +19,7 @@ according to insert size and the editing strategy needed:
 | Mode   | Insert size       | Strategy                                                                    |
 |--------|-------------------|-----------------------------------------------------------------------------|
 | `pe7`  | ≤ 40 bp           | Standard PE7 (PE3-strategy): one pegRNA + one opposite-strand ngRNA pair.   |
-| `tjpe` | ≤ ~500 bp         | Tethered-junction PE: codon-enumerated first 8 aa + ngRNA-driven RC-PBS2.   |
+| `tjpe` | ≤ ~500 bp         | Template-jumping PE: codon-enumerated first 8 aa + ngRNA-driven RC-PBS2.    |
 
 Each mode dispatches in `pegrna_pipeline.hpc.driver.run_driver` and writes a
 text + CSV report via `pegrna_pipeline.hpc.report_writer.write_reports`.
@@ -327,3 +329,9 @@ no weights. Coverage by area:
 > `scripts/hpc/README.md`.
 > **Production-ready only after `smoke_models.py` passes 5/5 on CX3. Until then,
 > outputs are engineering previews, not bench-ready designs.**
+
+## Licence and citation
+
+MIT licence, see [`LICENSE`](LICENSE). Third-party code and terms are listed in
+[`NOTICE`](NOTICE). To cite pegRNA, use [`CITATION.cff`](CITATION.cff) (GitHub's "Cite this
+repository" button reads it) or the Zenodo record for the release.

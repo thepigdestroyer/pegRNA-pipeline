@@ -1,3 +1,3 @@
-"""pegRNA design pipeline for prime editing C-terminal tagging."""
+"""pegRNA design pipeline for prime editing."""
 
-__version__ = "1.0.0a1"
+__version__ = "1.0.0"

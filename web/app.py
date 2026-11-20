@@ -233,7 +233,7 @@ def _cleanup_runs() -> None:
         pass
 
 
-app = FastAPI(title="pegRNA design", version="0.2.0")
+app = FastAPI(title="pegRNA design", version="1.0.0")
 
 # Browser origins allowed to call this API cross-origin, comma-separated.
 # The UI can be hosted away from the pipeline (e.g. the static app on Vercel,
